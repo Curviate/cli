@@ -11,17 +11,47 @@ const pkg = require(resolve(__dirname, "../package.json")) as {
   name: string;
 };
 
+// ---------------------------------------------------------------------------
+// Lazy-loaded subcommand loaders.
+// Each loader imports the command module ONLY when the subcommand is invoked.
+// Resolving --help, --version, or an unknown subcommand path does NOT trigger
+// any of these imports and does NOT construct a Curviate client.
+// ---------------------------------------------------------------------------
+
 const main = defineCommand({
   meta: {
     name: "curviate",
     version: pkg.version,
     description: "Official command-line interface for the Curviate API.",
   },
-  // Command tree is populated by dev as commands are implemented.
-  // Subcommands are lazy-loaded (dynamic import) to keep cold-start fast.
-  subCommands: {},
+
+  // Subcommand registry — names and descriptions are static for help rendering;
+  // the handler implementation is loaded lazily on first invocation.
+  subCommands: {
+    login: () =>
+      import("./commands/login.js").then((m) => m.loginCommand),
+    config: () =>
+      import("./commands/config.js").then((m) => m.configCommand),
+
+    // ---------------------------------------------------------------------------
+    // Noun groups (DEV-2+): loaded lazily — not yet implemented.
+    // Stubs are listed here so the command registry is visible in --help.
+    // ---------------------------------------------------------------------------
+    // profile: () => import("./commands/profile.js").then((m) => m.profileCommand),
+    // company: () => import("./commands/company.js").then((m) => m.companyCommand),
+    // connect: () => import("./commands/connect.js").then((m) => m.connectCommand),
+    // inbox: () => import("./commands/inbox.js").then((m) => m.inboxCommand),
+    // message: () => import("./commands/message.js").then((m) => m.messageCommand),
+    // post: () => import("./commands/post.js").then((m) => m.postCommand),
+    // search: () => import("./commands/search.js").then((m) => m.searchCommand),
+    // account: () => import("./commands/account.js").then((m) => m.accountCommand),
+    // webhook: () => import("./commands/webhook.js").then((m) => m.webhookCommand),
+    // "sales-nav": () => import("./commands/sales-nav.js").then((m) => m.salesNavCommand),
+    // recruiter: () => import("./commands/recruiter.js").then((m) => m.recruiterCommand),
+  },
+
   async run() {
-    // Root invocation with no subcommand: print help (citty handles this).
+    // Root invocation with no subcommand: citty prints help automatically.
   },
 });
 
