@@ -1,5 +1,6 @@
-import { defineCommand, runMain } from "citty";
+import { defineCommand } from "citty";
 import { createRequire } from "node:module";
+import { dispatch } from "./dispatch.js";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -61,8 +62,15 @@ const main = defineCommand({
   },
 
   async run() {
-    // Root invocation with no subcommand: citty prints help automatically.
+    // Root invocation with no subcommand: print the top-level usage via citty.
+    // dispatch() reaches here only when no subcommand keyword was given.
+    const { runMain } = await import("citty");
+    await runMain(main, { rawArgs: ["--help"] });
   },
 });
 
-runMain(main);
+// Custom dispatcher (see src/dispatch.ts) — works around citty 0.1.6's
+// positional+subCommand routing collision so bare intent-shaped forms
+// (`connect <slug>`, `profile <url>`, `message <chat> "text"`) and subcommands
+// both route correctly. Do NOT replace with a plain `runMain(main)`.
+void dispatch(main, process.argv.slice(2));
