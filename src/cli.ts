@@ -50,8 +50,10 @@ const main = defineCommand({
       import("./commands/message.js").then((m) => m.messageCommand),
     post: () =>
       import("./commands/post.js").then((m) => m.postCommand),
-    // account: () => import("./commands/account.js").then((m) => m.accountCommand),
-    // webhook: () => import("./commands/webhook.js").then((m) => m.webhookCommand),
+    account: () =>
+      import("./commands/account.js").then((m) => m.accountCommand),
+    webhook: () =>
+      import("./commands/webhook.js").then((m) => m.webhookCommand),
     // "sales-nav": () => import("./commands/sales-nav.js").then((m) => m.salesNavCommand),
     // recruiter: () => import("./commands/recruiter.js").then((m) => m.recruiterCommand),
   },
