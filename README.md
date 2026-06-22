@@ -141,7 +141,7 @@ cat webhook-payload.json \
 ```
 
 Exit `0` means the signature is valid and the parsed event is written to stdout as JSON.
-Exit `3` means the signature is invalid or the replay window has expired.
+Exit `2` means the signature is invalid or the replay window has expired.
 
 ### 6. Export all accounts to a CSV (agent-friendly pipeline)
 
