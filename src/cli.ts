@@ -44,9 +44,12 @@ const main = defineCommand({
       import("./commands/connect.js").then((m) => m.connectCommand),
     search: () =>
       import("./commands/search.js").then((m) => m.searchCommand),
-    // inbox: () => import("./commands/inbox.js").then((m) => m.inboxCommand),
-    // message: () => import("./commands/message.js").then((m) => m.messageCommand),
-    // post: () => import("./commands/post.js").then((m) => m.postCommand),
+    inbox: () =>
+      import("./commands/inbox.js").then((m) => m.inboxCommand),
+    message: () =>
+      import("./commands/message.js").then((m) => m.messageCommand),
+    post: () =>
+      import("./commands/post.js").then((m) => m.postCommand),
     // account: () => import("./commands/account.js").then((m) => m.accountCommand),
     // webhook: () => import("./commands/webhook.js").then((m) => m.webhookCommand),
     // "sales-nav": () => import("./commands/sales-nav.js").then((m) => m.salesNavCommand),

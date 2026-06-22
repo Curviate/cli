@@ -1,0 +1,647 @@
+/**
+ * `curviate post` — LinkedIn post operations.
+ *
+ * Subcommands:
+ *   post list                                              — list posts (paginated)
+ *   post get <post_id>                                    — get a single post (read)
+ *   post create "<text>" [--attach <file>…] [--video-thumbnail <file>] — create post (write, ALWAYS multipart)
+ *   post comment <post_id> "<text>" [--attach <file>]    — comment on post (write, multipart)
+ *   post comments <post_id>                               — list comments (paginated, read)
+ *   post react <post_id> --reaction <r>                  — react to post (write, body field: reaction)
+ *   post reactions <post_id>                             — list reactions (paginated, read)
+ *
+ * post_id passes through verbatim — NOT resolved via resolveIdentifier.
+ * All subcommands are account-scoped.
+ */
+
+import { defineCommand } from "citty";
+import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { resolveEffectiveConfig } from "../lib/resolve.js";
+import { createClient } from "../lib/client.js";
+import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
+import { buildPreviewOutput } from "../lib/preview.js";
+import { streamAll } from "../lib/paginate.js";
+import { readAttachment, AttachError } from "../lib/attach.js";
+import type { CurviateError } from "@curviate/sdk";
+
+type PostFlags = {
+  postId?: string;
+  text?: string;
+  reaction?: string;
+  attach?: string | string[];
+  "video-thumbnail"?: string;
+  account?: string;
+  json?: boolean;
+  fields?: string;
+  limit?: string;
+  cursor?: string;
+  all?: boolean;
+  "max-pages"?: string;
+  preview?: boolean;
+  "api-key"?: string;
+  "base-url"?: string;
+  timeout?: string;
+  profile?: string;
+};
+
+type OutputStreams = {
+  stdout: { write: (s: string) => void };
+  stderr: { write: (s: string) => void };
+};
+
+type MinimalClient = {
+  account: (id: string) => {
+    posts: {
+      list: (params?: Record<string, unknown>) => Promise<unknown>;
+      get: (postId: string) => Promise<unknown>;
+      create: (body: Record<string, unknown>) => Promise<unknown>;
+      comment: (postId: string, body: Record<string, unknown>) => Promise<unknown>;
+      listComments: (postId: string, params?: Record<string, unknown>) => Promise<unknown>;
+      react: (postId: string, body: Record<string, unknown>) => Promise<unknown>;
+      listReactions: (postId: string, params?: Record<string, unknown>) => Promise<unknown>;
+    };
+  };
+};
+
+function buildOutputStreams(): OutputStreams {
+  return {
+    stdout: { write: (s: string) => process.stdout.write(s) },
+    stderr: { write: (s: string) => process.stderr.write(s) },
+  };
+}
+
+function requireAccount(account: string | undefined, out: OutputStreams): string {
+  if (!account) {
+    out.stderr.write("error: --account is required for this command. Set it via --account, CURVIATE_ACCOUNT, or `curviate config set-account`.\n");
+    process.exit(2);
+  }
+  return account;
+}
+
+function rejectPreviewOnRead(preview: boolean | undefined, out: OutputStreams): void {
+  if (preview) {
+    out.stderr.write("error: --preview is only valid on write commands (mutations). Reads just run.\n");
+    process.exit(2);
+  }
+}
+
+function rejectAllOnNonPaginated(all: boolean | undefined, out: OutputStreams): void {
+  if (all) {
+    out.stderr.write("error: --all is not supported on non-paginated commands.\n");
+    process.exit(2);
+  }
+}
+
+function resolveOutputOpts(flags: PostFlags) {
+  return {
+    json: (flags.json ?? false) || !process.stdout.isTTY,
+    isTTY: process.stdout.isTTY ?? false,
+    fields: flags.fields,
+  };
+}
+
+function buildPaginationParams(flags: PostFlags): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (flags.limit !== undefined) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+  return params;
+}
+
+/** Normalize --attach flag to an array of paths. */
+function normalizeAttachPaths(attach: string | string[] | undefined): string[] {
+  if (!attach) return [];
+  return Array.isArray(attach) ? attach : [attach];
+}
+
+async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
+  const { CurviateError } = await import("@curviate/sdk");
+  if (err instanceof CurviateError) {
+    const { getExitCode } = await import("../lib/exit-codes.js");
+    renderError(err as CurviateError, outOpts, out);
+    process.exit(getExitCode(err.code));
+  }
+  renderUnexpectedError(err, out);
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Exported run functions (testable without citty)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `post list [--all] [--limit] [--cursor]`.
+ * Read command — rejects --preview.
+ */
+export async function runPostList(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params = buildPaginationParams(flags);
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.posts.list(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.posts.list(params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post get <post_id>`.
+ * Read command — rejects --preview and --all.
+ */
+export async function runPostGet(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  rejectAllOnNonPaginated(flags.all, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.posts.get(postId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post create "<text>" [--attach <file>…] [--video-thumbnail <file>]`.
+ * Write command — supports --preview. ALWAYS multipart (SDK handles form building).
+ */
+export async function runPostCreate(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const text = flags.text ?? "";
+  const attachPaths = normalizeAttachPaths(flags.attach);
+  const thumbPath = flags["video-thumbnail"];
+
+  // Load attachments before any preview or SDK call.
+  let attachBuffers: Buffer[] = [];
+  try {
+    attachBuffers = await Promise.all(attachPaths.map((p) => readAttachment(p)));
+  } catch (err: unknown) {
+    if (err instanceof AttachError) {
+      out.stderr.write(`error: ${err.message}\n`);
+      process.exit(err.exitCode);
+    }
+    throw err;
+  }
+
+  // Load video thumbnail if provided.
+  let thumbBuffer: Buffer | undefined;
+  if (thumbPath) {
+    try {
+      thumbBuffer = await readAttachment(thumbPath);
+    } catch (err: unknown) {
+      if (err instanceof AttachError) {
+        out.stderr.write(`error: ${err.message}\n`);
+        process.exit(err.exitCode);
+      }
+      throw err;
+    }
+  }
+
+  if (flags.preview) {
+    const allAttachmentPreviews = attachBuffers.map((buf, i) => ({
+      name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
+      buffer: buf,
+    }));
+    if (thumbBuffer && thumbPath) {
+      allAttachmentPreviews.push({
+        name: `video_thumbnail:${thumbPath.split("/").pop() ?? thumbPath}`,
+        buffer: thumbBuffer,
+      });
+    }
+    const preview = buildPreviewOutput({
+      method: "posts.create",
+      args: {},
+      body: { text },
+      account: accountId,
+      attachments: allAttachmentPreviews,
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const body: Record<string, unknown> = { text };
+  if (attachBuffers.length > 0) {
+    body["attachments"] = attachBuffers;
+  }
+  if (thumbBuffer) {
+    body["video_thumbnail"] = thumbBuffer;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.posts.create(body);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post comment <post_id> "<text>" [--attach <file>]`.
+ * Write command — supports --preview. Multipart.
+ */
+export async function runPostComment(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const text = flags.text ?? "";
+  const attachPaths = normalizeAttachPaths(flags.attach);
+
+  // Load attachments before any preview or SDK call.
+  let attachBuffers: Buffer[] = [];
+  try {
+    attachBuffers = await Promise.all(attachPaths.map((p) => readAttachment(p)));
+  } catch (err: unknown) {
+    if (err instanceof AttachError) {
+      out.stderr.write(`error: ${err.message}\n`);
+      process.exit(err.exitCode);
+    }
+    throw err;
+  }
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({
+      method: "posts.comment",
+      args: { post_id: postId },
+      body: { text },
+      account: accountId,
+      attachments: attachBuffers.map((buf, i) => ({
+        name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
+        buffer: buf,
+      })),
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const body: Record<string, unknown> = { text };
+  if (attachBuffers.length > 0) {
+    body["attachments"] = attachBuffers;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.posts.comment(postId, body);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post comments <post_id> [--all] [--limit] [--cursor]`.
+ * Read command — rejects --preview.
+ */
+export async function runPostComments(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params = buildPaginationParams(flags);
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.posts.listComments(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.posts.listComments(postId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post react <post_id> --reaction <r>`.
+ * Write command — supports --preview.
+ * CLI flag is --reaction; the SDK body field is `reaction` (confirmed from PostReactBody).
+ */
+export async function runPostReact(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const reaction = flags.reaction ?? "";
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({
+      method: "posts.react",
+      args: { post_id: postId },
+      body: { reaction },
+      account: accountId,
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.posts.react(postId, { reaction });
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post reactions <post_id> [--all] [--limit] [--cursor]`.
+ * Read command — rejects --preview.
+ */
+export async function runPostReactions(
+  client: MinimalClient,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params = buildPaginationParams(flags);
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.posts.listReactions(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.posts.listReactions(postId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Citty command definitions
+// ---------------------------------------------------------------------------
+
+const postListCommand = defineCommand({
+  meta: { name: "list", description: "List posts published by the account." },
+  args: { ...GLOBAL_FLAGS },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postGetCommand = defineCommand({
+  meta: { name: "get", description: "Get a post by ID." },
+  args: {
+    ...GLOBAL_FLAGS,
+    postId: { type: "positional", description: "Post social_id or URN." },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postCreateCommand = defineCommand({
+  meta: { name: "create", description: "Create a new post." },
+  args: {
+    ...GLOBAL_FLAGS,
+    text: { type: "positional", description: "Post body text." },
+    attach: { type: "string", description: "File to attach (repeatable)." },
+    "video-thumbnail": { type: "string", description: "Video thumbnail file." },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostCreate(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postCommentCommand = defineCommand({
+  meta: { name: "comment", description: "Comment on a post." },
+  args: {
+    ...GLOBAL_FLAGS,
+    postId: { type: "positional", description: "Post social_id or URN." },
+    text: { type: "positional", description: "Comment text." },
+    attach: { type: "string", description: "Image to attach (optional)." },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostComment(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postCommentsCommand = defineCommand({
+  meta: { name: "comments", description: "List comments on a post." },
+  args: {
+    ...GLOBAL_FLAGS,
+    postId: { type: "positional", description: "Post social_id or URN." },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostComments(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postReactCommand = defineCommand({
+  meta: { name: "react", description: "React to a post." },
+  args: {
+    ...GLOBAL_FLAGS,
+    postId: { type: "positional", description: "Post social_id or URN." },
+    reaction: { type: "string", description: "Reaction type (like | celebrate | support | love | insightful | funny).", required: true },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostReact(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const postReactionsCommand = defineCommand({
+  meta: { name: "reactions", description: "List reactions on a post." },
+  args: {
+    ...GLOBAL_FLAGS,
+    postId: { type: "positional", description: "Post social_id or URN." },
+  },
+  async run({ args }) {
+    const flags = args as PostFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runPostReactions(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+export const postCommand = defineCommand({
+  meta: { name: "post", description: "Create and manage LinkedIn posts." },
+  subCommands: {
+    list: postListCommand,
+    get: postGetCommand,
+    create: postCreateCommand,
+    comment: postCommentCommand,
+    comments: postCommentsCommand,
+    react: postReactCommand,
+    reactions: postReactionsCommand,
+  },
+  async run() {
+    process.stderr.write(
+      "Usage: curviate post <subcommand>\n" +
+      "  list\n" +
+      "  get <post_id>\n" +
+      "  create \"<text>\" [--attach <file>…] [--video-thumbnail <file>]\n" +
+      "  comment <post_id> \"<text>\" [--attach <file>]\n" +
+      "  comments <post_id>\n" +
+      "  react <post_id> --reaction <r>\n" +
+      "  reactions <post_id>\n",
+    );
+  },
+});
