@@ -16,7 +16,8 @@ export const GLOBAL_FLAGS = {
   // Auth / config
   "api-key": {
     type: "string" as const,
-    description: "API key (overrides env and profile).",
+    description:
+      "API key (overrides env and profile). Note: a key passed on the command line is visible to other processes via `ps` and is saved in shell history; prefer the CURVIATE_API_KEY env var or `curviate login`.",
   },
   profile: {
     type: "string" as const,

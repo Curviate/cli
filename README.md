@@ -42,6 +42,11 @@ curviate account list
 curviate --api-key <your-api-key> account list
 ```
 
+> **Security note:** a key passed via `--api-key` is visible to other users on
+> the machine through `ps`/process listings and is recorded in your shell
+> history. Prefer `curviate login` or the `CURVIATE_API_KEY` environment
+> variable; reserve `--api-key` for one-off, low-trust contexts.
+
 Get your API key from the [Curviate dashboard](https://docs.curviate.com).
 
 ## Usage
