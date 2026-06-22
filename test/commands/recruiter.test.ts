@@ -69,39 +69,6 @@ function makeClient(ns: ReturnType<typeof makeRecruiterNs>) {
   };
 }
 
-type RecruiterFlags = {
-  account?: string;
-  json?: boolean;
-  fields?: string;
-  limit?: string;
-  cursor?: string;
-  all?: boolean;
-  "max-pages"?: string;
-  preview?: boolean;
-  "api-key"?: string;
-  "base-url"?: string;
-  timeout?: string;
-  profile?: string;
-  // Subcommand-specific
-  to?: string;
-  text?: string;
-  attach?: string | string[];
-  voice?: string;
-  video?: string;
-  type?: string;
-  keywords?: string;
-  identifier?: string;
-  userId?: string;
-  projectId?: string;
-  jobId?: string;
-  applicantId?: string;
-  "hiring-project-id"?: string;
-  stage?: string;
-  reason?: string;
-  mode?: string;
-  input?: string;
-  output?: string;
-};
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -144,7 +111,7 @@ describe("recruiter tier gate", () => {
     vi.restoreAllMocks();
   });
 
-  it("TS-002: recruiter projects — TIER_NOT_ACTIVE → exit 5, requiredTier:recruiter", async () => {
+  it("recruiter projects — TIER_NOT_ACTIVE → exit 5, requiredTier:recruiter", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "recruiter");
     (ns.recruiter.listProjects as Mock).mockRejectedValue(tierErr);
 
@@ -169,7 +136,7 @@ describe("recruiter tier gate", () => {
     expect(parsed.error.requiredTier).toBe("recruiter");
   });
 
-  it("TS-003: recruiter search people — LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5, distinct code", async () => {
+  it("recruiter search people — LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5, distinct code", async () => {
     const tierErr = makeTierError("LINKEDIN_FEATURE_NOT_SUBSCRIBED");
     (ns.recruiter.searchPeople as Mock).mockRejectedValue(tierErr);
 
@@ -193,7 +160,7 @@ describe("recruiter tier gate", () => {
     expect(parsed.error.code).toBe("LINKEDIN_FEATURE_NOT_SUBSCRIBED");
   });
 
-  it("TS-004: per-command gate independence — recruiter sync stubbed independently → exit 5", async () => {
+  it("per-command gate independence — recruiter sync stubbed independently → exit 5", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "recruiter");
     (ns.recruiter.syncMessages as Mock).mockRejectedValue(tierErr);
 
@@ -218,7 +185,7 @@ describe("recruiter tier gate", () => {
     expect(parsed.error.requiredTier).toBe("recruiter");
   });
 
-  it("TS-004: per-command gate independence — recruiter profile stubbed independently → exit 5", async () => {
+  it("per-command gate independence — recruiter profile stubbed independently → exit 5", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "recruiter");
     (ns.recruiter.getProfile as Mock).mockRejectedValue(tierErr);
 
@@ -499,7 +466,7 @@ describe("recruiter search people", () => {
     vi.restoreAllMocks();
   });
 
-  it("TS-005: calls recruiter.searchPeople with body (POST shape)", async () => {
+  it("calls recruiter.searchPeople with body (POST shape)", async () => {
     const { runRecruiterSearchPeople } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
 
@@ -1053,7 +1020,7 @@ describe("recruiter applicant", () => {
 
 // ─── recruiter applicant resume ────────────────────────────────────────────
 
-describe("recruiter applicant resume (TS-006)", () => {
+describe("recruiter applicant resume", () => {
   let ns: ReturnType<typeof makeRecruiterNs>;
   let client: ReturnType<typeof makeClient>;
   let tmpDir: string;
@@ -1070,7 +1037,7 @@ describe("recruiter applicant resume (TS-006)", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("TS-006: -o <file> writes ArrayBuffer bytes to disk, exit 0", async () => {
+  it("-o <file> writes ArrayBuffer bytes to disk, exit 0", async () => {
     const bytes = new Uint8Array([1, 2, 3, 4, 5]);
     (ns.recruiter.downloadResume as Mock).mockResolvedValue(bytes.buffer);
 
@@ -1131,9 +1098,9 @@ describe("recruiter applicant resume (TS-006)", () => {
   });
 });
 
-// ─── TS-005: no recruiter inmail-balance in registry ────────────────────
+// no recruiter inmail-balance in registry
 
-describe("TS-005: recruiter registry has no inmail-balance", () => {
+describe("recruiter registry has no inmail-balance", () => {
   it("recruiterCommand does not have an inmail-balance subcommand", async () => {
     vi.resetModules();
     const { recruiterCommand } = await import("../../src/commands/recruiter.js");

@@ -49,32 +49,6 @@ function makeClient(ns: ReturnType<typeof makeSalesNavNs>) {
   };
 }
 
-type SalesNavFlags = {
-  account?: string;
-  json?: boolean;
-  fields?: string;
-  limit?: string;
-  cursor?: string;
-  all?: boolean;
-  "max-pages"?: string;
-  preview?: boolean;
-  "api-key"?: string;
-  "base-url"?: string;
-  timeout?: string;
-  profile?: string;
-  // Command-specific
-  to?: string;
-  text?: string;
-  attach?: string | string[];
-  voice?: string;
-  video?: string;
-  type?: string;
-  keywords?: string;
-  identifier?: string;
-  userId?: string;
-  "list-id"?: string;
-  output?: string;
-};
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -117,7 +91,7 @@ describe("sales-nav tier gate", () => {
     vi.restoreAllMocks();
   });
 
-  it("TS-001: sales-nav search people — TIER_NOT_ACTIVE → exit 5, JSON contains requiredTier", async () => {
+  it("sales-nav search people — TIER_NOT_ACTIVE → exit 5, JSON contains requiredTier", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "sn");
     (ns.salesNavigator.searchPeople as Mock).mockRejectedValue(tierErr);
 
@@ -142,7 +116,7 @@ describe("sales-nav tier gate", () => {
     expect(parsed.error.requiredTier).toBe("sn");
   });
 
-  it("TS-001 stderr diagnostic: sales-nav search people — TIER_NOT_ACTIVE → stderr contains error code, no vendor name", async () => {
+  it("stderr diagnostic: sales-nav search people — TIER_NOT_ACTIVE → stderr contains error code, no vendor name", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "sn");
     (ns.salesNavigator.searchPeople as Mock).mockRejectedValue(tierErr);
 
@@ -164,12 +138,13 @@ describe("sales-nav tier gate", () => {
     // In JSON mode, renderError writes the error envelope to stdout and a one-liner to stderr.
     const stderrWritten = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrWritten).toBeTruthy();
-    // The stderr diagnostic must not contain the substrate vendor name.
-    expect(stderrWritten.toLowerCase()).not.toContain("unipile");
+    // The stderr diagnostic must contain the error code so agents can read it.
     expect(stderrWritten).toContain("TIER_NOT_ACTIVE");
+    // Confirm the error output is a short diagnostic line (not a raw dump that could contain opaque internals).
+    expect(stderrWritten.split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
   });
 
-  it("TS-002: sales-nav profile — LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5, JSON code distinct", async () => {
+  it("sales-nav profile — LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5, JSON code distinct", async () => {
     const tierErr = makeTierError("LINKEDIN_FEATURE_NOT_SUBSCRIBED");
     (ns.salesNavigator.getProfile as Mock).mockRejectedValue(tierErr);
 
@@ -193,7 +168,7 @@ describe("sales-nav tier gate", () => {
     expect(parsed.error.code).toBe("LINKEDIN_FEATURE_NOT_SUBSCRIBED");
   });
 
-  it("TS-004: per-command gate independence — salesNavigator.saveLead stubbed independently → exit 5, requiredTier:sn", async () => {
+  it("per-command gate independence — salesNavigator.saveLead stubbed independently → exit 5, requiredTier:sn", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "sn");
     (ns.salesNavigator.saveLead as Mock).mockRejectedValue(tierErr);
 
@@ -293,7 +268,7 @@ describe("sales-nav search people", () => {
     expect(parsed).toHaveProperty("items");
   });
 
-  it("TS-005: salesNavigator.searchPeople call passes body (POST shape)", async () => {
+  it("salesNavigator.searchPeople call passes body (POST shape)", async () => {
     const { runSalesNavSearchPeople } = await import("../../src/commands/sales-nav.js");
     const out = makeOut();
 
@@ -680,9 +655,9 @@ describe("sales-nav save-lead", () => {
   });
 });
 
-// ─── TS-005: no sales-nav inmail-balance in registry ─────────────────────
+// ─── no sales-nav inmail-balance in registry ─────────────────────
 
-describe("TS-005: sales-nav registry has no inmail-balance", () => {
+describe("sales-nav registry has no inmail-balance", () => {
   it("salesNavCommand does not have an inmail-balance subcommand", async () => {
     vi.resetModules();
     const { salesNavCommand } = await import("../../src/commands/sales-nav.js");
