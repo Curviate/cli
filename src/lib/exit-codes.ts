@@ -1,0 +1,108 @@
+/**
+ * The complete `CurviateError.code` → process exit code table.
+ *
+ * This is the single source of truth for the error→exit mapping. It is
+ * data-driven and exhaustiveness-tested: a test imports the SDK ErrorCode
+ * list and asserts every member has an entry here. Adding a new SDK error code
+ * without mapping it fails the exhaustiveness test.
+ *
+ * Exit code semantics:
+ *   0  — success (no error)
+ *   1  — internal / uncaught (also: unmapped/unknown)
+ *   2  — invalid input / usage (also used for CLI-side usage errors)
+ *   3  — auth
+ *   4  — not found
+ *   5  — tier / entitlement
+ *   6  — rate-limited
+ *   7  — transient platform (retry-likely)
+ *   8  — account / connection state
+ *   9  — checkpoint flow
+ *  10  — messaging window / recipient
+ *  11  — billing
+ */
+
+import type { ErrorCode } from "@curviate/sdk";
+
+/**
+ * The authoritative error→exit mapping.
+ *
+ * Every member of the SDK ErrorCode union must appear here. The exhaustiveness
+ * test in test/lib/exit-codes.test.ts enforces this.
+ *
+ * Note: `PLATFORM_NOT_IMPLEMENTED` → 1 (internal). A substrate operation the
+ * platform has not wired yet is, from the caller's view, an internal "not
+ * available" — not a user-fixable input error.
+ *
+ * Note: `SUBSCRIPTION_BUSY` → 11 (billing). It is a billing-lock contention,
+ * not a platform outage — even though it is retry-likely. The JSON error
+ * envelope's `retryLikelyToSucceed` carries that signal.
+ */
+export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
+  // Make the shape explicit so TypeScript catches literal errors in the values
+  // while still allowing the test to probe for absent keys.
+  [K in ErrorCode]?: number;
+} = {
+  // Auth (3)
+  UNAUTHORIZED: 3,
+
+  // Invalid input / usage (2)
+  INVALID_REQUEST: 2,
+  UNSUPPORTED_MEDIA_TYPE: 2,
+  PAYLOAD_TOO_LARGE: 2,
+
+  // Not found (4)
+  RESOURCE_NOT_FOUND: 4,
+  ACCOUNT_NOT_FOUND: 4,
+  SUBSCRIPTION_NOT_FOUND: 4,
+  SEAT_NOT_FOUND: 4,
+
+  // Tier / entitlement (5)
+  TIER_NOT_ACTIVE: 5,
+  LINKEDIN_FEATURE_NOT_SUBSCRIBED: 5,
+
+  // Rate-limited (6)
+  RATE_LIMIT_ACCOUNT: 6,
+  RATE_LIMIT_TENANT: 6,
+  PLATFORM_RATE_LIMIT: 6,
+  LINKEDIN_RATE_LIMITED: 6,
+
+  // Transient platform (7)
+  PLATFORM_ERROR: 7,
+  LINKEDIN_SERVICE_UNAVAILABLE: 7,
+
+  // Account / connection state (8)
+  ACCOUNT_RESTRICTED: 8,
+  LINKEDIN_AUTH_FAILED: 8,
+  LINKEDIN_COOKIE_INVALID: 8,
+  CONNECTION_IN_PROGRESS: 8,
+
+  // Checkpoint flow (9)
+  CHECKPOINT_NOT_FOUND: 9,
+  CHECKPOINT_EXPIRED: 9,
+  CHECKPOINT_INVALID_CODE: 9,
+  CHECKPOINT_MAX_ATTEMPTS: 9,
+  CHECKPOINT_ALREADY_RESOLVED: 9,
+  CHECKPOINT_UNSUPPORTED: 9,
+
+  // Messaging window / recipient (10)
+  MESSAGE_WINDOW_EXPIRED: 10,
+  RECIPIENT_UNREACHABLE: 10,
+
+  // Billing (11)
+  PAYMENT_REQUIRED: 11,
+  PAYMENT_FAILED: 11,
+  SUBSCRIPTION_BUSY: 11,
+  SEAT_CANCELLED: 11,
+
+  // Internal / uncaught (1) — last resort bucket
+  INTERNAL: 1,
+  PLATFORM_NOT_IMPLEMENTED: 1,
+};
+
+/**
+ * Return the process exit code for a given ErrorCode.
+ * Returns `1` for any unmapped or unknown code (safe default).
+ */
+export function getExitCode(code: ErrorCode): number {
+  return EXIT_CODE_MAP[code] ?? 1;
+}
