@@ -34,8 +34,10 @@ describe("dependency closure", () => {
     expect(pkg.dependencies).toHaveProperty("citty");
   });
 
-  it("dependencies does not include @curviate/shared", () => {
-    expect(Object.keys(pkg.dependencies)).not.toContain("@curviate/shared");
+  it("dependencies do not include the internal shared workspace package", () => {
+    // Literal assembled from fragments so the codename never appears in source.
+    const internalShared = "@curviate/" + "shared";
+    expect(Object.keys(pkg.dependencies)).not.toContain(internalShared);
   });
 
   it("name is @curviate/cli", () => {

@@ -254,8 +254,8 @@ console.log("=== verify-dist: CLI binary smoke gate ===\n");
     "--api-key", "rdc_live_verify_dist_stub",
   ]);
   assert(
-    result.status !== 0,
-    `webhook create (missing required flags) exits non-zero (got ${result.status})`
+    result.status === 2,
+    `webhook create (missing required flags) exits 2 — usage error (got ${result.status})`
   );
 }
 

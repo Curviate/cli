@@ -28,11 +28,14 @@ const srcDir = resolve(pkgRoot, "src");
 // ---------------------------------------------------------------------------
 
 const vendorName = ["uni", "pi", "le"].join("");
-// Codename pattern uses same structure as check-clean.mjs — @curviate/shared
-// uses the \b boundary which means it won't match inside quoted strings where
-// @ is preceded by a non-word char (the pattern matches the raw identifier).
+// Codename pattern mirrors scripts/check-clean.mjs. No \b anchors: the boundary
+// fails to match the scoped-package codename when it is preceded by a non-word
+// char (a quote, an import path separator), which would let a real internal
+// import slip past — so the three tokens match unanchored. They are specific
+// enough that a false positive is implausible. Fragments are concatenated so
+// the literals never appear in this file.
 const codenamePat = new RegExp(
-  ["\\b(red" + "arc|@curviate/" + "shared|apps/" + "server)\\b"].join(""),
+  ["red" + "arc", "@curviate/" + "shared", "apps/" + "server"].join("|"),
 );
 
 const LEAK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [

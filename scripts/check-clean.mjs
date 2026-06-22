@@ -57,7 +57,11 @@ const PATTERNS = [
   },
   {
     label: "internal codenames (redarc, @curviate/shared, apps/server)",
-    pattern: /\b(redarc|@curviate\/shared|apps\/server)\b/,
+    // No \b anchors: \b fails to match @curviate/shared when preceded by a
+    // non-word char (e.g. a quote), so an actual internal import could slip
+    // past. These three tokens are specific enough that false positives are
+    // implausible. (The SDK keeps its own separate copy of this scanner.)
+    pattern: /redarc|@curviate\/shared|apps\/server/,
   },
   {
     label: "internal key prefix (rdc_ — not a customer key format)",
