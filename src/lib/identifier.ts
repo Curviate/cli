@@ -19,13 +19,13 @@
  * network calls.
  */
 
-/** Matches a full LinkedIn member profile URL. */
+/** Matches a full LinkedIn member profile URL (www., locale/country subdomain, or bare). */
 const MEMBER_URL_RE =
-  /^https?:\/\/(?:www\.)?linkedin\.com\/in\/([^/?#]+)/i;
+  /^https?:\/\/(?:[a-z0-9-]+\.)?linkedin\.com\/in\/([^/?#]+)/i;
 
-/** Matches a full LinkedIn company URL. */
+/** Matches a full LinkedIn company URL (www., locale/country subdomain, or bare). */
 const COMPANY_URL_RE =
-  /^https?:\/\/(?:www\.)?linkedin\.com\/company\/([^/?#]+)/i;
+  /^https?:\/\/(?:[a-z0-9-]+\.)?linkedin\.com\/company\/([^/?#]+)/i;
 
 /** Matches a bare `/in/<slug>` path (may have trailing slash). */
 const MEMBER_PATH_RE = /^\/in\/([^/?#/]+)\/?$/;

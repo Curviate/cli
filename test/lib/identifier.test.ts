@@ -79,4 +79,37 @@ describe("lib/identifier — resolveIdentifier", () => {
   it("handles linkedin.com without www", () => {
     expect(resolveIdentifier("https://linkedin.com/in/no-www")).toBe("no-www");
   });
+
+  // Locale/country subdomain member URLs → slug
+  it("locale subdomain member URL → slug", () => {
+    expect(
+      resolveIdentifier("https://de.linkedin.com/in/jane-doe-123"),
+    ).toBe("jane-doe-123");
+    expect(
+      resolveIdentifier("https://fr.linkedin.com/in/jane-doe-123/"),
+    ).toBe("jane-doe-123");
+    expect(
+      resolveIdentifier("https://uk.linkedin.com/in/jane-doe-123"),
+    ).toBe("jane-doe-123");
+  });
+
+  // Locale/country subdomain company URLs → slug
+  it("locale subdomain company URL → slug", () => {
+    expect(
+      resolveIdentifier("https://uk.linkedin.com/company/acme-co"),
+    ).toBe("acme-co");
+    expect(
+      resolveIdentifier("https://de.linkedin.com/company/acme-co/"),
+    ).toBe("acme-co");
+  });
+
+  // Non-linkedin host must NOT be treated as a LinkedIn URL
+  it("non-linkedin host passes through unchanged", () => {
+    expect(
+      resolveIdentifier("https://de.notlinkedin.com/in/jane-doe-123"),
+    ).toBe("https://de.notlinkedin.com/in/jane-doe-123");
+    expect(
+      resolveIdentifier("https://evillinkedin.com/in/jane-doe-123"),
+    ).toBe("https://evillinkedin.com/in/jane-doe-123");
+  });
 });
