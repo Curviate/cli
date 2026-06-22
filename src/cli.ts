@@ -34,16 +34,19 @@ const main = defineCommand({
       import("./commands/config.js").then((m) => m.configCommand),
 
     // ---------------------------------------------------------------------------
-    // Noun groups (DEV-2+): loaded lazily — not yet implemented.
-    // Stubs are listed here so the command registry is visible in --help.
+    // Noun groups — lazy-loaded on first invocation.
     // ---------------------------------------------------------------------------
-    // profile: () => import("./commands/profile.js").then((m) => m.profileCommand),
-    // company: () => import("./commands/company.js").then((m) => m.companyCommand),
-    // connect: () => import("./commands/connect.js").then((m) => m.connectCommand),
+    profile: () =>
+      import("./commands/profile.js").then((m) => m.profileCommand),
+    company: () =>
+      import("./commands/company.js").then((m) => m.companyCommand),
+    connect: () =>
+      import("./commands/connect.js").then((m) => m.connectCommand),
+    search: () =>
+      import("./commands/search.js").then((m) => m.searchCommand),
     // inbox: () => import("./commands/inbox.js").then((m) => m.inboxCommand),
     // message: () => import("./commands/message.js").then((m) => m.messageCommand),
     // post: () => import("./commands/post.js").then((m) => m.postCommand),
-    // search: () => import("./commands/search.js").then((m) => m.searchCommand),
     // account: () => import("./commands/account.js").then((m) => m.accountCommand),
     // webhook: () => import("./commands/webhook.js").then((m) => m.webhookCommand),
     // "sales-nav": () => import("./commands/sales-nav.js").then((m) => m.salesNavCommand),
