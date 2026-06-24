@@ -24,6 +24,13 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
+import {
+  assembleFilters,
+  splitCsv,
+  splitCsvNumbers,
+  DEFAULT_FILTER_READERS,
+  type FilterReaders,
+} from "../lib/search-filters.js";
 import type { CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +58,16 @@ type SalesNavFlags = {
   video?: string;
   type?: string;
   keywords?: string;
+  // search filter escape hatch + curated named flags
+  filters?: string;
+  "filters-file"?: string;
+  "first-name"?: string;
+  "last-name"?: string;
+  groups?: string;
+  "profile-language"?: string;
+  technologies?: string;
+  "recent-activities"?: string;
+  "network-distance"?: string;
   identifier?: string;
   userId?: string;
   "list-id"?: string;
@@ -165,6 +182,7 @@ export async function runSalesNavSearchPeople(
   client: MinimalClient,
   flags: SalesNavFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -176,8 +194,19 @@ export async function runSalesNavSearchPeople(
   const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
   const cursor = flags.cursor;
 
-  const body: Record<string, unknown> = {};
+  // --filters base body, then --keywords and the curated named flags over it.
+  // The rich Sales Navigator filters are mostly nested objects, reachable via --filters.
+  const assembled = await assembleFilters(flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
   if (flags.keywords) body["keywords"] = flags.keywords;
+  if (flags["first-name"]) body["first_name"] = flags["first-name"];
+  if (flags["last-name"]) body["last_name"] = flags["last-name"];
+  if (flags.groups) body["groups"] = splitCsv(flags.groups);
+  if (flags["profile-language"]) body["profile_language"] = splitCsv(flags["profile-language"]);
 
   const params: Record<string, unknown> = {};
   if (limit !== undefined) params["limit"] = limit;
@@ -219,6 +248,7 @@ export async function runSalesNavSearchCompanies(
   client: MinimalClient,
   flags: SalesNavFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -230,8 +260,17 @@ export async function runSalesNavSearchCompanies(
   const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
   const cursor = flags.cursor;
 
-  const body: Record<string, unknown> = {};
+  // --filters base body, then --keywords and the curated named flags over it.
+  const assembled = await assembleFilters(flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
   if (flags.keywords) body["keywords"] = flags.keywords;
+  if (flags.technologies) body["technologies"] = splitCsv(flags.technologies);
+  if (flags["recent-activities"]) body["recent_activities"] = splitCsv(flags["recent-activities"]);
+  if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
 
   const params: Record<string, unknown> = {};
   if (limit !== undefined) params["limit"] = limit;
@@ -280,6 +319,8 @@ export async function runSalesNavGetParameters(
 
   const params: Record<string, unknown> = {};
   if (flags.type) params["type"] = flags.type;
+  if (flags.keywords) params["keywords"] = flags.keywords;
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
 
   try {
     const result = await ns.salesNavigator.getParameters(params);
@@ -494,6 +535,12 @@ const salesNavSearchPeopleCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Keyword search string." },
+    filters: { type: "string", description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin." },
+    "filters-file": { type: "string", description: "Path to a JSON file with the filter body." },
+    "first-name": { type: "string", description: "First name to match." },
+    "last-name": { type: "string", description: "Last name to match." },
+    groups: { type: "string", description: "Group ids (comma-separated)." },
+    "profile-language": { type: "string", description: "Profile language codes (comma-separated)." },
   },
   async run({ args }) {
     const flags = args as SalesNavFlags;
@@ -519,6 +566,11 @@ const salesNavSearchCompaniesCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Keyword search string." },
+    filters: { type: "string", description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin." },
+    "filters-file": { type: "string", description: "Path to a JSON file with the filter body." },
+    technologies: { type: "string", description: "Technology tags (comma-separated)." },
+    "recent-activities": { type: "string", description: "Recent activity ids (comma-separated)." },
+    "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
   },
   async run({ args }) {
     const flags = args as SalesNavFlags;
@@ -544,6 +596,7 @@ const salesNavSearchParametersCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     type: { type: "string", description: "Parameter type (e.g. LOCATION, INDUSTRY, TITLE).", required: true },
+    keywords: { type: "string", description: "Human term to resolve (e.g. Berlin)." },
   },
   async run({ args }) {
     const flags = args as SalesNavFlags;

@@ -498,6 +498,63 @@ describe("recruiter search people", () => {
     const callArgs = (ns.recruiter.searchPeople as Mock).mock.calls[0] as [Record<string, unknown>];
     // First argument is the body (POST)
     expect(typeof callArgs[0]).toBe("object");
+    expect(callArgs[0]).toEqual({ keywords: "ml" });
+  });
+
+  it("--filters '<json>' merges nested filter objects into the POST body verbatim", async () => {
+    const { runRecruiterSearchPeople } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchPeople(client as never, {
+      account: "acc_1",
+      filters: '{"industry":{"include":["96"]},"seniority":{"include":["3"]}}',
+      json: true,
+    }, out);
+
+    const body = (ns.recruiter.searchPeople as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ industry: { include: ["96"] }, seniority: { include: ["3"] } });
+  });
+
+  it("--keywords + --filters combine; named flags map to exact API fields", async () => {
+    const { runRecruiterSearchPeople } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchPeople(client as never, {
+      account: "acc_1",
+      keywords: "ml",
+      filters: '{"industry":{"include":["96"]}}',
+      locale: "en",
+      "employment-type": "FULL_TIME,CONTRACT",
+      function: "eng",
+      "profile-language": "en,de",
+      json: true,
+    }, out);
+
+    const body = (ns.recruiter.searchPeople as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      industry: { include: ["96"] },
+      keywords: "ml",
+      locale: "en",
+      employment_type: ["FULL_TIME", "CONTRACT"],
+      function: ["eng"],
+      profile_language: ["en", "de"],
+    });
+  });
+
+  it("bad --filters JSON exits 2 before any SDK call", async () => {
+    const { runRecruiterSearchPeople } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterSearchPeople(client as never, { account: "acc_1", filters: "{bad" }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.searchPeople).not.toHaveBeenCalled();
   });
 
   it("--preview exits 2", async () => {
@@ -560,6 +617,21 @@ describe("recruiter search parameters", () => {
     expect(ns.recruiter.getParameters).toHaveBeenCalledWith(
       expect.objectContaining({ type: "LOCATION" }),
     );
+  });
+
+  it("wires --keywords and --limit into the query alongside --type", async () => {
+    const { runRecruiterGetParameters } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetParameters(client as never, {
+      account: "acc_1",
+      type: "LOCATION",
+      keywords: "Berlin",
+      limit: "10",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.getParameters).toHaveBeenCalledWith({ type: "LOCATION", keywords: "Berlin", limit: 10 });
   });
 });
 

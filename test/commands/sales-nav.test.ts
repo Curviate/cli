@@ -277,7 +277,63 @@ describe("sales-nav search people", () => {
     const callArgs = (ns.salesNavigator.searchPeople as Mock).mock.calls[0] as [Record<string, unknown>];
     // The method is called with a body object (POST) — first arg is the body
     expect(callArgs[0]).toBeDefined();
-    expect(typeof callArgs[0]).toBe("object");
+    expect(callArgs[0]).toEqual({ keywords: "ai" });
+  });
+
+  it("--filters '<json>' merges nested filter objects into the POST body verbatim", async () => {
+    const { runSalesNavSearchPeople } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchPeople(client as never, {
+      account: "acc_1",
+      filters: '{"location":{"include":["103644278"]},"changed_jobs":true}',
+      json: true,
+    }, out);
+
+    const body = (ns.salesNavigator.searchPeople as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ location: { include: ["103644278"] }, changed_jobs: true });
+  });
+
+  it("--keywords + --filters combine; named flags map to exact API fields", async () => {
+    const { runSalesNavSearchPeople } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchPeople(client as never, {
+      account: "acc_1",
+      keywords: "ai",
+      filters: '{"changed_jobs":true}',
+      "first-name": "Ada",
+      "last-name": "Lovelace",
+      groups: "g1,g2",
+      "profile-language": "en",
+      json: true,
+    }, out);
+
+    const body = (ns.salesNavigator.searchPeople as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      changed_jobs: true,
+      keywords: "ai",
+      first_name: "Ada",
+      last_name: "Lovelace",
+      groups: ["g1", "g2"],
+      profile_language: ["en"],
+    });
+  });
+
+  it("bad --filters JSON exits 2 before any SDK call", async () => {
+    const { runSalesNavSearchPeople } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runSalesNavSearchPeople(client as never, { account: "acc_1", filters: "[1,2,3]" }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.salesNavigator.searchPeople).not.toHaveBeenCalled();
   });
 
   it("--preview exits 2 (search is a write shape via POST — but for reads it should exit 2)", async () => {
@@ -342,7 +398,47 @@ describe("sales-nav search companies", () => {
 
     expect(ns.salesNavigator.searchCompanies).toHaveBeenCalled();
     const callArgs = (ns.salesNavigator.searchCompanies as Mock).mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs[0]).toBeDefined();
+    expect(callArgs[0]).toEqual({ keywords: "tech" });
+  });
+
+  it("--filters + named flags map to exact API fields", async () => {
+    const { runSalesNavSearchCompanies } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchCompanies(client as never, {
+      account: "acc_1",
+      keywords: "tech",
+      filters: '{"has_job_offers":true}',
+      technologies: "react,node",
+      "recent-activities": "senior_leadership_changes",
+      "network-distance": "1,2",
+      json: true,
+    }, out);
+
+    const body = (ns.salesNavigator.searchCompanies as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      has_job_offers: true,
+      keywords: "tech",
+      technologies: ["react", "node"],
+      recent_activities: ["senior_leadership_changes"],
+      network_distance: [1, 2],
+    });
+  });
+
+  it("bad --filters JSON exits 2 before any SDK call", async () => {
+    const { runSalesNavSearchCompanies } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runSalesNavSearchCompanies(client as never, { account: "acc_1", filters: "{bad" }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.salesNavigator.searchCompanies).not.toHaveBeenCalled();
   });
 });
 
@@ -372,6 +468,21 @@ describe("sales-nav search parameters", () => {
     expect(ns.salesNavigator.getParameters).toHaveBeenCalledWith(
       expect.objectContaining({ type: "LOCATION" }),
     );
+  });
+
+  it("wires --keywords and --limit into the query alongside --type", async () => {
+    const { runSalesNavGetParameters } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavGetParameters(client as never, {
+      account: "acc_1",
+      type: "LOCATION",
+      keywords: "Berlin",
+      limit: "10",
+      json: true,
+    }, out);
+
+    expect(ns.salesNavigator.getParameters).toHaveBeenCalledWith({ type: "LOCATION", keywords: "Berlin", limit: 10 });
   });
 
   it("--preview on read: exits 2", async () => {

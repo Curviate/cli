@@ -36,6 +36,12 @@ import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
+import {
+  assembleFilters,
+  splitCsv,
+  DEFAULT_FILTER_READERS,
+  type FilterReaders,
+} from "../lib/search-filters.js";
 import { readFile } from "node:fs/promises";
 import type { CurviateError } from "@curviate/sdk";
 
@@ -64,6 +70,14 @@ type RecruiterFlags = {
   video?: string;
   type?: string;
   keywords?: string;
+  // search-people filter escape hatch + curated named flags
+  // (note: "employment-type" is declared below in the job-create group and is
+  //  reused by `recruiter search people` — it maps to the same API field.)
+  filters?: string;
+  "filters-file"?: string;
+  locale?: string;
+  function?: string;
+  "profile-language"?: string;
   identifier?: string;
   userId?: string;
   projectId?: string;
@@ -377,6 +391,7 @@ export async function runRecruiterSearchPeople(
   client: MinimalClient,
   flags: RecruiterFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -388,8 +403,19 @@ export async function runRecruiterSearchPeople(
   const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
   const cursor = flags.cursor;
 
-  const body: Record<string, unknown> = {};
+  // --filters base body, then --keywords and the curated named flags over it.
+  // The rich Recruiter filters are mostly nested objects, reachable via --filters.
+  const assembled = await assembleFilters(flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
   if (flags.keywords) body["keywords"] = flags.keywords;
+  if (flags.locale) body["locale"] = flags.locale;
+  if (flags["employment-type"]) body["employment_type"] = splitCsv(flags["employment-type"]);
+  if (flags.function) body["function"] = splitCsv(flags.function);
+  if (flags["profile-language"]) body["profile_language"] = splitCsv(flags["profile-language"]);
 
   const params: Record<string, unknown> = {};
   if (limit !== undefined) params["limit"] = limit;
@@ -438,6 +464,8 @@ export async function runRecruiterGetParameters(
 
   const params: Record<string, unknown> = {};
   if (flags.type) params["type"] = flags.type;
+  if (flags.keywords) params["keywords"] = flags.keywords;
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
 
   try {
     const result = await ns.recruiter.getParameters(params);
@@ -973,6 +1001,12 @@ const recruiterSearchPeopleCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Keyword search string." },
+    filters: { type: "string", description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin." },
+    "filters-file": { type: "string", description: "Path to a JSON file with the filter body." },
+    locale: { type: "string", description: "Result locale, e.g. en." },
+    "employment-type": { type: "string", description: "Employment type ids (comma-separated)." },
+    function: { type: "string", description: "Job function ids (comma-separated)." },
+    "profile-language": { type: "string", description: "Profile language codes (comma-separated)." },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -998,6 +1032,7 @@ const recruiterSearchParametersCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     type: { type: "string", description: "Parameter type (e.g. LOCATION, INDUSTRY, TITLE).", required: true },
+    keywords: { type: "string", description: "Human term to resolve (e.g. Berlin)." },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
