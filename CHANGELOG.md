@@ -8,6 +8,20 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
+### Fixed
+
+- `message inmail` now requires and forwards the `--surface` flag (was silently dropped).
+- `connect respond` now requires and forwards `--shared-secret` (was silently dropped).
+- `recruiter message new` uses the correct field name `attendee_ids` (was `attendees`).
+- `recruiter job create` now forwards the full job body via JSON and scalar flags (was a no-op).
+
+### Added
+
+- `search` and `recruiter search` / `sales-navigator search` accept `--filters` for raw JSON filter objects and named filter flags (`--title`, `--company`, `--location`, `--school`, `--industry`) for common parameters.
+- `search` and `recruiter search` / `sales-navigator search` accept `--url` (profile URL filter) and `--keywords`.
+
 ## [0.1.0] - 2026-06-22
 
 ### Added
