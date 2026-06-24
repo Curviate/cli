@@ -9,12 +9,14 @@
  *   message delete <message_id>                                 — delete a message (write)
  *   message react <message_id> --emoji <e>                     — react to message (write, body field: reaction)
  *   message attachment <message_id> <attachment_id> [-o <file>] — download attachment (binary)
- *   message inmail --to <id> --subject <s> "<text>"            — send InMail (write, --to via resolveIdentifier)
+ *   message inmail --to <urn> --surface <s> --subject <s> "<text>" — send InMail (write; --to must be a member URN, --surface required)
  *   message inmail-balance                                      — get InMail credit balance (read)
  *
  * chat_id / message_id / attachment_id pass through verbatim.
  * --to for `message new` is an attendee provider ID, passed verbatim (NOT URL-resolved).
- * --to for `message inmail` passes through resolveIdentifier.
+ * --to for `message inmail` passes through resolveIdentifier, then is validated as a
+ *   member URN (urn:li:member:<id>); a URL or slug is rejected client-side (exit 2).
+ * --surface for `message inmail` is required (sales_nav | recruiter).
  */
 
 import { defineCommand } from "citty";
@@ -36,6 +38,7 @@ type MessageFlags = {
   text?: string;
   emoji?: string;
   subject?: string;
+  surface?: string;
   output?: string;
   attach?: string | string[];
   account?: string;
@@ -115,6 +118,12 @@ function normalizeAttachPaths(attach: string | string[] | undefined): string[] {
   if (!attach) return [];
   return Array.isArray(attach) ? attach : [attach];
 }
+
+/** Valid InMail surfaces — must match the API enum exactly. */
+const INMAIL_SURFACES = ["sales_nav", "recruiter"] as const;
+
+/** A LinkedIn member URN: urn:li:member:<digits>. The InMail recipient must be a URN. */
+const MEMBER_URN_RE = /^urn:li:member:\d+$/;
 
 async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
   const { CurviateError } = await import("@curviate/sdk");
@@ -427,12 +436,28 @@ export async function runMessageInMail(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
+  const surface = flags.surface ?? "";
+  if (!(INMAIL_SURFACES as readonly string[]).includes(surface)) {
+    out.stderr.write(
+      `error: --surface is required and must be one of ${INMAIL_SURFACES.join(", ")}.\n`,
+    );
+    process.exit(2);
+  }
+
   const recipientUrn = resolveIdentifier(flags.to ?? "");
+  if (!MEMBER_URN_RE.test(recipientUrn)) {
+    out.stderr.write(
+      "error: --to must be a LinkedIn member URN (e.g. urn:li:member:99999), not a URL or slug.\n",
+    );
+    process.exit(2);
+  }
+
   const subject = flags.subject ?? "";
   const text = flags.text ?? "";
 
   const body: Record<string, unknown> = {
     recipient_urn: recipientUrn,
+    surface,
     subject,
     text,
   };
@@ -652,7 +677,8 @@ const messageInMailCommand = defineCommand({
   meta: { name: "inmail", description: "Send an InMail to a member." },
   args: {
     ...GLOBAL_FLAGS,
-    to: { type: "string", description: "Recipient LinkedIn URN, URL, or slug.", required: true },
+    to: { type: "string", description: "Recipient member URN (urn:li:member:<id>). Must be a URN, not a URL or slug.", required: true },
+    surface: { type: "string", description: "InMail surface: sales_nav or recruiter.", required: true },
     subject: { type: "string", description: "InMail subject line.", required: true },
     text: { type: "positional", description: "InMail body text." },
   },

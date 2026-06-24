@@ -55,6 +55,7 @@ type MessageArgs = {
   text?: string;
   emoji?: string;
   subject?: string;
+  surface?: string;
   output?: string;
   attach?: string | string[];
   account?: string;
@@ -531,12 +532,13 @@ describe("message inmail / inmail-balance", () => {
     vi.restoreAllMocks();
   });
 
-  it("message inmail --to urn:li:member:99 --subject 'Hi' 'text' — calls sendInMail with correct body", async () => {
+  it("message inmail --to urn:li:member:99 --surface sales_nav --subject 'Hi' 'text' — calls sendInMail with correct body", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:99",
+      surface: "sales_nav",
       subject: "Hi",
       text: "Hello there",
       account: "acc_1",
@@ -547,10 +549,108 @@ describe("message inmail / inmail-balance", () => {
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({
         recipient_urn: "urn:li:member:99",
+        surface: "sales_nav",
         subject: "Hi",
         text: "Hello there",
       }),
     );
+  });
+
+  // ── Wire-encoding regression: the body MUST carry every API-required field.
+  // OpenAPI required = [account_id, recipient_urn, surface, subject, text].
+  // account_id rides via client.account(id); the rest are the request body.
+  // A prior version omitted `surface` → guaranteed API 400. This test asserts
+  // the exact key names + values the SDK method receives.
+  it("message inmail — body carries recipient_urn, surface, subject, text (every required field)", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageInMail(client as never, {
+      to: "urn:li:member:12345",
+      surface: "recruiter",
+      subject: "Role at Acme",
+      text: "Body text",
+      account: "acc_1",
+      json: true,
+    } as MessageArgs, out);
+
+    expect(client.account).toHaveBeenCalledWith("acc_1");
+    const body = (ns.messaging.sendInMail as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    // Every body-level required field present, with exact key names + shapes.
+    expect(body).toEqual({
+      recipient_urn: "urn:li:member:12345",
+      surface: "recruiter",
+      subject: "Role at Acme",
+      text: "Body text",
+    });
+  });
+
+  it("message inmail — missing --surface exits 2 before any SDK call", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runMessageInMail(client as never, {
+        to: "urn:li:member:99",
+        subject: "Hi",
+        text: "Hello",
+        account: "acc_1",
+      } as MessageArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
+  });
+
+  it("message inmail — invalid --surface value exits 2 before any SDK call", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runMessageInMail(client as never, {
+        to: "urn:li:member:99",
+        surface: "messaging",
+        subject: "Hi",
+        text: "Hello",
+        account: "acc_1",
+      } as MessageArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
+  });
+
+  it("message inmail — non-URN --to (slug) is rejected client-side, exits 2, no SDK call", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runMessageInMail(client as never, {
+        to: "https://www.linkedin.com/in/some-person",
+        surface: "sales_nav",
+        subject: "Hi",
+        text: "Hello",
+        account: "acc_1",
+      } as MessageArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
   it("message inmail --preview — renders preview, no sendInMail call", async () => {
@@ -559,6 +659,7 @@ describe("message inmail / inmail-balance", () => {
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:99",
+      surface: "sales_nav",
       subject: "Hi",
       text: "Hello",
       account: "acc_1",
@@ -569,6 +670,10 @@ describe("message inmail / inmail-balance", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("messaging.sendInMail");
+    // Preview must be honest: the assembled body includes surface.
+    expect(parsed.body).toEqual(
+      expect.objectContaining({ recipient_urn: "urn:li:member:99", surface: "sales_nav" }),
+    );
   });
 
   it("message inmail-balance — calls getInMailBalance", async () => {
