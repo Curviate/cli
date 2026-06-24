@@ -23,6 +23,13 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { streamAll } from "../lib/paginate.js";
+import {
+  assembleFilters,
+  splitCsv,
+  splitCsvNumbers,
+  DEFAULT_FILTER_READERS,
+  type FilterReaders,
+} from "../lib/search-filters.js";
 import type { CurviateError } from "@curviate/sdk";
 
 type SearchFlags = {
@@ -41,6 +48,37 @@ type SearchFlags = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  // Filter escape hatch (reaches every documented filter as JSON).
+  filters?: string;
+  "filters-file"?: string;
+  // Curated named convenience flags (string arrays are comma-separated).
+  industry?: string;
+  location?: string;
+  company?: string;
+  "past-company"?: string;
+  school?: string;
+  "network-distance"?: string;
+  "connections-of"?: string;
+  "followers-of"?: string;
+  "sort-by"?: string;
+  "date-posted"?: string;
+  "content-type"?: string;
+  seniority?: string;
+  function?: string;
+  "job-type"?: string;
+  region?: string;
+};
+
+/** Named convenience flags reused across the search description sets. */
+const FILTER_FLAGS = {
+  filters: {
+    type: "string" as const,
+    description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin.",
+  },
+  "filters-file": {
+    type: "string" as const,
+    description: "Path to a JSON file with the filter body.",
+  },
 };
 
 type OutputStreams = {
@@ -97,15 +135,70 @@ function resolveOutputOpts(flags: SearchFlags) {
   };
 }
 
-/** Build body params from flags — omit undefined values. */
-function buildSearchBody(flags: SearchFlags): Record<string, unknown> {
-  const body: Record<string, unknown> = {};
+/** Apply the common --keywords / --url / pagination flags over a body. */
+function applyCommonSearchFlags(body: Record<string, unknown>, flags: SearchFlags): void {
   if (flags.keywords) body["keywords"] = flags.keywords;
   if (flags.url) body["url"] = flags.url;
   // cursor + limit go as query params (SDK splits them out of the body)
   if (flags.cursor) body["cursor"] = flags.cursor;
   if (flags.limit) body["limit"] = parseInt(flags.limit, 10);
-  return body;
+}
+
+/**
+ * Per-command named-flag mappers. Each maps the curated convenience flags to the
+ * exact API request-body field names, merging OVER the --filters base body.
+ * String-array fields are comma-separated; network_distance is a number array.
+ */
+const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: SearchFlags) => void> = {
+  people(body, flags) {
+    if (flags.industry) body["industry"] = splitCsv(flags.industry);
+    if (flags.location) body["location"] = splitCsv(flags.location);
+    if (flags.company) body["company"] = splitCsv(flags.company);
+    if (flags["past-company"]) body["past_company"] = splitCsv(flags["past-company"]);
+    if (flags.school) body["school"] = splitCsv(flags.school);
+    if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
+    if (flags["connections-of"]) body["connections_of"] = flags["connections-of"];
+    if (flags["followers-of"]) body["followers_of"] = flags["followers-of"];
+  },
+  companies(body, flags) {
+    if (flags.industry) body["industry"] = splitCsv(flags.industry);
+    if (flags.location) body["location"] = splitCsv(flags.location);
+    if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
+  },
+  posts(body, flags) {
+    if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+    if (flags["date-posted"]) body["date_posted"] = flags["date-posted"];
+    if (flags["content-type"]) body["content_type"] = flags["content-type"];
+  },
+  jobs(body, flags) {
+    if (flags.location) body["location"] = splitCsv(flags.location);
+    if (flags.industry) body["industry"] = splitCsv(flags.industry);
+    if (flags.seniority) body["seniority"] = splitCsv(flags.seniority);
+    if (flags.function) body["function"] = splitCsv(flags.function);
+    if (flags["job-type"]) body["job_type"] = splitCsv(flags["job-type"]);
+    if (flags.company) body["company"] = splitCsv(flags.company);
+    if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+    if (flags.region) body["region"] = flags.region;
+  },
+};
+
+/**
+ * Build the POST search body: the --filters JSON base, then --keywords / --url /
+ * pagination and the per-command named convenience flags merged OVER it.
+ * Returns the body, or an `error` string when --filters does not parse to an
+ * object (the caller exits 2 without an API call).
+ */
+async function buildSearchBody(
+  kind: keyof typeof NAMED_FLAG_MAPPERS,
+  flags: SearchFlags,
+  readers: FilterReaders,
+): Promise<{ body: Record<string, unknown> } | { error: string }> {
+  const assembled = await assembleFilters(flags, readers);
+  if ("error" in assembled) return assembled;
+  const body = assembled.body;
+  applyCommonSearchFlags(body, flags);
+  NAMED_FLAG_MAPPERS[kind]!(body, flags);
+  return { body };
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +213,7 @@ export async function runSearchPeople(
   client: MinimalClient,
   flags: SearchFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -128,7 +222,12 @@ export async function runSearchPeople(
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const body = buildSearchBody(flags);
+  const assembled = await buildSearchBody("people", flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
 
   try {
     if (all) {
@@ -163,6 +262,7 @@ export async function runSearchCompanies(
   client: MinimalClient,
   flags: SearchFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -171,7 +271,12 @@ export async function runSearchCompanies(
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const body = buildSearchBody(flags);
+  const assembled = await buildSearchBody("companies", flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
 
   try {
     if (all) {
@@ -206,6 +311,7 @@ export async function runSearchPosts(
   client: MinimalClient,
   flags: SearchFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -214,7 +320,12 @@ export async function runSearchPosts(
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const body = buildSearchBody(flags);
+  const assembled = await buildSearchBody("posts", flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
 
   try {
     if (all) {
@@ -249,6 +360,7 @@ export async function runSearchJobs(
   client: MinimalClient,
   flags: SearchFlags,
   out: OutputStreams,
+  readers: FilterReaders = DEFAULT_FILTER_READERS,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
@@ -257,7 +369,12 @@ export async function runSearchJobs(
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const body = buildSearchBody(flags);
+  const assembled = await buildSearchBody("jobs", flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
 
   try {
     if (all) {
@@ -330,6 +447,15 @@ const searchPeopleCommand = defineCommand({
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
     url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
+    ...FILTER_FLAGS,
+    industry: { type: "string", description: "Industry ids (comma-separated)." },
+    location: { type: "string", description: "Location ids (comma-separated)." },
+    company: { type: "string", description: "Current company ids (comma-separated)." },
+    "past-company": { type: "string", description: "Past company ids (comma-separated)." },
+    school: { type: "string", description: "School ids (comma-separated)." },
+    "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
+    "connections-of": { type: "string", description: "Member id whose connections to search." },
+    "followers-of": { type: "string", description: "Member id whose followers to search." },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -355,6 +481,11 @@ const searchCompaniesCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
+    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
+    ...FILTER_FLAGS,
+    industry: { type: "string", description: "Industry ids (comma-separated)." },
+    location: { type: "string", description: "Location ids (comma-separated)." },
+    "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -380,6 +511,11 @@ const searchPostsCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
+    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
+    ...FILTER_FLAGS,
+    "sort-by": { type: "string", description: "Sort order (e.g. relevance, date)." },
+    "date-posted": { type: "string", description: "Date-posted window (e.g. past-day, past-week)." },
+    "content-type": { type: "string", description: "Content type (e.g. videos, images, jobs)." },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -405,6 +541,16 @@ const searchJobsCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
+    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
+    ...FILTER_FLAGS,
+    location: { type: "string", description: "Location ids (comma-separated)." },
+    industry: { type: "string", description: "Industry ids (comma-separated)." },
+    seniority: { type: "string", description: "Seniority ids (comma-separated)." },
+    function: { type: "string", description: "Job function ids (comma-separated)." },
+    "job-type": { type: "string", description: "Job type ids, e.g. F,P (comma-separated)." },
+    company: { type: "string", description: "Company ids (comma-separated)." },
+    "sort-by": { type: "string", description: "Sort order (e.g. relevance, recent)." },
+    region: { type: "string", description: "Region id." },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
