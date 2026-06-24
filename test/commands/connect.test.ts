@@ -27,6 +27,7 @@ type ConnectArgs = {
   id?: string;
   note?: string;
   action?: string;
+  "shared-secret"?: string;
   account?: string;
   json?: boolean;
   preview?: boolean;
@@ -213,27 +214,78 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     vi.restoreAllMocks();
   });
 
-  it("connect respond <id> --action accept — calls respond with verbatim id", async () => {
+  it("connect respond <id> --action accept --shared-secret <s> — calls respond with verbatim id", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runConnectRespond(client as never, {
       id: "inv_123",
       action: "accept",
+      "shared-secret": "tok_abc",
       account: "acc_1",
       json: true,
     } as ConnectArgs, out);
 
-    expect(accountNs.invites.respond).toHaveBeenCalledWith("inv_123", { action: "accept" });
+    expect(accountNs.invites.respond).toHaveBeenCalledWith("inv_123", {
+      action: "accept",
+      shared_secret: "tok_abc",
+    });
   });
 
-  it("connect respond --preview — renders preview without calling respond", async () => {
+  // ── Wire-encoding regression: the body MUST carry both required fields.
+  // OpenAPI required = [account_id, action, shared_secret]. account_id rides
+  // via client.account(id); action + shared_secret are the request body.
+  // A prior version sent {action} only → guaranteed API 400.
+  it("connect respond — body carries both action and shared_secret (every required field)", async () => {
+    const { runConnectRespond } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runConnectRespond(client as never, {
+      id: "inv_999",
+      action: "decline",
+      "shared-secret": "tok_xyz",
+      account: "acc_1",
+      json: true,
+    } as ConnectArgs, out);
+
+    expect(client.account).toHaveBeenCalledWith("acc_1");
+    const [id, body] = (accountNs.invites.respond as Mock).mock.calls[0]! as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(id).toBe("inv_999");
+    expect(body).toEqual({ action: "decline", shared_secret: "tok_xyz" });
+  });
+
+  it("connect respond — missing --shared-secret exits 2 before any SDK call", async () => {
+    const { runConnectRespond } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runConnectRespond(client as never, {
+        id: "inv_123",
+        action: "accept",
+        account: "acc_1",
+      } as ConnectArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.invites.respond).not.toHaveBeenCalled();
+  });
+
+  it("connect respond --preview — renders preview (with shared_secret) without calling respond", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runConnectRespond(client as never, {
       id: "inv_123",
       action: "accept",
+      "shared-secret": "tok_abc",
       account: "acc_1",
       preview: true,
     } as ConnectArgs, out);
@@ -242,6 +294,8 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("invites.respond");
+    // Preview must be honest: the assembled body includes shared_secret.
+    expect(parsed.body).toEqual({ action: "accept", shared_secret: "tok_abc" });
   });
 
   it("connect cancel <id> — calls cancel with verbatim id (not URL-resolved)", async () => {

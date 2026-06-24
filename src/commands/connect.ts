@@ -4,8 +4,8 @@
  * Subcommands:
  *   connect <id> [--note <text>]            — send invitation (write, --preview OK)
  *   connect sent                            — list sent invitations (read)
- *   connect received                        — list received invitations (read)
- *   connect respond <id> --action <a>       — accept/decline (write, --preview OK)
+ *   connect received                        — list received invitations (read; items carry shared_secret)
+ *   connect respond <id> --action <a> --shared-secret <s>  — accept/decline (write, --preview OK)
  *   connect cancel <id>                     — cancel sent invitation (write, --preview OK)
  *
  * <id> for `connect <id>` passes through resolveIdentifier (member URL/slug/URN).
@@ -27,6 +27,7 @@ type ConnectFlags = {
   id?: string;
   note?: string;
   action?: string;
+  "shared-secret"?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -245,12 +246,22 @@ export async function runConnectRespond(
   // invitation_id passes verbatim — NOT URL-normalized
   const invitationId = flags.id ?? "";
   const action = flags.action ?? "";
+  const sharedSecret = flags["shared-secret"] ?? "";
+  if (!sharedSecret) {
+    out.stderr.write(
+      "error: --shared-secret is required. Read it from `connect received` " +
+        "(each item carries its per-invitation shared_secret).\n",
+    );
+    process.exit(2);
+  }
+
+  const body = { action, shared_secret: sharedSecret };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "invites.respond",
       args: { invitation_id: invitationId },
-      body: { action },
+      body,
       account: accountId,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
@@ -261,7 +272,7 @@ export async function runConnectRespond(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.invites.respond(invitationId, { action });
+    const result = await ns.invites.respond(invitationId, body);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -345,7 +356,11 @@ const connectSentCommand = defineCommand({
 });
 
 const connectReceivedCommand = defineCommand({
-  meta: { name: "received", description: "List received connection invitations." },
+  meta: {
+    name: "received",
+    description:
+      "List received connection invitations. Each item carries a shared_secret — pass it to `connect respond --shared-secret`.",
+  },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
     const flags = args as ConnectFlags;
@@ -372,6 +387,11 @@ const connectRespondCommand = defineCommand({
     ...GLOBAL_FLAGS,
     id: { type: "positional", description: "Invitation id to respond to." },
     action: { type: "string", description: "Response action: accept or decline.", required: true },
+    "shared-secret": {
+      type: "string",
+      description: "Per-invitation shared secret — read it from `connect received`.",
+      required: true,
+    },
   },
   async run({ args }) {
     const flags = args as ConnectFlags;
