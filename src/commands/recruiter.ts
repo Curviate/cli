@@ -13,7 +13,7 @@
  *   recruiter add-applicant <user_id> --hiring-project-id <id> [--stage <s>]    — add applicant (write)
  *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>  — reject applicant (write)
  *   recruiter jobs [--all] [--limit] [--cursor]                                  — list jobs (read)
- *   recruiter job create [body flags…]                                            — create job draft (write)
+ *   recruiter job create [--body-file <path> | --body -] [--job-title <t>] [--description <d>] [--employment-type <e>] — create job draft (write; JSON body + scalar flags)
  *   recruiter job publish <job_id> [--mode <m>]                                  — publish job (write)
  *   recruiter job checkpoint <job_id> --input <v>                                — solve checkpoint (write)
  *   recruiter job applicants <job_id>                                             — list applicants (read)
@@ -36,6 +36,7 @@ import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
+import { readFile } from "node:fs/promises";
 import type { CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +75,12 @@ type RecruiterFlags = {
   mode?: string;
   input?: string;
   output?: string;
+  // job create
+  body?: string;
+  "body-file"?: string;
+  "job-title"?: string;
+  description?: string;
+  "employment-type"?: string;
 };
 
 type OutputStreams = {
@@ -153,6 +160,83 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
   }
   renderUnexpectedError(err, out);
   process.exit(1);
+}
+
+/** Read all of stdin as a UTF-8 string. Used for `--body -`. */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Reader injection point for `recruiter job create`, so the JSON-body source
+ * (file / stdin) can be exercised in tests without real process.stdin I/O.
+ */
+export type JobCreateReaders = {
+  readFile: (path: string) => Promise<string>;
+  readStdin: () => Promise<string>;
+};
+
+const DEFAULT_JOB_CREATE_READERS: JobCreateReaders = {
+  readFile: (path) => readFile(path, "utf8"),
+  readStdin,
+};
+
+/**
+ * Assemble the `recruiter job create` body from a JSON source (--body-file /
+ * --body -) plus top-level scalar convenience flags that merge OVER the JSON.
+ *
+ * Returns the assembled body, or an `error` string when the JSON source is
+ * present but does not parse / is not a JSON object. The caller handles the
+ * error (exit 2). Required-field validation is left to the API.
+ */
+async function assembleJobCreateBody(
+  flags: RecruiterFlags,
+  readers: JobCreateReaders,
+): Promise<{ body: Record<string, unknown> } | { error: string }> {
+  let base: Record<string, unknown> = {};
+
+  // 1. JSON source: --body-file <path>, or --body - (stdin). --body-file wins
+  //    if both are given.
+  let raw: string | undefined;
+  let source: string | undefined;
+  if (flags["body-file"] !== undefined) {
+    source = `--body-file ${flags["body-file"]}`;
+    try {
+      raw = await readers.readFile(flags["body-file"]);
+    } catch {
+      return { error: `cannot read ${source}` };
+    }
+  } else if (flags.body === "-") {
+    source = "--body - (stdin)";
+    raw = await readers.readStdin();
+  } else if (flags.body !== undefined) {
+    return { error: "--body only accepts '-' (read JSON from stdin); use --body-file <path> for a file." };
+  }
+
+  if (raw !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { error: `${source} is not valid JSON` };
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { error: `${source} must be a JSON object` };
+    }
+    base = parsed as Record<string, unknown>;
+  }
+
+  // 2. Top-level scalar convenience flags merge OVER the JSON. `job_title` is a
+  //    { id?, text? } object in the API; --job-title supplies free-form text.
+  if (flags["job-title"] !== undefined) base["job_title"] = { text: flags["job-title"] };
+  if (flags.description !== undefined) base["description"] = flags.description;
+  if (flags["employment-type"] !== undefined) base["employment_type"] = flags["employment-type"];
+
+  return { body: base };
 }
 
 // ---------------------------------------------------------------------------
@@ -584,25 +668,33 @@ export async function runRecruiterListJobs(
 }
 
 /**
- * Run `recruiter job create [body flags…]`.
- * Write command — supports --preview. Accepts complex body flags for job creation.
- * The full nested body (job_title, company, workplace, location, description,
- * employment_type, recruiter config) is assembled from individual flags.
+ * Run `recruiter job create [--body-file <path> | --body -] [scalar flags…]`.
+ * Write command — supports --preview.
+ *
+ * The job-create body is deeply nested (job_title, company, workplace, location,
+ * description, recruiter — several of which are objects). Rather than enumerate
+ * a flag per nested field, the body is supplied as JSON via --body-file <path>
+ * or --body - (stdin), with top-level scalar convenience flags (--job-title,
+ * --description, --employment-type) merging OVER the JSON.
+ *
+ * The CLI validates only that the JSON parses (exit 2 on bad JSON); required
+ * fields are validated by the API, whose 400 is surfaced cleanly.
  */
 export async function runRecruiterCreateJob(
   client: MinimalClient,
   flags: RecruiterFlags,
   out: OutputStreams,
+  readers: JobCreateReaders = DEFAULT_JOB_CREATE_READERS,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const outOpts = resolveOutputOpts(flags);
 
-  // Build body from available flags. Required fields (job_title, company, workplace,
-  // location, description, recruiter) must be supplied by the caller; the CLI passes
-  // what is present without validation here — the API returns 400 for missing required fields.
-  const body: Record<string, unknown> = {};
-  // All complex nested fields (job_title, company, recruiter, etc.) are expected to be
-  // supplied as individual flags if needed; the CLI focuses on the top-level body pass-through.
+  const assembled = await assembleJobCreateBody(flags, readers);
+  if ("error" in assembled) {
+    out.stderr.write(`error: ${assembled.error}\n`);
+    process.exit(2);
+  }
+  const body = assembled.body;
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -1097,7 +1189,14 @@ const recruiterJobsCommand = defineCommand({
 
 const recruiterJobCreateCommand = defineCommand({
   meta: { name: "create", description: "Create a Recruiter job posting draft." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    ...GLOBAL_FLAGS,
+    "body-file": { type: "string", description: "Path to a JSON file with the full job-create body." },
+    body: { type: "string", description: "Read the JSON job-create body from stdin (pass '-')." },
+    "job-title": { type: "string", description: "Job title text (merged over the JSON as job_title.text)." },
+    description: { type: "string", description: "Job description (merged over the JSON)." },
+    "employment-type": { type: "string", description: "Employment type, e.g. FULL_TIME (merged over the JSON)." },
+  },
   async run({ args }) {
     const flags = args as RecruiterFlags;
     const cfg = await resolveEffectiveConfig({

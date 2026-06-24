@@ -831,43 +831,189 @@ describe("recruiter jobs", () => {
 describe("recruiter job create", () => {
   let ns: ReturnType<typeof makeRecruiterNs>;
   let client: ReturnType<typeof makeClient>;
+  let tmpDir: string;
 
-  beforeEach(() => {
+  // Injectable readers so the JSON-body source can be exercised without real
+  // process.stdin / fs I/O. The real --body-file path is exercised via a temp file.
+  function makeReaders(opts: { file?: string; stdin?: string } = {}) {
+    return {
+      readFile: vi.fn(async () => {
+        if (opts.file === undefined) throw new Error("no file");
+        return opts.file;
+      }),
+      readStdin: vi.fn(async () => opts.stdin ?? ""),
+    };
+  }
+
+  // A complete, API-valid job-create body (every OpenAPI-required field).
+  // required = [account_id, job_title, company, workplace, location, description, recruiter].
+  const FULL_BODY = {
+    job_title: { text: "Senior AI Engineer" },
+    company: { id: "1441" },
+    workplace: "REMOTE",
+    location: "103644278",
+    description: "<p>Build agents.</p>",
+    recruiter: { project: { id: "proj_1" } },
+  };
+
+  beforeEach(async () => {
     ns = makeRecruiterNs();
     client = makeClient(ns);
     (ns.recruiter.createJob as Mock).mockResolvedValue({ job_id: "job_new", status: "draft" });
+    tmpDir = await mkdtemp(join(tmpdir(), "curviate-test-job-"));
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("calls recruiter.createJob with body from flags", async () => {
+  // ── Wire-encoding regression: a prior version built `const body = {}` and
+  // never populated it — 0 fields wired → guaranteed API 400. This asserts the
+  // JSON body source is read and every field reaches the SDK verbatim.
+  it("--body-file — reads the JSON file and passes the full body to createJob (every required field)", async () => {
+    const filePath = join(tmpDir, "job.json");
+    await writeFile(filePath, JSON.stringify(FULL_BODY));
+
     const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
 
+    // Real fs reader (no injection): exercises the actual --body-file path.
     await runRecruiterCreateJob(client as never, {
       account: "acc_1",
+      "body-file": filePath,
       json: true,
     }, out);
 
-    expect(ns.recruiter.createJob).toHaveBeenCalledWith(expect.any(Object));
+    expect(client.account).toHaveBeenCalledWith("acc_1");
+    const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual(FULL_BODY);
+    // Spot-check the required keys are all present with correct names.
+    for (const k of ["job_title", "company", "workplace", "location", "description", "recruiter"]) {
+      expect(body).toHaveProperty(k);
+    }
   });
 
-  it("--preview renders request, does not call createJob", async () => {
+  it("--body - — reads the JSON body from stdin", async () => {
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const readers = makeReaders({ stdin: JSON.stringify(FULL_BODY) });
+
+    await runRecruiterCreateJob(client as never, {
+      account: "acc_1",
+      body: "-",
+      json: true,
+    }, out, readers);
+
+    expect(readers.readStdin).toHaveBeenCalled();
+    const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual(FULL_BODY);
+  });
+
+  it("scalar convenience flags merge OVER the JSON body", async () => {
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    // JSON sets job_title/description; the scalar flags must override them.
+    const readers = makeReaders({
+      stdin: JSON.stringify({ ...FULL_BODY, description: "OLD", employment_type: "PART_TIME" }),
+    });
+
+    await runRecruiterCreateJob(client as never, {
+      account: "acc_1",
+      body: "-",
+      "job-title": "Staff Engineer",
+      description: "NEW",
+      "employment-type": "FULL_TIME",
+      json: true,
+    }, out, readers);
+
+    const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    // --job-title maps to job_title.text (job_title is an object in the API).
+    expect(body["job_title"]).toEqual({ text: "Staff Engineer" });
+    expect(body["description"]).toBe("NEW");
+    expect(body["employment_type"]).toBe("FULL_TIME");
+    // Untouched JSON fields survive.
+    expect(body["company"]).toEqual(FULL_BODY.company);
+    expect(body["recruiter"]).toEqual(FULL_BODY.recruiter);
+  });
+
+  it("scalar flags alone (no JSON source) assemble a partial body", async () => {
     const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
 
     await runRecruiterCreateJob(client as never, {
       account: "acc_1",
-      preview: true,
+      "job-title": "Engineer",
+      description: "Build things",
+      json: true,
     }, out);
+
+    const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ job_title: { text: "Engineer" }, description: "Build things" });
+  });
+
+  it("invalid JSON from --body-file exits 2 before any SDK call", async () => {
+    const filePath = join(tmpDir, "bad.json");
+    await writeFile(filePath, "{ not valid json ");
+
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterCreateJob(client as never, {
+        account: "acc_1",
+        "body-file": filePath,
+      }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.createJob).not.toHaveBeenCalled();
+  });
+
+  it("non-object JSON (array) from stdin exits 2 before any SDK call", async () => {
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const readers = makeReaders({ stdin: "[1,2,3]" });
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterCreateJob(client as never, {
+        account: "acc_1",
+        body: "-",
+      }, out, readers);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.createJob).not.toHaveBeenCalled();
+  });
+
+  it("--preview shows the fully assembled body (JSON + scalar flags)", async () => {
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const readers = makeReaders({ stdin: JSON.stringify(FULL_BODY) });
+
+    await runRecruiterCreateJob(client as never, {
+      account: "acc_1",
+      body: "-",
+      "job-title": "Lead Engineer",
+      preview: true,
+    }, out, readers);
 
     expect(ns.recruiter.createJob).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("recruiter.createJob");
+    // Honest preview: the assembled body carries the merged scalar override.
+    expect(parsed.body.job_title).toEqual({ text: "Lead Engineer" });
+    expect(parsed.body.company).toEqual(FULL_BODY.company);
   });
 });
 
