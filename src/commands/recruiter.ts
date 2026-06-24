@@ -218,15 +218,17 @@ export async function runRecruiterMessageNew(
     throw err;
   }
 
+  // Recruiter chats use `attendee_ids` (singular) — classic + SN chats use the
+  // plural `attendees_ids`. The field name diverges by surface.
   const body: Record<string, unknown> = {
-    attendees_ids: [to],
+    attendee_ids: [to],
     text,
   };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "recruiter.startChat",
-      args: { attendees_ids: [to] },
+      args: { attendee_ids: [to] },
       body: { ...body },
       account: accountId,
       attachments: [
