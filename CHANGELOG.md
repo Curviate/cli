@@ -8,6 +8,26 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-28
+
+### Added
+
+- `profile me` and `profile get` now return a slim 9-field projection by default (`id`, `first_name`, `last_name`, `headline`, `location`, `industry`, `profile_url`, `picture_url`, `current_position`); pass `--verbose` to get the full response.
+- `profile get` synthesizes `current_position` from `work_experience[0]` when present.
+- `profile get` and `profile me` accept `--sections` to request specific LinkedIn profile sections from the API.
+- `profile get --posts --is-company` resolves a company slug to an account ID automatically (non-numeric IDs call `getCompany` first).
+- `company get` now returns a slim 12-field projection by default (including `headquarters` and `messaging`); pass `--verbose` to get the full response.
+- `login` persists `--base-url` to the named profile; re-login without `--base-url` preserves the existing base URL.
+
+### Fixed
+
+- `company` command now exits 2 with an error when `--sections` is passed (unsupported flag for that surface).
+- `slimProfile` work_experience field mapping corrected (`position`→`title`, `company`→`company_name`); `is_current` now derived from `end == null`; `company_id` is always `null` (the experience-entry ID is not a company ID).
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.2.0` (adds `getMe` `linkedin_sections`, normalized `OwnProfile`, `Chat.subject`).
+
 ## [0.2.0] - 2026-06-24
 
 ### Fixed
