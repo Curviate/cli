@@ -493,7 +493,7 @@ describe("profile me — slim mode (no --verbose)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has exactly the 9 fields, no heavy fields", async () => {
+  it("slim output has exactly the 10 fields (incl. current_position), no heavy fields", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -501,7 +501,8 @@ describe("profile me — slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(Object.keys(result)).toHaveLength(9);
+    expect(Object.keys(result)).toHaveLength(10);
+    expect(result).toHaveProperty("current_position");
     expect(result).not.toHaveProperty("entity_urn");
     expect(result).not.toHaveProperty("work_experience");
     expect(result).not.toHaveProperty("education");
