@@ -68,6 +68,11 @@ export const GLOBAL_FLAGS = {
       "Render the request that would be sent without calling the API.",
     default: false,
   },
+  verbose: {
+    type: "boolean" as const,
+    description: "Output the full SDK response instead of the slim default.",
+    default: false,
+  },
 } as const;
 
 export type GlobalFlags = {
@@ -83,4 +88,5 @@ export type GlobalFlags = {
   all?: boolean;
   "max-pages"?: string;
   preview?: boolean;
+  verbose?: boolean;
 };

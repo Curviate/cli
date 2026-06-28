@@ -22,6 +22,10 @@ export interface OutputOptions {
   json: boolean;
   isTTY: boolean;
   fields?: string;
+  /** When true, bypass slim projection and return the raw SDK response. */
+  verbose?: boolean;
+  /** Command-specific slim projector. Applied before --fields unless --verbose. */
+  slim?: (data: unknown) => unknown;
 }
 
 export interface OutputStreams {
@@ -104,6 +108,14 @@ function applyProjection(
  *
  * JSON mode: prints `JSON.stringify(data)` (verbatim SDK response) to stdout.
  * Human mode: renders a readable form to stdout (tables/key-value).
+ *
+ * Slim projection (when `opts.slim` is provided and `opts.verbose` is falsy):
+ *   applied first, then `--fields` projection is applied on top. This keeps
+ *   the default output compact while still allowing callers to select a subset
+ *   of the slim fields via `--fields`.
+ *
+ * When `opts.verbose` is true, slim is bypassed and the raw SDK response is used.
+ * Existing calls without `slim` or `verbose` are backward-compatible.
  */
 export function renderSuccess(
   data: unknown,
@@ -115,7 +127,9 @@ export function renderSuccess(
     ? opts.fields.split(",").map((f) => f.trim()).filter(Boolean)
     : [];
 
-  const projected = applyProjection(data, fields);
+  // Apply slim projection first (before --fields), unless --verbose
+  const slimmed = (!opts.verbose && opts.slim) ? opts.slim(data) : data;
+  const projected = applyProjection(slimmed, fields);
 
   if (json) {
     out.stdout.write(JSON.stringify(projected) + "\n");

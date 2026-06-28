@@ -8,6 +8,7 @@
  * writes without prompting. The key never appears in argv when read from stdin.
  *
  * A blank/empty key is rejected before any write (exit 2).
+ * A --base-url of "" (explicitly empty) is rejected (exit 2).
  *
  * No network call is made — the key is saved as-is; the first real command
  * verifies it against the API.
@@ -15,8 +16,68 @@
 
 import { defineCommand } from "citty";
 import { writeProfile } from "../lib/config.js";
+import type { ProfileEntry } from "../lib/config.js";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
 import { readlineSync } from "../lib/readline.js";
+
+type LoginArgs = {
+  "api-key"?: string;
+  account?: string;
+  "base-url"?: string;
+  profile?: string;
+};
+
+type LoginOut = {
+  stderr: { write: (s: string) => void };
+};
+
+/**
+ * Run the login non-interactive path (exported for testing).
+ *
+ * Takes a pre-resolved `api-key` (no TTY/stdin prompting here — that's
+ * handled by the citty command handler before it calls this).
+ *
+ * Validates:
+ *   - api-key must not be blank
+ *   - base-url must not be "" (explicitly empty string)
+ *
+ * Writes the profile entry using `writeProfile` which merges into any existing
+ * profile, so omitting `base-url` preserves whatever was previously stored.
+ */
+export async function runLogin(
+  args: LoginArgs,
+  out: LoginOut,
+): Promise<void> {
+  const profileName = args.profile ?? "default";
+  const apiKey = (args["api-key"] ?? "").trim();
+
+  if (!apiKey) {
+    out.stderr.write("error: API key must not be empty.\n");
+    process.exit(2);
+    return;
+  }
+
+  const baseUrl = args["base-url"];
+  if (baseUrl === "") {
+    out.stderr.write("error: --base-url must not be empty.\n");
+    process.exit(2);
+    return;
+  }
+
+  const account = args.account;
+  const entry: ProfileEntry = { apiKey, account };
+  // Only include baseUrl when explicitly provided (non-empty).
+  // Omitting it from the entry lets writeProfile's merge keep any existing baseUrl.
+  if (baseUrl !== undefined && baseUrl !== "") {
+    entry.baseUrl = baseUrl;
+  }
+
+  await writeProfile(profileName, entry);
+
+  out.stderr.write(
+    `Saved to profile "${profileName}". Run \`curviate profile me\` to verify.\n`,
+  );
+}
 
 export const loginCommand = defineCommand({
   meta: {
@@ -59,23 +120,19 @@ export const loginCommand = defineCommand({
           "error: no API key — pass --api-key or run interactively on a TTY.\n",
         );
         process.exit(2);
+        return;
       }
     }
 
-    // Validate: blank key is rejected.
-    apiKey = apiKey.trim();
-    if (!apiKey) {
-      process.stderr.write("error: API key must not be empty.\n");
-      process.exit(2);
-    }
-
-    const account = (args.account as string | undefined) ?? undefined;
-
-    await writeProfile(profileName, { apiKey, account });
-
-    // Confirmation to stderr only — key is never echoed.
-    process.stderr.write(
-      `Saved to profile "${profileName}". Run \`curviate profile me\` to verify.\n`,
+    const out: LoginOut = { stderr: { write: (s: string) => process.stderr.write(s) } };
+    await runLogin(
+      {
+        "api-key": apiKey,
+        account: args.account as string | undefined,
+        "base-url": args["base-url"] as string | undefined,
+        profile: profileName,
+      },
+      out,
     );
   },
 });
