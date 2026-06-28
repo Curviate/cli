@@ -8,6 +8,17 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-28
+
+### Added
+
+- `profile me` slim now includes `current_position` (synthesized from `work_experience[0]`
+  when `--sections experience` is passed), achieving parity with `profile <id>` slim.
+
+### Fixed
+
+- `repository.url` in `package.json` normalized to the npm-canonical `git+https://` prefix.
+
 ## [0.3.0] - 2026-06-28
 
 ### Added
