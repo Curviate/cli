@@ -37,6 +37,7 @@ type CompanyArgs = {
   cursor?: string;
   "max-pages"?: string;
   verbose?: boolean;
+  sections?: string;
 };
 
 describe("company command", () => {
@@ -97,6 +98,22 @@ describe("company command", () => {
       expect.fail("Should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("company --sections → usage error exit 2 (sections not supported on company)", async () => {
+    const { runCompanyGet } = await import("../../src/commands/company.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => { throw new Error(`process.exit(${code})`); });
+    try {
+      await runCompanyGet(client as never, { id: "acme", sections: "skills" } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+      expect((out.stderr.write as ReturnType<typeof vi.fn>).mock.calls.join("")).toContain("--sections");
     } finally {
       exitSpy.mockRestore();
     }

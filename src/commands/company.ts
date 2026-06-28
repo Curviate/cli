@@ -30,6 +30,7 @@ type CompanyFlags = {
   timeout?: string;
   profile?: string;
   verbose?: boolean;
+  sections?: string;
 };
 
 type OutputStreams = {
@@ -78,6 +79,10 @@ export async function runCompanyGet(
     out.stderr.write("error: --all is not supported on non-paginated commands.\n");
     process.exit(2);
   }
+  if (flags.sections !== undefined) {
+    out.stderr.write("error: --sections is not supported on company commands.\n");
+    process.exit(2);
+  }
 
   const rawId = flags.id ?? "";
   const resolvedId = resolveIdentifier(rawId);
@@ -114,6 +119,7 @@ export const companyCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     id: { type: "positional", description: "Company identifier (URL, slug, or native id)." },
+    sections: { type: "string" as const, description: "Not supported on company commands — usage error (exit 2) if supplied." },
   },
   async run({ args }) {
     const flags = args as CompanyFlags;
