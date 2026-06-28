@@ -14,6 +14,16 @@
  * All subcommands are account-scoped. `<id>` passes through resolveIdentifier.
  * Read commands reject --preview (exit 2). Write commands render --preview.
  * List reads support --all NDJSON streaming; profile me rejects --all (exit 2).
+ *
+ * Slim projection (default): profile me and profile <id> return a compact
+ * subset of fields. Pass --verbose to get the full SDK response.
+ *
+ * --sections: comma-separated LinkedIn sections to fetch (profile me and
+ * profile <id> only). Empty string is a usage error (exit 2).
+ *
+ * Company slug resolution (--posts --is-company): when the resolved id is
+ * non-numeric, getCompany is called first to obtain the numeric company id
+ * which listPosts requires for company pages.
  */
 
 import { defineCommand } from "citty";
@@ -24,6 +34,7 @@ import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
+import { slimProfileMe, slimProfileGet } from "../lib/slim.js";
 import type { CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +62,8 @@ type ProfileFlags = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  sections?: string;
+  verbose?: boolean;
 };
 
 type SubFlags = {
@@ -65,6 +78,7 @@ type SubFlags = {
   fields?: string;
   limit?: string;
   cursor?: string;
+  verbose?: boolean;
 };
 
 type OutputStreams = {
@@ -76,7 +90,7 @@ type OutputStreams = {
 type MinimalClient = {
   account: (id: string) => {
     profiles: {
-      getMe: () => Promise<unknown>;
+      getMe: (params?: Record<string, unknown>) => Promise<unknown>;
       get: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
       listPosts: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
       listComments: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -84,6 +98,7 @@ type MinimalClient = {
       listFollowers: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
       listConnections: (params?: Record<string, unknown>) => Promise<unknown>;
       endorse: (id: string, body: { skill_endorsement_id: string }) => Promise<unknown>;
+      getCompany: (id: string) => Promise<unknown>;
     };
   };
 };
@@ -126,6 +141,7 @@ function resolveOutputOpts(flags: ProfileFlags | SubFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: (flags as ProfileFlags).fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -145,13 +161,29 @@ export async function runProfileMe(
   rejectPreviewOnRead(flags.preview, out);
   rejectAllOnNonPaginated(flags.all, out);
 
+  // --sections "" is a usage error (empty string means caller forgot to fill it in)
+  if (flags.sections === "") {
+    out.stderr.write("error: --sections must not be empty. Omit the flag or provide section names.\n");
+    process.exit(2);
+    return;
+  }
+
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
 
+  // Build params — always pass an object so callers can expect getMe({})
+  const params: Record<string, unknown> = {};
+  if (flags.sections) {
+    params["linkedin_sections"] = flags.sections
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   try {
-    const result = await ns.profiles.getMe();
-    const opts = resolveOutputOpts(flags);
-    renderSuccess(result, opts, out);
+    const result = await ns.profiles.getMe(params);
+    const outOpts = { ...resolveOutputOpts(flags), slim: slimProfileMe };
+    renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
     if (err instanceof CurviateError) {
@@ -175,6 +207,16 @@ export async function runProfileGet(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
+  // --sections "" is a usage error on the default (profiles.get) branch.
+  // Validate early (before the try block) so the mock-throw from process.exit(2)
+  // doesn't get swallowed by the catch-all error handler below.
+  const isListCommand = flags.posts || flags.comments || flags.reactions || flags.followers;
+  if (!isListCommand && flags.sections === "") {
+    out.stderr.write("error: --sections must not be empty. Omit the flag or provide section names.\n");
+    process.exit(2);
+    return;
+  }
+
   const accountId = requireAccount(flags.account, out);
   const rawId = flags.id ?? "";
   const resolvedId = resolveIdentifier(rawId);
@@ -194,8 +236,19 @@ export async function runProfileGet(
       if (limit !== undefined) params["limit"] = limit;
       if (cursor) params["cursor"] = cursor;
 
+      // Company slug resolution: when --is-company and the id is non-numeric
+      // (a slug or URL-derived slug), we need the numeric company id for listPosts.
+      let postId = resolvedId;
+      if (flags["is-company"]) {
+        const isNumericId = /^\d+$/.test(resolvedId);
+        if (!isNumericId) {
+          const companyData = await ns.profiles.getCompany(resolvedId) as Record<string, unknown>;
+          postId = companyData["id"] as string;
+        }
+      }
+
       if (all) {
-        const fn = (p: Record<string, unknown>) => ns.profiles.listPosts(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+        const fn = (p: Record<string, unknown>) => ns.profiles.listPosts(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
         for await (const item of streamAll(fn, params, {
           maxPages,
           onTruncated: (msg) => out.stderr.write(msg + "\n"),
@@ -203,7 +256,7 @@ export async function runProfileGet(
           out.stdout.write(JSON.stringify(item) + "\n");
         }
       } else {
-        const result = await ns.profiles.listPosts(resolvedId, params);
+        const result = await ns.profiles.listPosts(postId, params);
         renderSuccess(result, outOpts, out);
       }
     } else if (flags.comments) {
@@ -260,11 +313,19 @@ export async function runProfileGet(
     } else {
       // Default: profiles.get
       rejectAllOnNonPaginated(flags.all, out);
+
       const params: Record<string, unknown> = {};
       if (flags.notify) params["notify"] = true;
+      if (flags.sections) {
+        params["linkedin_sections"] = flags.sections
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
 
       const result = await ns.profiles.get(resolvedId, params);
-      renderSuccess(result, outOpts, out);
+      const getOutOpts = { ...outOpts, slim: slimProfileGet };
+      renderSuccess(result, getOutOpts, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -375,7 +436,13 @@ export async function runProfileEndorse(
 
 const profileMeCommand = defineCommand({
   meta: { name: "me", description: "Get your own LinkedIn profile." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    ...GLOBAL_FLAGS,
+    sections: {
+      type: "string",
+      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education).",
+    },
+  },
   async run({ args }) {
     const flags = args as ProfileFlags;
     const cfg = await resolveEffectiveConfig({
@@ -454,6 +521,10 @@ export const profileCommand = defineCommand({
     followers: { type: "boolean", description: "List the profile's followers.", default: false },
     "is-company": { type: "boolean", description: "When listing posts, treat the profile as a company page.", default: false },
     notify: { type: "boolean", description: "Signal a profile view when fetching.", default: false },
+    sections: {
+      type: "string",
+      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education).",
+    },
   },
   subCommands: {
     me: profileMeCommand,
