@@ -12,6 +12,7 @@ import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
+import { slimCompany } from "../lib/slim.js";
 import type { CurviateError } from "@curviate/sdk";
 
 type CompanyFlags = {
@@ -28,6 +29,7 @@ type CompanyFlags = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  verbose?: boolean;
 };
 
 type OutputStreams = {
@@ -84,6 +86,8 @@ export async function runCompanyGet(
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
+    slim: slimCompany,
   };
 
   try {
