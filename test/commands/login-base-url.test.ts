@@ -1,5 +1,5 @@
 /**
- * Tests for `login --base-url` persistence (cli/002 AC-010).
+ * Tests for `login --base-url` persistence.
  *
  * Uses XDG_CONFIG_HOME override so each test is fully isolated from the
  * real user config and from each other.
