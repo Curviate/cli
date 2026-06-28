@@ -6,7 +6,106 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { slimProfileMe, slimProfileGet, slimCompany } from "../../src/lib/slim.js";
+import {
+  synthesizeCurrentPosition,
+  synthesizeHeadquarters,
+  slimProfileMe,
+  slimProfile,
+  slimCompany,
+} from "../../src/lib/slim.js";
+
+// ---------------------------------------------------------------------------
+// synthesizeCurrentPosition
+// ---------------------------------------------------------------------------
+
+describe("synthesizeCurrentPosition", () => {
+  it("maps position→title, company→company_name, company_id always null, end null → is_current true", () => {
+    const result = synthesizeCurrentPosition([
+      { id: "exp1", position: "Founder", company: "RedHire", end: null, start: { month: 3, year: 2023 } },
+    ]);
+    expect(result).toEqual({
+      title: "Founder",
+      company_name: "RedHire",
+      company_id: null,
+      is_current: true,
+    });
+  });
+
+  it("end non-null → is_current false", () => {
+    const result = synthesizeCurrentPosition([
+      { id: "exp2", position: "Engineer", company: "Acme", end: { year: 2024, month: 6 } },
+    ]);
+    expect(result).not.toBeNull();
+    expect(result!.is_current).toBe(false);
+  });
+
+  it("company_id is ALWAYS null — even when entry has an id field", () => {
+    const result = synthesizeCurrentPosition([
+      { id: "exp3", position: "CTO", company: "TechCo", end: null },
+    ]);
+    expect(result).not.toBeNull();
+    // id from entry must NOT leak into company_id
+    expect(result!.company_id).toBeNull();
+  });
+
+  it("empty array → null", () => {
+    expect(synthesizeCurrentPosition([])).toBeNull();
+  });
+
+  it("non-array input → null", () => {
+    expect(synthesizeCurrentPosition(null as unknown as unknown[])).toBeNull();
+  });
+
+  it("absent position field → title null", () => {
+    const result = synthesizeCurrentPosition([{ company: "Acme", end: null }]);
+    expect(result!.title).toBeNull();
+  });
+
+  it("absent company field → company_name null", () => {
+    const result = synthesizeCurrentPosition([{ position: "Dev", end: null }]);
+    expect(result!.company_name).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// synthesizeHeadquarters
+// ---------------------------------------------------------------------------
+
+describe("synthesizeHeadquarters", () => {
+  it("finds is_headquarter:true entry and extracts city/country/area", () => {
+    const result = synthesizeHeadquarters([
+      { city: "Berlin", country: "DE", area: "Berlin", is_headquarter: false },
+      { city: "Munich", country: "DE", area: "Bavaria", is_headquarter: true, zip: "80333" },
+    ]);
+    expect(result).toEqual({ city: "Munich", country: "DE", area: "Bavaria" });
+  });
+
+  it("no is_headquarter:true entry → null", () => {
+    const result = synthesizeHeadquarters([
+      { city: "Paris", country: "FR", area: "IDF", is_headquarter: false },
+    ]);
+    expect(result).toBeNull();
+  });
+
+  it("empty array → null", () => {
+    expect(synthesizeHeadquarters([])).toBeNull();
+  });
+
+  it("area absent in hq → area null", () => {
+    const result = synthesizeHeadquarters([
+      { city: "Austin", country: "US", is_headquarter: true },
+    ]);
+    expect(result!.area).toBeNull();
+  });
+
+  it("does not leak extra keys (zip, etc.) into output", () => {
+    const result = synthesizeHeadquarters([
+      { city: "Austin", country: "US", area: "TX", is_headquarter: true, zip: "78701" },
+    ]);
+    expect(result).not.toHaveProperty("zip");
+    expect(result).not.toHaveProperty("is_headquarter");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // slimProfileMe
@@ -32,10 +131,13 @@ describe("slimProfileMe", () => {
       },
     ],
     entity_urn: "urn:li:member:123",
-    work_experience: [{ title: "Engineer", company_name: "Acme" }],
+    object_urn: "urn:li:fs_profile:ACoAAA",
+    work_experience: [{ position: "Engineer", company: "Acme", end: null }],
     education: [{ school: "MIT" }],
     viewer_permissions: { can_send_inmail: true },
     throttled_sections: ["experience"],
+    profile_picture_url: "https://example.com/photo.jpg",
+    is_open_profile: false,
   };
 
   it("projects exactly the 9 slim fields", () => {
@@ -56,13 +158,16 @@ describe("slimProfileMe", () => {
     );
   });
 
-  it("excludes heavy fields (entity_urn, work_experience, education, etc.)", () => {
+  it("excludes heavy fields (entity_urn, object_urn, work_experience, education, is_open_profile, etc.)", () => {
     const result = slimProfileMe(fullProfile);
     expect(result).not.toHaveProperty("entity_urn");
+    expect(result).not.toHaveProperty("object_urn");
     expect(result).not.toHaveProperty("work_experience");
     expect(result).not.toHaveProperty("education");
     expect(result).not.toHaveProperty("viewer_permissions");
     expect(result).not.toHaveProperty("throttled_sections");
+    expect(result).not.toHaveProperty("profile_picture_url");
+    expect(result).not.toHaveProperty("is_open_profile");
   });
 
   it("organizations maps only id/mailbox_id/name sub-fields", () => {
@@ -98,10 +203,12 @@ describe("slimProfileMe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// slimProfileGet
+// slimProfile (profile <id>)
 // ---------------------------------------------------------------------------
 
-describe("slimProfileGet", () => {
+describe("slimProfile", () => {
+  // Real substrate work_experience shape: {id, company, position, location, status,
+  // company_picture_url, skills, start, end}
   const fullProfile = {
     provider_id: "prov_456",
     first_name: "Jane",
@@ -113,12 +220,15 @@ describe("slimProfileGet", () => {
     public_identifier: "janesmith",
     work_experience: [
       {
-        title: "Senior Engineer",
-        company_name: "TechCorp",
-        company_id: "co_1",
-        is_current: true,
-        start_date: "2020-01",
-        extra: "hidden",
+        id: "exp_1",
+        position: "Senior Engineer",
+        company: "TechCorp",
+        location: "London",
+        status: null,
+        company_picture_url: null,
+        skills: [],
+        start: { month: 1, year: 2020 },
+        end: null,
       },
     ],
     education: [{ school: "Oxford" }],
@@ -127,7 +237,7 @@ describe("slimProfileGet", () => {
   };
 
   it("projects exactly the 9 slim fields", () => {
-    const result = slimProfileGet(fullProfile);
+    const result = slimProfile(fullProfile);
     expect(Object.keys(result)).toHaveLength(9);
     expect(Object.keys(result).sort()).toEqual(
       [
@@ -144,18 +254,36 @@ describe("slimProfileGet", () => {
     );
   });
 
-  it("current_position synthesized from work_experience[0] — all 4 sub-fields", () => {
-    const result = slimProfileGet(fullProfile);
+  it("current_position synthesized from work_experience[0] with correct field mapping", () => {
+    const result = slimProfile(fullProfile);
     expect(result["current_position"]).toEqual({
-      title: "Senior Engineer",
-      company_name: "TechCorp",
-      company_id: "co_1",
-      is_current: true,
+      title: "Senior Engineer",     // ← from position
+      company_name: "TechCorp",     // ← from company
+      company_id: null,             // ALWAYS null
+      is_current: true,             // ← end == null
     });
   });
 
+  it("company_id is ALWAYS null even when entry has an id field", () => {
+    const result = slimProfile(fullProfile);
+    const pos = result["current_position"] as Record<string, unknown>;
+    // entry.id is "exp_1" — must NOT appear as company_id
+    expect(pos["company_id"]).toBeNull();
+  });
+
+  it("is_current false when end is non-null", () => {
+    const result = slimProfile({
+      ...fullProfile,
+      work_experience: [
+        { id: "exp_2", position: "Intern", company: "OldCo", end: { year: 2019, month: 6 } },
+      ],
+    });
+    const pos = result["current_position"] as Record<string, unknown>;
+    expect(pos["is_current"]).toBe(false);
+  });
+
   it("current_position is null when work_experience is empty", () => {
-    const result = slimProfileGet({ ...fullProfile, work_experience: [] });
+    const result = slimProfile({ ...fullProfile, work_experience: [] });
     expect(result["current_position"]).toBeNull();
   });
 
@@ -163,21 +291,12 @@ describe("slimProfileGet", () => {
     const withoutWE = Object.fromEntries(
       Object.entries(fullProfile).filter(([k]) => k !== "work_experience"),
     );
-    const result = slimProfileGet(withoutWE);
+    const result = slimProfile(withoutWE);
     expect(result["current_position"]).toBeNull();
   });
 
-  it("company_id is null when absent in work_experience entry", () => {
-    const result = slimProfileGet({
-      ...fullProfile,
-      work_experience: [{ title: "Freelance", company_name: "Self", is_current: true }],
-    });
-    const pos = result["current_position"] as Record<string, unknown>;
-    expect(pos["company_id"]).toBeNull();
-  });
-
   it("excludes work_experience, education, viewer_permissions, throttled_sections", () => {
-    const result = slimProfileGet(fullProfile);
+    const result = slimProfile(fullProfile);
     expect(result).not.toHaveProperty("work_experience");
     expect(result).not.toHaveProperty("education");
     expect(result).not.toHaveProperty("viewer_permissions");

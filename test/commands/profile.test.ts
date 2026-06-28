@@ -476,7 +476,7 @@ describe("profile me — slim mode (no --verbose)", () => {
       { id: "org_1", mailbox_id: "mb_1", name: "Acme", logo_url: "https://logo.example.com" },
     ],
     entity_urn: "urn:li:member:123",
-    work_experience: [{ title: "Engineer", company_name: "Acme" }],
+    work_experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
     education: [{ school: "MIT" }],
   };
 
@@ -527,7 +527,7 @@ describe("profile me — --verbose mode", () => {
     first_name: "John",
     last_name: "Doe",
     entity_urn: "urn:li:member:123",
-    work_experience: [{ title: "Engineer", company_name: "Acme" }],
+    work_experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
     education: [{ school: "MIT" }],
   };
 
@@ -577,7 +577,17 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     network_distance: "DISTANCE_1",
     public_identifier: "janesmith",
     work_experience: [
-      { title: "Senior Engineer", company_name: "TechCorp", company_id: "co_1", is_current: true },
+      {
+        id: "exp_1",
+        position: "Senior Engineer",
+        company: "TechCorp",
+        location: "London",
+        status: null,
+        company_picture_url: null,
+        skills: [],
+        start: { month: 1, year: 2020 },
+        end: null,
+      },
     ],
     education: [{ school: "Oxford" }],
     viewer_permissions: { can_send_inmail: false },
@@ -610,10 +620,10 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result).toHaveProperty("current_position");
     expect(result["current_position"]).toEqual({
-      title: "Senior Engineer",
-      company_name: "TechCorp",
-      company_id: "co_1",
-      is_current: true,
+      title: "Senior Engineer",     // ← from position
+      company_name: "TechCorp",     // ← from company
+      company_id: null,             // ALWAYS null
+      is_current: true,             // ← end == null
     });
     expect(result).not.toHaveProperty("work_experience");
     expect(result).not.toHaveProperty("education");

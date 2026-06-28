@@ -34,7 +34,7 @@ import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
-import { slimProfileMe, slimProfileGet } from "../lib/slim.js";
+import { slimProfileMe, slimProfile } from "../lib/slim.js";
 import type { CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ export async function runProfileGet(
       }
 
       const result = await ns.profiles.get(resolvedId, params);
-      const getOutOpts = { ...outOpts, slim: slimProfileGet };
+      const getOutOpts = { ...outOpts, slim: slimProfile };
       renderSuccess(result, getOutOpts, out);
     }
   } catch (err: unknown) {
