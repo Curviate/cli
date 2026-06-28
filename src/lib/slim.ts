@@ -107,6 +107,14 @@ export function slimProfileMe(data: unknown): Record<string, unknown> {
     name: org["name"] ?? null,
   }));
 
+  // current_position parity with `profile <id>` slim: synthesized from
+  // work_experience[0], present only when --sections experience triggers the
+  // server-side enrichment (null otherwise). Same helper, same contract.
+  const rawWE = Array.isArray(d["work_experience"])
+    ? (d["work_experience"] as unknown[])
+    : [];
+  const currentPosition = synthesizeCurrentPosition(rawWE);
+
   return {
     provider_id: d["provider_id"] ?? null,
     first_name: d["first_name"] ?? null,
@@ -117,6 +125,7 @@ export function slimProfileMe(data: unknown): Record<string, unknown> {
     occupation: d["occupation"] ?? null,
     is_premium: d["is_premium"] ?? null,
     organizations,
+    current_position: currentPosition,
   };
 }
 

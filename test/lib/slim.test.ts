@@ -140,9 +140,9 @@ describe("slimProfileMe", () => {
     is_open_profile: false,
   };
 
-  it("projects exactly the 9 slim fields", () => {
+  it("projects exactly the 10 slim fields", () => {
     const result = slimProfileMe(fullProfile);
-    expect(Object.keys(result)).toHaveLength(9);
+    expect(Object.keys(result)).toHaveLength(10);
     expect(Object.keys(result).sort()).toEqual(
       [
         "email",
@@ -154,8 +154,26 @@ describe("slimProfileMe", () => {
         "organizations",
         "provider_id",
         "public_identifier",
+        "current_position",
       ].sort(),
     );
+  });
+
+  it("current_position synthesized from work_experience[0] (parity with profile <id>)", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["current_position"]).toEqual({
+      title: "Engineer",
+      company_name: "Acme",
+      company_id: null,
+      is_current: true,
+    });
+  });
+
+  it("current_position is null when work_experience absent (no --sections enrichment)", () => {
+    const noWE = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "work_experience"),
+    );
+    expect(slimProfileMe(noWE)["current_position"]).toBeNull();
   });
 
   it("excludes heavy fields (entity_urn, object_urn, work_experience, education, is_open_profile, etc.)", () => {
