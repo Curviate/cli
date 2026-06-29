@@ -8,6 +8,14 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-29
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.2.1`, which fixes `message delete` and
+  `message react` failing with an unexpected `account_id` parameter rejection. The SDK
+  now correctly omits `account_id` for those two operations.
+
 ## [0.4.0] - 2026-06-28
 
 ### Added
