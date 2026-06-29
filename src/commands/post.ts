@@ -15,7 +15,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_FLAGS } from "../lib/global-flags.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -24,10 +24,20 @@ import { streamAll } from "../lib/paginate.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
 import type { CurviateError } from "@curviate/sdk";
 
+// ---------------------------------------------------------------------------
+// Valid write-side reaction values.
+// Write values are ALWAYS lowercase. Uppercase read-side values (LIKE, PRAISE …)
+// are what the API returns in reaction_type — they are NOT accepted here.
+// ---------------------------------------------------------------------------
+const VALID_REACTIONS = new Set(["like", "celebrate", "support", "love", "insightful", "funny"]);
+
 type PostFlags = {
   postId?: string;
   text?: string;
   reaction?: string;
+  "reply-to"?: string;
+  "comment-id"?: string;
+  "as-organization"?: string;
   attach?: string | string[];
   "video-thumbnail"?: string;
   account?: string;
@@ -272,8 +282,9 @@ export async function runPostCreate(
 }
 
 /**
- * Run `post comment <post_id> "<text>" [--attach <file>]`.
+ * Run `post comment <post_id> "<text>" [--attach <file>] [--reply-to <comment_id>]`.
  * Write command — supports --preview. Multipart.
+ * --reply-to → body field `comment_id` (NOT `parent_comment_id`).
  */
 export async function runPostComment(
   client: MinimalClient,
@@ -283,6 +294,7 @@ export async function runPostComment(
   const accountId = requireAccount(flags.account, out);
   const postId = flags.postId ?? "";
   const text = flags.text ?? "";
+  const replyTo = flags["reply-to"];
   const attachPaths = normalizeAttachPaths(flags.attach);
 
   // Load attachments before any preview or SDK call.
@@ -297,11 +309,16 @@ export async function runPostComment(
     throw err;
   }
 
+  // Build body shared between preview and SDK call.
+  // comment_id is the confirmed field name for reply threading.
+  const body: Record<string, unknown> = { text };
+  if (replyTo) body["comment_id"] = replyTo;
+
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "posts.comment",
       args: { post_id: postId },
-      body: { text },
+      body,
       account: accountId,
       attachments: attachBuffers.map((buf, i) => ({
         name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
@@ -312,7 +329,6 @@ export async function runPostComment(
     return;
   }
 
-  const body: Record<string, unknown> = { text };
   if (attachBuffers.length > 0) {
     body["attachments"] = attachBuffers;
   }
@@ -329,8 +345,9 @@ export async function runPostComment(
 }
 
 /**
- * Run `post comments <post_id> [--all] [--limit] [--cursor]`.
+ * Run `post comments <post_id> [--reply-to <comment_id>] [--all] [--limit] [--cursor]`.
  * Read command — rejects --preview.
+ * --reply-to → `comment_id` query param on the listComments call.
  */
 export async function runPostComments(
   client: MinimalClient,
@@ -346,6 +363,9 @@ export async function runPostComments(
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
+
+  // --reply-to filters replies under a specific comment
+  if (flags["reply-to"]) params["comment_id"] = flags["reply-to"];
 
   try {
     if (all) {
@@ -367,9 +387,11 @@ export async function runPostComments(
 }
 
 /**
- * Run `post react <post_id> --reaction <r>`.
+ * Run `post react <post_id> --reaction <r> [--comment-id <cmt>] [--as-organization <org>]`.
  * Write command — supports --preview.
- * CLI flag is --reaction; the SDK body field is `reaction` (confirmed from PostReactBody).
+ * --reaction: validated against the write-side enum (lowercase only).
+ * --comment-id: reacts to a specific comment within the post.
+ * --as-organization: reacts on behalf of an organization page.
  */
 export async function runPostReact(
   client: MinimalClient,
@@ -380,11 +402,28 @@ export async function runPostReact(
   const postId = flags.postId ?? "";
   const reaction = flags.reaction ?? "";
 
+  // Validate write-side enum (must be lowercase; uppercase read-side values rejected).
+  if (!VALID_REACTIONS.has(reaction)) {
+    out.stderr.write(
+      `error: --reaction must be one of: like, celebrate, support, love, insightful, funny. Got: "${reaction}"\n`,
+    );
+    process.exit(2);
+    return;
+  }
+
+  const commentId = flags["comment-id"];
+  const asOrganization = flags["as-organization"];
+
+  // Build body shared between preview and SDK call.
+  const body: Record<string, unknown> = { reaction };
+  if (commentId) body["comment_id"] = commentId;
+  if (asOrganization) body["as_organization"] = asOrganization;
+
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "posts.react",
       args: { post_id: postId },
-      body: { reaction },
+      body,
       account: accountId,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
@@ -395,7 +434,7 @@ export async function runPostReact(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.posts.react(postId, { reaction });
+    const result = await ns.posts.react(postId, body);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -467,10 +506,15 @@ const postListCommand = defineCommand({
 });
 
 const postGetCommand = defineCommand({
-  meta: { name: "get", description: "Get a post by ID." },
+  meta: { name: "get", description: "Get a post by id." },
   args: {
     ...GLOBAL_FLAGS,
-    postId: { type: "positional", description: "Post social_id or URN." },
+    postId: {
+      type: "positional",
+      description:
+        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
+        "POSTID is always the post's id. To list replies to a comment, use 'post comments <post_id> --reply-to <comment_id>'.",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -494,10 +538,19 @@ const postGetCommand = defineCommand({
 const postCreateCommand = defineCommand({
   meta: { name: "create", description: "Create a new post." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     text: { type: "positional", description: "Post body text." },
-    attach: { type: "string", description: "File to attach (repeatable)." },
-    "video-thumbnail": { type: "string", description: "Video thumbnail file." },
+    attach: {
+      type: "string",
+      description:
+        "Image/video/document to attach (repeatable for images; use --video-thumbnail when attaching a video). " +
+        "Supported: jpg, png, gif, mp4, pdf.",
+    },
+    "video-thumbnail": {
+      type: "string",
+      description: "Thumbnail image for a video attachment (required when attaching a video post).",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -519,12 +572,22 @@ const postCreateCommand = defineCommand({
 });
 
 const postCommentCommand = defineCommand({
-  meta: { name: "comment", description: "Comment on a post." },
+  meta: { name: "comment", description: "Comment on a post, or reply to a comment with --reply-to." },
   args: {
-    ...GLOBAL_FLAGS,
-    postId: { type: "positional", description: "Post social_id or URN." },
-    text: { type: "positional", description: "Comment text." },
-    attach: { type: "string", description: "Image to attach (optional)." },
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    postId: {
+      type: "positional",
+      description:
+        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
+        "POSTID is always the post's id; use --reply-to <comment_id> to reply to a specific comment within this post.",
+    },
+    text: { type: "positional", description: "Comment text (max ~1,250 characters per LinkedIn limits)." },
+    attach: { type: "string", description: "Image to attach to the comment (optional; one image per comment)." },
+    "reply-to": {
+      type: "string",
+      description: "Post as a reply to this comment id (omit for a top-level comment on the post).",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -546,10 +609,19 @@ const postCommentCommand = defineCommand({
 });
 
 const postCommentsCommand = defineCommand({
-  meta: { name: "comments", description: "List comments on a post." },
+  meta: { name: "comments", description: "List comments on a post. Use --reply-to to fetch replies to a specific comment." },
   args: {
     ...GLOBAL_FLAGS,
-    postId: { type: "positional", description: "Post social_id or URN." },
+    postId: {
+      type: "positional",
+      description:
+        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
+        "POSTID is always the post's id; to fetch replies to a comment, use --reply-to <comment_id>.",
+    },
+    "reply-to": {
+      type: "string",
+      description: "Filter replies under this comment id (omit to list top-level comments on the post).",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -571,11 +643,33 @@ const postCommentsCommand = defineCommand({
 });
 
 const postReactCommand = defineCommand({
-  meta: { name: "react", description: "React to a post." },
+  meta: { name: "react", description: "React to a post or comment." },
   args: {
-    ...GLOBAL_FLAGS,
-    postId: { type: "positional", description: "Post social_id or URN." },
-    reaction: { type: "string", description: "Reaction type (like | celebrate | support | love | insightful | funny).", required: true },
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    postId: {
+      type: "positional",
+      description:
+        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
+        "POSTID is always the post's id; to react to a comment within the post, use --comment-id <comment_id>.",
+    },
+    reaction: {
+      type: "string",
+      required: true,
+      description:
+        "Write-side reaction (lowercase). Write values: like, celebrate, support, love, insightful, funny. " +
+        "Read-side vocabulary (reaction_type in responses): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT. " +
+        "Confirmed write→read mappings: like=LIKE, celebrate=PRAISE, insightful=INTEREST. " +
+        "(support, love, and funny are valid write values; their read-side pairings are unconfirmed.)",
+    },
+    "comment-id": {
+      type: "string",
+      description: "React to this specific comment id within the post (omit to react to the post itself).",
+    },
+    "as-organization": {
+      type: "string",
+      description: "React on behalf of an organization page (org id from 'profile me' organizations).",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -600,7 +694,12 @@ const postReactionsCommand = defineCommand({
   meta: { name: "reactions", description: "List reactions on a post." },
   args: {
     ...GLOBAL_FLAGS,
-    postId: { type: "positional", description: "Post social_id or URN." },
+    postId: {
+      type: "positional",
+      description:
+        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
+        "POSTID is always the post's id.",
+    },
   },
   async run({ args }) {
     const flags = args as PostFlags;
@@ -638,9 +737,9 @@ export const postCommand = defineCommand({
       "  list\n" +
       "  get <post_id>\n" +
       "  create \"<text>\" [--attach <file>…] [--video-thumbnail <file>]\n" +
-      "  comment <post_id> \"<text>\" [--attach <file>]\n" +
-      "  comments <post_id>\n" +
-      "  react <post_id> --reaction <r>\n" +
+      "  comment <post_id> \"<text>\" [--attach <file>] [--reply-to <comment_id>]\n" +
+      "  comments <post_id> [--reply-to <comment_id>]\n" +
+      "  react <post_id> --reaction <r> [--comment-id <comment_id>] [--as-organization <org_id>]\n" +
       "  reactions <post_id>\n",
     );
   },

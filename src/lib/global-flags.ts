@@ -90,3 +90,23 @@ export type GlobalFlags = {
   preview?: boolean;
   verbose?: boolean;
 };
+
+/**
+ * WRITE_FLAGS: GLOBAL_FLAGS minus pagination/projection flags.
+ *
+ * Spread into write (mutating) commands so `--limit`, `--cursor`, `--all`,
+ * `--max-pages`, and `--fields` do NOT appear in their `--help` output.
+ * These flags are list-read-only and have no meaning on mutations.
+ */
+export const WRITE_FLAGS = {
+  "api-key": GLOBAL_FLAGS["api-key"],
+  profile: GLOBAL_FLAGS.profile,
+  account: GLOBAL_FLAGS.account,
+  "base-url": GLOBAL_FLAGS["base-url"],
+  timeout: GLOBAL_FLAGS.timeout,
+  json: GLOBAL_FLAGS.json,
+  preview: GLOBAL_FLAGS.preview,
+  verbose: GLOBAL_FLAGS.verbose,
+};
+
+export type WriteFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages" | "fields">;
