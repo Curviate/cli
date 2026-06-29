@@ -8,6 +8,16 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-29
+
+### Added
+
+- `message inmail --surface classic` — send an InMail from the account's own premium
+  InMail credits (in addition to `sales_nav` and `recruiter`). Use this to reach an
+  out-of-network member from a LinkedIn Premium/Core account.
+- `message inmail --to` now accepts a member **provider id** (`ACoAAA…`) as well as a
+  member URN (`urn:li:member:<id>`). The server resolves the recipient either way.
+
 ## [0.4.1] - 2026-06-29
 
 ### Changed

@@ -585,6 +585,46 @@ describe("message inmail / inmail-balance", () => {
     });
   });
 
+  it("message inmail --surface classic --to <provider-id> — accepts a provider id and sends classic", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageInMail(client as never, {
+      to: "ACoAAA1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuVwX",
+      surface: "classic",
+      subject: "Exploring synergies",
+      text: "Hi there",
+      account: "acc_1",
+      json: true,
+    } as MessageArgs, out);
+
+    const body = (ns.messaging.sendInMail as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      recipient_urn: "ACoAAA1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuVwX",
+      surface: "classic",
+      subject: "Exploring synergies",
+      text: "Hi there",
+    });
+  });
+
+  it("message inmail --surface classic --to <urn> — a URN recipient still passes through", async () => {
+    const { runMessageInMail } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageInMail(client as never, {
+      to: "urn:li:member:778899",
+      surface: "classic",
+      subject: "Hi",
+      text: "Hello",
+      account: "acc_1",
+      json: true,
+    } as MessageArgs, out);
+
+    expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient_urn: "urn:li:member:778899", surface: "classic" }),
+    );
+  });
+
   it("message inmail — missing --surface exits 2 before any SDK call", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
