@@ -27,7 +27,8 @@ import type { CurviateError } from "@curviate/sdk";
 // ---------------------------------------------------------------------------
 // Valid write-side reaction values.
 // Write values are ALWAYS lowercase. Uppercase read-side values (LIKE, PRAISE …)
-// are what the API returns in reaction_type — they are NOT accepted here.
+// surface in responses as `value` (reactions list items) and `user_reacted` (post get) —
+// they are NOT accepted as write values here.
 // ---------------------------------------------------------------------------
 const VALID_REACTIONS = new Set(["like", "celebrate", "support", "love", "insightful", "funny"]);
 
@@ -658,7 +659,7 @@ const postReactCommand = defineCommand({
       required: true,
       description:
         "Write-side reaction (lowercase). Write values: like, celebrate, support, love, insightful, funny. " +
-        "Read-side vocabulary (reaction_type in responses): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT. " +
+        "Read-side vocabulary (in the value and user_reacted response fields): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT. " +
         "Confirmed write→read mappings: like=LIKE, celebrate=PRAISE, insightful=INTEREST. " +
         "(support, love, and funny are valid write values; their read-side pairings are unconfirmed.)",
     },

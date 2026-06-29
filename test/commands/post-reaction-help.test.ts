@@ -3,7 +3,7 @@
  *
  * `post react --reaction` help must show the HONEST-SPLIT enum table:
  *   Write values (accepted): like, celebrate, support, love, insightful, funny
- *   Read values (reaction_type vocabulary): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT
+ *   Read values (in value / user_reacted response fields): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT
  *   Confirmed mappings: like→LIKE, celebrate→PRAISE, insightful→INTEREST (stated as fact)
  *   Support/love/funny: valid write values; read pairings NOT confirmed → NOT presented as 1:1
  *   SUPPORT and FUNNY must NOT appear as uppercase read values (they are NOT in the read enum)
