@@ -1,5 +1,5 @@
 /**
- * TS-020 — AC-021 (FR-019, REQ-039) + AC-024 (NFR-002)
+ * profile me activity flags — --posts/--comments/--reactions/--followers routing
  *
  * `profile me --posts/--comments/--reactions/--followers` resolves own
  * public_identifier via getMe(), then routes to the matching list method.
@@ -51,7 +51,7 @@ type ProfileMeArgs = {
   verbose?: boolean;
 };
 
-describe("profile me activity flags (AC-021, FR-019)", () => {
+describe("profile me activity flags", () => {
   let ns: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -196,7 +196,7 @@ describe("profile me activity flags (AC-021, FR-019)", () => {
     }
   });
 
-  it("profile me command args include --posts/--comments/--reactions/--followers (AC-024)", async () => {
+  it("profile me command args include --posts/--comments/--reactions/--followers", async () => {
     const { profileCommand } = await import("../../src/commands/profile.js");
     const subCmds = (profileCommand as Record<string, unknown>).subCommands as Record<
       string,

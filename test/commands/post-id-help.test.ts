@@ -1,5 +1,5 @@
 /**
- * TS-022 A-C — AC-023 (FR-021, D2/REQ-041/059)
+ * post <post_id> help text — URL acceptance + comment guidance
  *
  * All post subcommands taking <post_id> must describe it as accepting:
  *   - numeric id
@@ -10,8 +10,8 @@
  *   to target a comment within the post, use --reply-to.
  * post react: description notes to react to a comment, use --comment-id.
  *
- * Note: TS-022D (actual URL extraction round-trip) is WP2/server scope.
- * This test covers help text only (AC-023 spec obligation for WP1).
+ * Note: actual URL extraction round-trip is server scope.
+ * This test covers help text only.
  */
 
 import { describe, it, expect } from "vitest";
@@ -24,7 +24,7 @@ async function getPostSubCmdArgs() {
   >;
 }
 
-describe("post <post_id> descriptions — URL acceptance + comment guidance (AC-023, FR-021)", () => {
+describe("post <post_id> descriptions — URL acceptance + comment guidance", () => {
   it("post get — postId description mentions LinkedIn share URL", async () => {
     const subCmds = await getPostSubCmdArgs();
     const postIdDesc = subCmds["get"]?.args?.["postId"]?.description ?? "";

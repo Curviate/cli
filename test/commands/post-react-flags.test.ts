@@ -1,5 +1,5 @@
 /**
- * TS-019 — AC-020 (FR-018, REQ-056/057)
+ * post react --comment-id / --as-organization flag wiring
  *
  * post react --comment-id <cmt> → body contains comment_id
  * post react --as-organization <org> → body contains as_organization
@@ -43,7 +43,7 @@ type PostArgs = {
   preview?: boolean;
 };
 
-describe("post react — --comment-id and --as-organization (AC-020, FR-018)", () => {
+describe("post react — --comment-id and --as-organization", () => {
   let ns: ReturnType<typeof makePostsNs>;
   let client: ReturnType<typeof makeClient>;
 

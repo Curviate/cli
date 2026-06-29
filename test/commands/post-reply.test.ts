@@ -1,9 +1,9 @@
 /**
- * TS-018 — AC-018 (FR-016) + AC-019 (FR-017)
+ * post reply-to wiring — --reply-to flag passes comment_id correctly
  *
- * AC-018: `post comments --reply-to <cmt>` passes `comment_id` as query param
- * AC-019: `post comment --reply-to <cmt>` passes `comment_id` in multipart body
- *         (field name MUST be `comment_id`, NOT `parent_comment_id`)
+ * `post comments --reply-to <cmt>` passes `comment_id` as query param
+ * `post comment --reply-to <cmt>` passes `comment_id` in multipart body
+ *   (field name MUST be `comment_id`, NOT `parent_comment_id`)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -46,10 +46,10 @@ type PostArgs = {
 };
 
 // ---------------------------------------------------------------------------
-// AC-018: post comments --reply-to
+// post comments --reply-to
 // ---------------------------------------------------------------------------
 
-describe("post comments --reply-to (AC-018, FR-016)", () => {
+describe("post comments --reply-to", () => {
   let ns: ReturnType<typeof makePostsNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -94,7 +94,7 @@ describe("post comments --reply-to (AC-018, FR-016)", () => {
     expect(params).not.toHaveProperty("comment_id");
   });
 
-  it("post comments --help description mentions --reply-to (AC-018)", async () => {
+  it("post comments --help description mentions --reply-to", async () => {
     const { postCommand } = await import("../../src/commands/post.js");
     const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<
       string,
@@ -109,10 +109,10 @@ describe("post comments --reply-to (AC-018, FR-016)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC-019: post comment --reply-to (body field is `comment_id`, NOT `parent_comment_id`)
+// post comment --reply-to (body field is `comment_id`, NOT `parent_comment_id`)
 // ---------------------------------------------------------------------------
 
-describe("post comment --reply-to (AC-019, FR-017)", () => {
+describe("post comment --reply-to", () => {
   let ns: ReturnType<typeof makePostsNs>;
   let client: ReturnType<typeof makeClient>;
 

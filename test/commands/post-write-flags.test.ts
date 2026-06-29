@@ -1,5 +1,5 @@
 /**
- * TS-017 — AC-017 (FR-015, REQ-033/048/059)
+ * post write commands — no pagination flags exposed in help
  *
  * Write commands (post create, post comment, post react) must NOT expose
  * pagination/projection flags in their help (citty args definition).
@@ -15,7 +15,7 @@ import { describe, it, expect } from "vitest";
 
 const PAGINATION_FLAGS = ["limit", "cursor", "all", "max-pages", "fields"] as const;
 
-describe("post write commands — no pagination flags in help (AC-017)", () => {
+describe("post write commands — no pagination flags in help", () => {
   it("post create — args definition has no pagination/projection flags", async () => {
     const { postCommand } = await import("../../src/commands/post.js");
     const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;

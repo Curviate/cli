@@ -1,5 +1,5 @@
 /**
- * TS-021 — AC-022 (FR-020, REQ-058)
+ * post react --reaction help — honest-split write/read enum table
  *
  * `post react --reaction` help must show the HONEST-SPLIT enum table:
  *   Write values (accepted): like, celebrate, support, love, insightful, funny
@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from "vitest";
 
-describe("post react --reaction description — honest-split enum table (AC-022, FR-020)", () => {
+describe("post react --reaction description — honest-split enum table", () => {
   it("description contains all 6 write-side values (lowercase)", async () => {
     const { postCommand } = await import("../../src/commands/post.js");
     const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<
