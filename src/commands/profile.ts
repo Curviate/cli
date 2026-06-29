@@ -150,8 +150,14 @@ function resolveOutputOpts(flags: ProfileFlags | SubFlags) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run `profile me`.
+ * Run `profile me [--posts|--comments|--reactions|--followers]`.
  * Exported for unit-testing.
+ *
+ * No activity flag → getMe() with optional --sections (base behavior).
+ * Activity flag set → resolves own public_identifier via getMe(), then
+ * routes to the matching list method using a precedence chain
+ * (posts > comments > reactions > followers).
+ * Multiple activity flags silently use the first in precedence — no exit 2.
  */
 export async function runProfileMe(
   client: MinimalClient,
@@ -159,9 +165,16 @@ export async function runProfileMe(
   out: OutputStreams,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
-  rejectAllOnNonPaginated(flags.all, out);
 
-  // --sections "" is a usage error (empty string means caller forgot to fill it in)
+  const hasActivityFlag = !!(flags.posts || flags.comments || flags.reactions || flags.followers);
+
+  // --all is only valid when an activity flag is set (list command).
+  // On the base getMe path, reject it (getMe is not paginated).
+  if (!hasActivityFlag) {
+    rejectAllOnNonPaginated(flags.all, out);
+  }
+
+  // --sections "" is always a usage error regardless of activity flags.
   if (flags.sections === "") {
     out.stderr.write("error: --sections must not be empty. Omit the flag or provide section names.\n");
     process.exit(2);
@@ -170,7 +183,92 @@ export async function runProfileMe(
 
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
 
+  if (hasActivityFlag) {
+    // Two-call pattern: getMe to resolve own public_identifier, then list call.
+    const all = flags.all ?? false;
+    const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+    const params: Record<string, unknown> = {};
+    if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+    if (flags.cursor) params["cursor"] = flags.cursor;
+
+    try {
+      const meResult = (await ns.profiles.getMe({})) as Record<string, unknown>;
+      const ownSlug = meResult["public_identifier"] as string;
+
+      // Precedence chain: posts > comments > reactions > followers
+      if (flags.posts) {
+        if (all) {
+          const fn = (p: Record<string, unknown>) =>
+            ns.profiles.listPosts(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          for await (const item of streamAll(fn, params, {
+            maxPages,
+            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          })) {
+            out.stdout.write(JSON.stringify(item) + "\n");
+          }
+        } else {
+          const result = await ns.profiles.listPosts(ownSlug, params);
+          renderSuccess(result, outOpts, out);
+        }
+      } else if (flags.comments) {
+        if (all) {
+          const fn = (p: Record<string, unknown>) =>
+            ns.profiles.listComments(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          for await (const item of streamAll(fn, params, {
+            maxPages,
+            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          })) {
+            out.stdout.write(JSON.stringify(item) + "\n");
+          }
+        } else {
+          const result = await ns.profiles.listComments(ownSlug, params);
+          renderSuccess(result, outOpts, out);
+        }
+      } else if (flags.reactions) {
+        if (all) {
+          const fn = (p: Record<string, unknown>) =>
+            ns.profiles.listReactions(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          for await (const item of streamAll(fn, params, {
+            maxPages,
+            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          })) {
+            out.stdout.write(JSON.stringify(item) + "\n");
+          }
+        } else {
+          const result = await ns.profiles.listReactions(ownSlug, params);
+          renderSuccess(result, outOpts, out);
+        }
+      } else if (flags.followers) {
+        if (all) {
+          const fn = (p: Record<string, unknown>) =>
+            ns.profiles.listFollowers(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          for await (const item of streamAll(fn, params, {
+            maxPages,
+            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          })) {
+            out.stdout.write(JSON.stringify(item) + "\n");
+          }
+        } else {
+          const result = await ns.profiles.listFollowers(ownSlug, params);
+          renderSuccess(result, outOpts, out);
+        }
+      }
+    } catch (err: unknown) {
+      const { CurviateError } = await import("@curviate/sdk");
+      if (err instanceof CurviateError) {
+        const { getExitCode } = await import("../lib/exit-codes.js");
+        renderError(err as CurviateError, outOpts, out);
+        process.exit(getExitCode(err.code));
+      }
+      renderUnexpectedError(err, out);
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Base behavior: no activity flag → getMe with optional sections.
   // Build params — always pass an object so callers can expect getMe({})
   const params: Record<string, unknown> = {};
   if (flags.sections) {
@@ -182,13 +280,13 @@ export async function runProfileMe(
 
   try {
     const result = await ns.profiles.getMe(params);
-    const outOpts = { ...resolveOutputOpts(flags), slim: slimProfileMe };
-    renderSuccess(result, outOpts, out);
+    const slimOutOpts = { ...outOpts, slim: slimProfileMe };
+    renderSuccess(result, slimOutOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
     if (err instanceof CurviateError) {
       const { getExitCode } = await import("../lib/exit-codes.js");
-      renderError(err as CurviateError, resolveOutputOpts(flags), out);
+      renderError(err as CurviateError, outOpts, out);
       process.exit(getExitCode(err.code));
     }
     renderUnexpectedError(err, out);
@@ -435,12 +533,32 @@ export async function runProfileEndorse(
 // ---------------------------------------------------------------------------
 
 const profileMeCommand = defineCommand({
-  meta: { name: "me", description: "Get your own LinkedIn profile." },
+  meta: { name: "me", description: "Get your own profile, or list own activity with --posts/--comments/--reactions/--followers." },
   args: {
     ...GLOBAL_FLAGS,
     sections: {
       type: "string",
-      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education).",
+      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education). Only applies to the base getMe call (no activity flag).",
+    },
+    posts: {
+      type: "boolean",
+      description: "List own activity feed (posts + reposts). For authored-only posts, use 'post list'.",
+      default: false,
+    },
+    comments: {
+      type: "boolean",
+      description: "List own comments.",
+      default: false,
+    },
+    reactions: {
+      type: "boolean",
+      description: "List own reactions.",
+      default: false,
+    },
+    followers: {
+      type: "boolean",
+      description: "List own followers.",
+      default: false,
     },
   },
   async run({ args }) {
