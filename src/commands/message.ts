@@ -803,6 +803,43 @@ const messageInMailCommand = defineCommand({
   },
 });
 
+/**
+ * `message send <chat_id> "<text>" [--attach <file>…]` — the documented
+ * explicit-verb form for sending a message to an existing chat.
+ *
+ * This is a registered `send` subcommand so that `message send <chat_id> <text>`
+ * routes here (chat_id positional, not "send" as chat_id). The bare form
+ * `message <chat_id> <text>` is preserved for back-compat via the parent
+ * command's own run() handler.
+ */
+const messageSendCommand = defineCommand({
+  meta: { name: "send", description: "Send a message to an existing chat." },
+  args: {
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
+    text: { type: "positional", description: "Message text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
+    attach: { type: "string", description: "File to attach (repeatable)." },
+  },
+  async run({ args }) {
+    const flags = args as MessageFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runMessageSend(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 const messageInMailBalanceCommand = defineCommand({
   meta: { name: "inmail-balance", description: "Get InMail credit balance." },
   args: {
@@ -839,6 +876,7 @@ export const messageCommand = defineCommand({
   },
   subCommands: {
     new: messageNewCommand,
+    send: messageSendCommand,
     get: messageGetCommand,
     edit: messageEditCommand,
     delete: messageDeleteCommand,
