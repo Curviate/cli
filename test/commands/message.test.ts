@@ -670,7 +670,7 @@ describe("message inmail / inmail-balance", () => {
     expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
-  it("message inmail — non-URN --to (slug) is rejected client-side, exits 2, no SDK call", async () => {
+  it("message inmail — empty --to exits 2 before any SDK call", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
@@ -678,7 +678,7 @@ describe("message inmail / inmail-balance", () => {
     });
     try {
       await runMessageInMail(client as never, {
-        to: "https://www.linkedin.com/in/some-person",
+        to: "",
         surface: "sales_nav",
         subject: "Hi",
         text: "Hello",

@@ -8,12 +8,16 @@
  *   inbox sync                   — re-sync account message history (read, rejects --preview/--all)
  *   inbox sync-chat <chat_id>    — re-sync a specific chat (read, rejects --preview/--all)
  *
- * chat_id / message_id pass through verbatim — NOT resolved via resolveIdentifier.
+ * <chat_id> on inbox get, inbox messages, and inbox sync-chat accepts a LinkedIn
+ * messaging thread URL or bare provider ID. Thread URLs are normalized to the bare
+ * provider ID (zero network calls).
+ *
  * All subcommands are account-scoped.
  */
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { normalizeChatId } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -152,6 +156,9 @@ export async function runInboxList(
 /**
  * Run `inbox get <chat_id>`.
  * Read command — rejects --preview and --all.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxGet(
   client: MinimalClient,
@@ -162,7 +169,7 @@ export async function runInboxGet(
   rejectAllOnNonPaginated(flags.all, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -177,6 +184,9 @@ export async function runInboxGet(
 /**
  * Run `inbox messages <chat_id> [--all] [--limit] [--cursor]`.
  * Read command — rejects --preview.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxMessages(
   client: MinimalClient,
@@ -186,7 +196,7 @@ export async function runInboxMessages(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
@@ -239,6 +249,9 @@ export async function runInboxSync(
 /**
  * Run `inbox sync-chat <chat_id>`.
  * Read command — rejects --preview and --all.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxSyncChat(
   client: MinimalClient,
@@ -249,7 +262,7 @@ export async function runInboxSyncChat(
   rejectAllOnNonPaginated(flags.all, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 

@@ -2,27 +2,29 @@
  * `curviate message` — LinkedIn message operations.
  *
  * Subcommands:
- *   message new --to <attendee> "<text>" [--attach <file>…]    — start new chat (write)
+ *   message new --to <url|slug|provider_id> "<text>" [--attach <file>…] — start new chat (write)
  *   message <chat_id> "<text>" [--attach <file>…]              — send message to chat (write)
  *   message get <message_id>                                    — get a message (read)
  *   message edit <message_id> "<text>"                         — edit a message (write)
  *   message delete <message_id>                                 — delete a message (write)
  *   message react <message_id> --emoji <e>                     — react to message (write, body field: reaction)
  *   message attachment <message_id> <attachment_id> [-o <file>] — download attachment (binary)
- *   message inmail --to <urn|provider-id> --surface <s> --subject <s> "<text>" — send InMail (write; --to is a member URN or provider id, --surface required)
+ *   message inmail --to <url|slug|provider-id|urn> --surface <s> --subject <s> "<text>" — send InMail (write)
  *   message inmail-balance                                      — get InMail credit balance (read)
  *
  * chat_id / message_id / attachment_id pass through verbatim.
- * --to for `message new` is an attendee provider ID, passed verbatim (NOT URL-resolved).
- * --to for `message inmail` passes through resolveIdentifier, then is validated as a
- *   member URN (urn:li:member:<id>) OR a member provider id (ACoAAA…); a URL or slug is
- *   rejected client-side (exit 2). The server accepts both and resolves server-side.
+ * --to for `message new` accepts a LinkedIn URL, bare slug, or provider ID.
+ *   URL/slug inputs resolve via profiles.get; provider-ID-shaped inputs pass through directly.
+ * --to for `message inmail` accepts a LinkedIn URL, bare slug, provider ID, or member URN.
+ *   URL/slug inputs resolve via profiles.get; URN and provider-ID pass through directly.
  * --surface for `message inmail` is required (sales_nav | recruiter | classic).
+ * <chat_id> on `message send` accepts a LinkedIn messaging thread URL or bare provider ID;
+ *   thread URLs are normalized to the bare provider ID (zero network calls).
  */
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
-import { resolveIdentifier } from "../lib/identifier.js";
+import { resolveIdentifier, normalizeChatId } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -63,6 +65,9 @@ type OutputStreams = {
 
 type MinimalClient = {
   account: (id: string) => {
+    profiles: {
+      get: (id: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
     messaging: {
       startChat: (body: Record<string, unknown>) => Promise<unknown>;
       sendMessage: (chatId: string, body: Record<string, unknown>) => Promise<unknown>;
@@ -127,11 +132,11 @@ const INMAIL_SURFACES = ["sales_nav", "recruiter", "classic"] as const;
 const MEMBER_URN_RE = /^urn:li:member:\d+$/;
 
 /**
- * A LinkedIn member provider id (e.g. ACoAAA…): "A", then C|D|E, then ≥16 id chars.
- * The InMail recipient may be a member URN OR a provider id — the server accepts
- * both on `recipient_urn` and resolves server-side (mirrors the API's dual-accept).
+ * A LinkedIn member provider id (e.g. ACoAAA…): "A", then C|D|E, then ≥4 id chars.
+ * Provider IDs always start with an uppercase A followed by C, D, or E.
+ * LinkedIn profile slugs are lowercase, so this prefix uniquely identifies provider IDs.
  */
-const MEMBER_PROVIDER_ID_RE = /^A[CDE][A-Za-z0-9_-]{16,}$/;
+const MEMBER_PROVIDER_ID_RE = /^A[CDE][A-Za-z0-9_-]{4,}$/;
 
 async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
   const { CurviateError } = await import("@curviate/sdk");
@@ -149,9 +154,13 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
 // ---------------------------------------------------------------------------
 
 /**
- * Run `message new --to <attendee_provider_id> "<text>" [--attach <file>…]`.
+ * Run `message new --to <url|slug|provider_id> "<text>" [--attach <file>…]`.
  * Write command — supports --preview.
- * --to is an attendee provider ID (e.g. ACo…); passed verbatim (NOT URL-resolved).
+ *
+ * --to resolution:
+ *   LinkedIn URL or bare slug → profiles.get(slug) → provider_id passed to startChat.
+ *   Provider-ID-shaped input (uppercase AC/AD/AE prefix) → passed directly, no profiles.get call.
+ *   profiles.get not-found → exit 4.
  */
 export async function runMessageNew(
   client: MinimalClient,
@@ -159,11 +168,11 @@ export async function runMessageNew(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const attendeeId = flags.to ?? "";
+  const rawTo = flags.to ?? "";
   const text = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
 
-  // Load attachments before any preview or SDK call.
+  // Load attachments before any SDK call.
   let attachBuffers: Buffer[] = [];
   try {
     attachBuffers = await Promise.all(attachPaths.map((p) => readAttachment(p)));
@@ -175,15 +184,37 @@ export async function runMessageNew(
     throw err;
   }
 
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  // Resolve the recipient to a provider ID.
+  // URL/slug inputs call profiles.get; provider-ID-shaped inputs pass through directly.
+  const resolvedSlugOrId = resolveIdentifier(rawTo);
+  let providerId: string | undefined;
+
+  if (MEMBER_PROVIDER_ID_RE.test(resolvedSlugOrId)) {
+    // Already a provider ID — use directly without an extra SDK call.
+    providerId = resolvedSlugOrId;
+  } else {
+    // Slug or other form — resolve via profiles.get.
+    try {
+      const profileData = await ns.profiles.get(resolvedSlugOrId, {});
+      providerId = profileData["provider_id"] as string;
+    } catch (err: unknown) {
+      await handleSdkError(err, outOpts, out);
+      return; // unreachable: handleSdkError always calls process.exit
+    }
+  }
+
   const body: Record<string, unknown> = {
-    attendees_ids: [attendeeId],
+    attendees_ids: [providerId!],
     text,
   };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.startChat",
-      args: { attendees_ids: [attendeeId] },
+      args: { attendees_ids: [providerId!] },
       body: { ...body },
       account: accountId,
       attachments: attachBuffers.map((buf, i) => ({
@@ -199,9 +230,6 @@ export async function runMessageNew(
     body["attachments"] = attachBuffers;
   }
 
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
   try {
     const result = await ns.messaging.startChat(body);
     renderSuccess(result, outOpts, out);
@@ -213,6 +241,9 @@ export async function runMessageNew(
 /**
  * Run `message <chat_id> "<text>" [--attach <file>…]`.
  * Write command — supports --preview.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runMessageSend(
   client: MinimalClient,
@@ -220,7 +251,7 @@ export async function runMessageSend(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const text = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
 
@@ -434,9 +465,15 @@ export async function runMessageAttachment(
 }
 
 /**
- * Run `message inmail --to <id> --subject <s> "<text>"`.
+ * Run `message inmail --to <url|slug|provider-id|urn> --subject <s> "<text>"`.
  * Write command — supports --preview.
- * --to passes through resolveIdentifier (accepts LinkedIn URN / URL / slug).
+ *
+ * --to resolution:
+ *   LinkedIn URL or bare slug → profiles.get(slug) → provider_id used as recipient_urn.
+ *   Provider ID (AC/AD/AE prefix) → passed directly as recipient_urn, no profiles.get call.
+ *   Member URN (urn:li:member:<N>) → passed directly as recipient_urn, no profiles.get call.
+ *   Empty string → exit 2.
+ *   profiles.get not-found → exit 4.
  */
 export async function runMessageInMail(
   client: MinimalClient,
@@ -452,19 +489,44 @@ export async function runMessageInMail(
     process.exit(2);
   }
 
-  const recipientUrn = resolveIdentifier(flags.to ?? "");
-  if (!MEMBER_URN_RE.test(recipientUrn) && !MEMBER_PROVIDER_ID_RE.test(recipientUrn)) {
+  const rawTo = flags.to ?? "";
+  if (!rawTo) {
     out.stderr.write(
-      "error: --to must be a LinkedIn member URN (e.g. urn:li:member:99999) or a member provider id (e.g. ACoAAA…), not a URL or slug.\n",
+      "error: --to: not a valid LinkedIn URL, slug, provider-id, or URN.\n",
     );
     process.exit(2);
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  // Resolve --to to a recipient URN.
+  const resolvedSlugOrId = resolveIdentifier(rawTo);
+  let recipientUrn: string | undefined;
+
+  if (MEMBER_URN_RE.test(resolvedSlugOrId)) {
+    // Already a member URN — pass through directly.
+    recipientUrn = resolvedSlugOrId;
+  } else if (MEMBER_PROVIDER_ID_RE.test(resolvedSlugOrId)) {
+    // Already a provider ID — pass through directly.
+    recipientUrn = resolvedSlugOrId;
+  } else {
+    // Slug or URL-derived slug — resolve via profiles.get.
+    try {
+      const profileData = await ns.profiles.get(resolvedSlugOrId, {});
+      recipientUrn = profileData["provider_id"] as string;
+    } catch (err: unknown) {
+      await handleSdkError(err, outOpts, out);
+      return; // unreachable: handleSdkError always calls process.exit
+    }
   }
 
   const subject = flags.subject ?? "";
   const text = flags.text ?? "";
 
   const body: Record<string, unknown> = {
-    recipient_urn: recipientUrn,
+    recipient_urn: recipientUrn!,
     surface,
     subject,
     text,
@@ -473,16 +535,13 @@ export async function runMessageInMail(
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.sendInMail",
-      args: { recipient_urn: recipientUrn },
+      args: { recipient_urn: recipientUrn! },
       body,
       account: accountId,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
-
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
 
   try {
     const result = await ns.messaging.sendInMail(body);
@@ -524,7 +583,12 @@ const messageNewCommand = defineCommand({
   meta: { name: "new", description: "Start a new chat with one or more members." },
   args: {
     ...GLOBAL_FLAGS,
-    to: { type: "string", description: "Attendee provider ID (e.g. ACo…).", required: true },
+    to: {
+      type: "string",
+      description:
+        "Recipient: LinkedIn profile URL (e.g. https://www.linkedin.com/in/some-slug), bare slug (e.g. some-slug), or provider ID (e.g. ACoAAA…). URL and slug inputs resolve the provider ID automatically.",
+      required: true,
+    },
     text: { type: "positional", description: "Opening message text." },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
@@ -685,7 +749,12 @@ const messageInMailCommand = defineCommand({
   meta: { name: "inmail", description: "Send an InMail to a member." },
   args: {
     ...GLOBAL_FLAGS,
-    to: { type: "string", description: "Recipient member URN (urn:li:member:<id>) or provider id (ACoAAA…). Not a URL or slug.", required: true },
+    to: {
+      type: "string",
+      description:
+        "Recipient: LinkedIn profile URL, bare slug, provider-id (ACoAAA…), or member URN (urn:li:member:<id>). URL and slug inputs resolve the provider ID automatically.",
+      required: true,
+    },
     surface: { type: "string", description: "InMail surface: sales_nav, recruiter, or classic (classic uses the account's own premium InMail credits).", required: true },
     subject: { type: "string", description: "InMail subject line.", required: true },
     text: { type: "positional", description: "InMail body text." },
