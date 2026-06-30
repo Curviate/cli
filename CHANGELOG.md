@@ -24,6 +24,8 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
   the underlying chat id wherever a `chat_id` is accepted.
 - Write commands that take a TEXT positional accept `-` to read the value from
   stdin (pipe message bodies in).
+- `connect`: slim default projection + write-flag suppression + help text
+  (Invites-AX co-release).
 
 ### Changed
 
