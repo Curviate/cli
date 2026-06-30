@@ -3,10 +3,13 @@
  *
  * Coverage:
  *   inbox list              → messaging.listChats (paginated: --all / --limit / --cursor)
+ *   inbox list --unread     → messaging.listChats with unread filter (three-way: true/false/omit)
  *   inbox get <chat_id>     → messaging.getChat (not paginated, rejects --all, rejects --preview)
  *   inbox messages <chat_id>→ messaging.listMessages (paginated)
+ *   inbox messages --before/--after → date filter with UTC/Z validation
  *   inbox sync              → messaging.syncMessages (rejects --all, rejects --preview)
  *   inbox sync-chat <chat_id> → messaging.syncChat (rejects --all, rejects --preview)
+ *   inbox sync-chat --wait  → polling until terminal status or timeout
  *
  * IDs (chat_id, message_id) pass through verbatim — NOT resolved via resolveIdentifier.
  * All subcommands are account-scoped (error exit 2 when no account).
@@ -47,6 +50,13 @@ type InboxArgs = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  // Inbox list filter
+  unread?: boolean;
+  // Inbox messages date filters
+  before?: string;
+  after?: string;
+  // Inbox sync-chat wait/polling
+  wait?: boolean;
 };
 
 describe("inbox list", () => {
@@ -365,5 +375,356 @@ describe("inbox sync / sync-chat", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inbox list --unread filter (three-way: true / false / omit)
+// ---------------------------------------------------------------------------
+
+describe("inbox list unread filter", () => {
+  let ns: ReturnType<typeof makeMessagingNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeMessagingNs();
+    client = makeClient(ns);
+    (ns.messaging.listChats as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("inbox list with unread flag passes unread true to the SDK", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxList(
+      client as never,
+      { account: "acc_1", json: true, unread: true } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.listChats).toHaveBeenCalledWith(
+      expect.objectContaining({ unread: true }),
+    );
+  });
+
+  it("inbox list with no-unread flag passes unread false to the SDK", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxList(
+      client as never,
+      { account: "acc_1", json: true, unread: false } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.listChats).toHaveBeenCalledWith(
+      expect.objectContaining({ unread: false }),
+    );
+  });
+
+  it("inbox list without the unread flag sends no unread parameter to the SDK", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxList(
+      client as never,
+      { account: "acc_1", json: true } as InboxArgs,
+      out,
+    );
+
+    const call = ((ns.messaging.listChats as Mock).mock.calls[0] as [Record<string, unknown>])[0];
+    expect(call).not.toHaveProperty("unread");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inbox messages --before / --after date filters
+// ---------------------------------------------------------------------------
+
+describe("inbox messages date filters", () => {
+  let ns: ReturnType<typeof makeMessagingNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeMessagingNs();
+    client = makeClient(ns);
+    (ns.messaging.listMessages as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("inbox messages with before flag passes the timestamp to the SDK", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxMessages(
+      client as never,
+      { chatId: "chat_1", account: "acc_1", json: true, before: "2025-01-01T00:00:00Z" } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.listMessages).toHaveBeenCalledWith(
+      "chat_1",
+      expect.objectContaining({ before: "2025-01-01T00:00:00Z" }),
+    );
+  });
+
+  it("inbox messages with after flag passes the timestamp to the SDK", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxMessages(
+      client as never,
+      { chatId: "chat_1", account: "acc_1", json: true, after: "2024-12-01T00:00:00Z" } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.listMessages).toHaveBeenCalledWith(
+      "chat_1",
+      expect.objectContaining({ after: "2024-12-01T00:00:00Z" }),
+    );
+  });
+
+  it("inbox messages with both before and after passes both timestamps to the SDK", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxMessages(
+      client as never,
+      {
+        chatId: "chat_1",
+        account: "acc_1",
+        json: true,
+        before: "2025-01-01T00:00:00Z",
+        after: "2024-12-01T00:00:00Z",
+      } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.listMessages).toHaveBeenCalledWith(
+      "chat_1",
+      expect.objectContaining({
+        before: "2025-01-01T00:00:00Z",
+        after: "2024-12-01T00:00:00Z",
+      }),
+    );
+  });
+
+  it("inbox messages without date flags sends no date parameters to the SDK", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxMessages(
+      client as never,
+      { chatId: "chat_1", account: "acc_1", json: true } as InboxArgs,
+      out,
+    );
+
+    const call = ((ns.messaging.listMessages as Mock).mock.calls[0] as [string, Record<string, unknown>])[1];
+    expect(call).not.toHaveProperty("before");
+    expect(call).not.toHaveProperty("after");
+  });
+
+  it("inbox messages with a before timestamp missing the Z suffix exits with code 2", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxMessages(
+        client as never,
+        { chatId: "chat_1", account: "acc_1", json: true, before: "2025-01-01T00:00:00" } as InboxArgs,
+        out,
+      );
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+      expect(ns.messaging.listMessages).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("inbox messages with an unparseable before value exits with code 2", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxMessages(
+        client as never,
+        { chatId: "chat_1", account: "acc_1", json: true, before: "not-a-date" } as InboxArgs,
+        out,
+      );
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+      expect(ns.messaging.listMessages).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("inbox messages with an after timestamp missing the Z suffix exits with code 2", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxMessages(
+        client as never,
+        { chatId: "chat_1", account: "acc_1", json: true, after: "2024-12-01" } as InboxArgs,
+        out,
+      );
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+      expect(ns.messaging.listMessages).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inbox sync-chat --wait polling
+// ---------------------------------------------------------------------------
+
+describe("inbox sync-chat wait polling", () => {
+  let ns: ReturnType<typeof makeMessagingNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeMessagingNs();
+    client = makeClient(ns);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const noopSleep = () => Promise.resolve();
+
+  it("inbox sync-chat without wait flag calls syncChat exactly once and returns immediately", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "running" });
+
+    await runInboxSyncChat(
+      client as never,
+      { chatId: "chat_abc", account: "acc_1", json: true } as InboxArgs,
+      out,
+    );
+
+    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("inbox sync-chat with wait exits normally when the first response has a done status", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "done" });
+
+    await runInboxSyncChat(
+      client as never,
+      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
+      out,
+      noopSleep,
+    );
+
+    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(written).toContain("done");
+  });
+
+  it("inbox sync-chat with wait calls syncChat again after a running status and exits when done", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock)
+      .mockResolvedValueOnce({ status: "running" })
+      .mockResolvedValueOnce({ status: "done" });
+
+    await runInboxSyncChat(
+      client as never,
+      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "60" } as InboxArgs,
+      out,
+      noopSleep,
+    );
+
+    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(2);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(written).toContain("done");
+  });
+
+  it("inbox sync-chat with wait exits with code 3 when timeout elapses before a terminal status", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "running" });
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      // timeout=0 seconds means the elapsed check triggers immediately after the first poll
+      await runInboxSyncChat(
+        client as never,
+        { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "0" } as InboxArgs,
+        out,
+        noopSleep,
+      );
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(3)");
+      // Last observed response is written to stdout before timeout exit
+      const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+      expect(written).toContain("running");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("inbox sync-chat with wait exits normally when status is error", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "error" });
+
+    await runInboxSyncChat(
+      client as never,
+      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
+      out,
+      noopSleep,
+    );
+
+    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(written).toContain("error");
+  });
+
+  it("inbox sync-chat with wait exits normally when status is chat_deleted", async () => {
+    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "chat_deleted" });
+
+    await runInboxSyncChat(
+      client as never,
+      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
+      out,
+      noopSleep,
+    );
+
+    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(written).toContain("chat_deleted");
   });
 });
