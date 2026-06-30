@@ -71,3 +71,24 @@ export function resolveIdentifier(raw: string): string {
 function stripTrailingSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
 }
+
+/**
+ * LinkedIn messaging thread URL pattern.
+ * Matches paths like /messaging/thread/2-<base64> and captures the chat provider ID.
+ */
+const MESSAGING_THREAD_URL_RE = /messaging\/thread\/([^/?]+)/;
+
+/**
+ * Normalize a chat ID positional to a bare chat provider ID.
+ *
+ * A full LinkedIn messaging thread URL is stripped to the bare provider ID:
+ *   https://www.linkedin.com/messaging/thread/2-AbCdEf/ → 2-AbCdEf
+ *
+ * A bare provider ID (2-…) or an internal chat ID passes through verbatim.
+ * Zero network calls — pure string normalization.
+ */
+export function normalizeChatId(raw: string): string {
+  const match = MESSAGING_THREAD_URL_RE.exec(raw);
+  if (match?.[1]) return match[1];
+  return raw;
+}

@@ -8,12 +8,16 @@
  *   inbox sync                   — re-sync account message history (read, rejects --preview/--all)
  *   inbox sync-chat <chat_id>    — re-sync a specific chat (read, rejects --preview/--all)
  *
- * chat_id / message_id pass through verbatim — NOT resolved via resolveIdentifier.
+ * <chat_id> on inbox get, inbox messages, and inbox sync-chat accepts a LinkedIn
+ * messaging thread URL or bare provider ID. Thread URLs are normalized to the bare
+ * provider ID (zero network calls).
+ *
  * All subcommands are account-scoped.
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { normalizeChatId } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -34,6 +38,13 @@ type InboxFlags = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  // inbox list filter
+  unread?: boolean;
+  // inbox messages date filters
+  before?: string;
+  after?: string;
+  // inbox sync-chat polling
+  wait?: boolean;
 };
 
 type OutputStreams = {
@@ -97,6 +108,19 @@ function buildPaginationParams(flags: InboxFlags): Record<string, unknown> {
   return params;
 }
 
+/**
+ * Validate that a timestamp value is a UTC/Z-suffixed ISO-8601 string.
+ * Writes an error and exits 2 on failure — call before any SDK call.
+ */
+function validateIsoZTimestamp(value: string, flagName: string, out: OutputStreams): void {
+  if (Number.isNaN(new Date(value).getTime()) || !value.endsWith("Z")) {
+    out.stderr.write(
+      `error: --${flagName}: must be a UTC ISO-8601 timestamp ending in 'Z' (e.g. 2025-01-01T00:00:00Z).\n`,
+    );
+    process.exit(2);
+  }
+}
+
 async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
   const { CurviateError } = await import("@curviate/sdk");
   if (err instanceof CurviateError) {
@@ -130,6 +154,11 @@ export async function runInboxList(
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
 
+  // Apply unread filter (three-way: true / false / omit — pass no key when undefined)
+  if (flags.unread !== undefined) {
+    params.unread = flags.unread;
+  }
+
   try {
     if (all) {
       const fn = (p: Record<string, unknown>) =>
@@ -152,6 +181,9 @@ export async function runInboxList(
 /**
  * Run `inbox get <chat_id>`.
  * Read command — rejects --preview and --all.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxGet(
   client: MinimalClient,
@@ -162,7 +194,7 @@ export async function runInboxGet(
   rejectAllOnNonPaginated(flags.all, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -177,6 +209,9 @@ export async function runInboxGet(
 /**
  * Run `inbox messages <chat_id> [--all] [--limit] [--cursor]`.
  * Read command — rejects --preview.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxMessages(
   client: MinimalClient,
@@ -186,12 +221,22 @@ export async function runInboxMessages(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
+
+  // Validate and apply date filters — validation exits 2 before any SDK call
+  if (flags.before !== undefined) {
+    validateIsoZTimestamp(flags.before, "before", out);
+    params.before = flags.before;
+  }
+  if (flags.after !== undefined) {
+    validateIsoZTimestamp(flags.after, "after", out);
+    params.after = flags.after;
+  }
 
   try {
     if (all) {
@@ -236,28 +281,74 @@ export async function runInboxSync(
   }
 }
 
+/** Terminal sync statuses that end --wait polling. */
+const SYNC_TERMINAL_STATUSES = new Set(["done", "error", "chat_deleted"]);
+
+/** Default poll interval for --wait mode. */
+const SYNC_POLL_INTERVAL_MS = 2000;
+
 /**
- * Run `inbox sync-chat <chat_id>`.
+ * Run `inbox sync-chat <chat_id> [--wait] [--timeout <sec>]`.
  * Read command — rejects --preview and --all.
+ *
+ * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
+ * Thread URLs are normalized to the bare provider ID (zero network calls).
+ *
+ * When --wait is set, polls every ~2s until status reaches a terminal value
+ * (done | error | chat_deleted) or --timeout seconds elapse (exit 3 on timeout).
+ *
+ * The optional _sleep parameter replaces the real setTimeout in tests so the
+ * hermetic suite does not wait real seconds between polls.
  */
 export async function runInboxSyncChat(
   client: MinimalClient,
   flags: InboxFlags,
   out: OutputStreams,
+  _sleep?: (ms: number) => Promise<void>,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
   rejectAllOnNonPaginated(flags.all, out);
 
   const accountId = requireAccount(flags.account, out);
-  const chatId = flags.chatId ?? "";
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
-  try {
-    const result = await ns.messaging.syncChat(chatId);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
+  if (!flags.wait) {
+    // No --wait: single call, return immediately (back-compat)
+    try {
+      const result = await ns.messaging.syncChat(chatId);
+      renderSuccess(result, outOpts, out);
+    } catch (err: unknown) {
+      await handleSdkError(err, outOpts, out);
+    }
+    return;
+  }
+
+  // --wait mode: poll until terminal status or timeout
+  const sleep = _sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const timeoutSecs = parseInt(flags.timeout ?? "30", 10);
+  const timeoutMs = (Number.isNaN(timeoutSecs) ? 30 : timeoutSecs) * 1000;
+  const startTime = Date.now();
+
+  while (true) {
+    let result: unknown;
+    try {
+      result = await ns.messaging.syncChat(chatId);
+    } catch (err: unknown) {
+      await handleSdkError(err, outOpts, out);
+    }
+    const resp = result as { status?: string };
+    if (resp.status !== undefined && SYNC_TERMINAL_STATUSES.has(resp.status)) {
+      renderSuccess(result, outOpts, out);
+      return;
+    }
+    if (Date.now() - startTime >= timeoutMs) {
+      renderSuccess(result, outOpts, out);
+      process.exit(3);
+      return; // unreachable; satisfies TypeScript
+    }
+    await sleep(SYNC_POLL_INTERVAL_MS);
   }
 }
 
@@ -267,7 +358,14 @@ export async function runInboxSyncChat(
 
 const inboxListCommand = defineCommand({
   meta: { name: "list", description: "List inbox chats." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    ...GLOBAL_FLAGS,
+    unread: {
+      type: "boolean" as const,
+      description: "Show unread chats only (--no-unread for read-only; omit for all).",
+      // No default → three-way semantics: undefined when omitted, true for --unread, false for --no-unread
+    },
+  },
   async run({ args }) {
     const flags = args as InboxFlags;
     const cfg = await resolveEffectiveConfig({
@@ -290,7 +388,8 @@ const inboxListCommand = defineCommand({
 const inboxGetCommand = defineCommand({
   meta: { name: "get", description: "Get details of a single chat." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },
   },
   async run({ args }) {
@@ -317,6 +416,16 @@ const inboxMessagesCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },
+    before: {
+      type: "string" as const,
+      description:
+        "Return messages before this timestamp (ISO-8601, UTC — Z suffix required, e.g. 2025-01-01T00:00:00Z).",
+    },
+    after: {
+      type: "string" as const,
+      description:
+        "Return messages after this timestamp (ISO-8601, UTC — Z suffix required, e.g. 2025-01-01T00:00:00Z).",
+    },
   },
   async run({ args }) {
     const flags = args as InboxFlags;
@@ -339,7 +448,10 @@ const inboxMessagesCommand = defineCommand({
 
 const inboxSyncCommand = defineCommand({
   meta: { name: "sync", description: "Re-sync account message history." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
+  },
   async run({ args }) {
     const flags = args as InboxFlags;
     const cfg = await resolveEffectiveConfig({
@@ -362,15 +474,29 @@ const inboxSyncCommand = defineCommand({
 const inboxSyncChatCommand = defineCommand({
   meta: { name: "sync-chat", description: "Re-sync a specific chat's message history." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields.
+    // The timeout below overrides READ_SINGLE_FLAGS.timeout with a command-specific description.
+    ...READ_SINGLE_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },
+    wait: {
+      type: "boolean" as const,
+      description: "Poll until sync completes (or --timeout elapses).",
+      default: false,
+    },
+    // Override READ_SINGLE_FLAGS.timeout: here --timeout is the polling wait timeout
+    // in seconds (default: 30), not the SDK request timeout.
+    timeout: {
+      type: "string" as const,
+      description: "Polling timeout in seconds (default: 30, requires --wait).",
+    },
   },
   async run({ args }) {
     const flags = args as InboxFlags;
+    // --timeout on this command is the wait polling timeout (seconds), not the SDK
+    // request timeout. Resolve config without it so the SDK uses its default timeout.
     const cfg = await resolveEffectiveConfig({
       apiKey: flags["api-key"],
       baseUrl: flags["base-url"],
-      timeout: flags.timeout,
       account: flags.account,
       profile: flags.profile,
     });

@@ -34,6 +34,7 @@
  */
 
 import { runCommand, type CommandDef } from "citty";
+import { STDIN_SENTINEL } from "./lib/stdin.js";
 
 type AnyCommand = CommandDef;
 
@@ -210,10 +211,18 @@ export async function dispatch(root: AnyCommand, rawArgs: string[]): Promise<voi
       usageError(`unknown flag \`${unknown}\`.`);
     }
 
+    // Pre-process: replace bare "-" with the stdin sentinel before handing to
+    // citty/mri. mri's embedded parser (j-dash-count loop) silently swallows "-"
+    // — one leading dash gives j=1 → flag branch → empty name → 0-char iteration
+    // → never lands in `_[]` → citty cannot bind it to a positional. The sentinel
+    // starts with "_" (no leading dash) so mri treats it as a plain positional;
+    // resolveTextOrStdin then recognises both "-" and the sentinel.
+    const processedLeafArgs = leafArgs.map((a) => (a === "-" ? STDIN_SENTINEL : a));
+
     // Execute the resolved leaf with subCommands stripped so citty does not
     // re-trigger its buggy descent (misroute / double-run).
     const leafToRun: AnyCommand = { ...leaf, subCommands: undefined };
-    await runCommand(leafToRun, { rawArgs: leafArgs });
+    await runCommand(leafToRun, { rawArgs: processedLeafArgs });
   } catch (err: unknown) {
     // citty raises a CLIError with code "EARG" for a missing required argument
     // or positional — that is a usage error → exit 2. Anything else thrown here

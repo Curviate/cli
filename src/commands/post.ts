@@ -16,6 +16,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_FLAGS } from "../lib/global-flags.js";
+import { resolveTextOrStdin } from "../lib/stdin.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -209,11 +210,15 @@ export async function runPostCreate(
   client: MinimalClient,
   flags: PostFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
   const thumbPath = flags["video-thumbnail"];
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   // Load attachments before any preview or SDK call.
   let attachBuffers: Buffer[] = [];
@@ -291,11 +296,15 @@ export async function runPostComment(
   client: MinimalClient,
   flags: PostFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const postId = flags.postId ?? "";
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
   const replyTo = flags["reply-to"];
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
   const attachPaths = normalizeAttachPaths(flags.attach);
 
   // Load attachments before any preview or SDK call.
@@ -541,7 +550,7 @@ const postCreateCommand = defineCommand({
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    text: { type: "positional", description: "Post body text." },
+    text: { type: "positional", description: "Post body text. Pass - to read from stdin (enables multiline via heredoc or pipe)." },
     attach: {
       type: "string",
       description:
@@ -583,7 +592,7 @@ const postCommentCommand = defineCommand({
         "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
         "POSTID is always the post's id; use --reply-to <comment_id> to reply to a specific comment within this post.",
     },
-    text: { type: "positional", description: "Comment text (max ~1,250 characters per LinkedIn limits)." },
+    text: { type: "positional", description: "Comment text (max ~1,250 characters per LinkedIn limits). Pass - to read from stdin." },
     attach: { type: "string", description: "Image to attach to the comment (optional; one image per comment)." },
     "reply-to": {
       type: "string",
