@@ -8,6 +8,29 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-30
+
+### Added
+
+- `inbox list --unread` — filter the inbox to chats with unread messages.
+- `messages` now accepts `--before` and `--after` to page a conversation by
+  timestamp window.
+- `sync-chat --wait` — poll until a chat sync completes instead of returning
+  immediately.
+- `message new --to` and `message inmail --to` now resolve a **LinkedIn profile
+  URL or vanity slug** (e.g. `linkedin.com/in/<slug>`) to the recipient, in
+  addition to provider ids and member URNs.
+- Thread-URL `chat_id` normalization — a pasted conversation URL is normalized to
+  the underlying chat id wherever a `chat_id` is accepted.
+- Write commands that take a TEXT positional accept `-` to read the value from
+  stdin (pipe message bodies in).
+
+### Changed
+
+- Pagination flags are suppressed from the help output of non-list commands.
+- Updated `@curviate/sdk` dependency to `^0.4.0` (regenerated types:
+  `primary_locale` on profile, account-sync `status` field).
+
 ## [0.5.0] - 2026-06-29
 
 ### Added
