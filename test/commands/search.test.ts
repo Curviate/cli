@@ -61,7 +61,7 @@ type SearchArgs = {
   "employment-type"?: string;
   "job-type"?: string;
   region?: string;
-  // FR-033 people-specific filters
+  // People-specific filter flags
   title?: string;
   "profile-language"?: string;
 };
@@ -381,7 +381,7 @@ describe("search companies / posts / jobs", () => {
     expect(body).toEqual({
       url: searchUrl,
       sort_by: "relevance",
-      date_posted: "past_week",  // FR-036: hyphen → underscore normalized
+      date_posted: "past_week",  // hyphen → underscore normalized
       content_type: "videos",
     });
   });
@@ -418,7 +418,7 @@ describe("search companies / posts / jobs", () => {
     } as SearchArgs, out);
 
     const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    // FR-035: --location on jobs maps to body `region` (single string, NOT location array).
+    // --location on jobs maps to body region (single string, not location array).
     // When both --location and --region are supplied, --region wins (applied last).
     expect(body).toEqual({
       easy_apply: true,
@@ -523,10 +523,10 @@ describe("search parameters — GET, not paginated", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR-033 — `search people` new filter flags + invalid-flag rejection
+// search people new filter flags + invalid-flag rejection
 // ---------------------------------------------------------------------------
 
-describe("FR-033 — search people filter flags", () => {
+describe("search people filter flags (title, profile-language, invalid-flag rejection)", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -666,10 +666,10 @@ describe("FR-033 — search people filter flags", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR-035 — search jobs --location → body `region` (single string)
+// search jobs --location → body region (single string)
 // ---------------------------------------------------------------------------
 
-describe("FR-035 — search jobs --location → region", () => {
+describe("search jobs --location maps to region body field", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -730,10 +730,10 @@ describe("FR-035 — search jobs --location → region", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR-036 — search posts --date-posted hyphen → underscore normalization
+// search posts --date-posted hyphen → underscore normalization
 // ---------------------------------------------------------------------------
 
-describe("FR-036 — search posts --date-posted normalization", () => {
+describe("search posts --date-posted normalization (hyphen to underscore)", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -805,10 +805,10 @@ describe("FR-036 — search posts --date-posted normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// FR-037 — --all truncation JSON to stdout (not prose to stderr)
+// --all truncation: JSON sentinel to stdout, not prose to stderr
 // ---------------------------------------------------------------------------
 
-describe("FR-037 — --all truncation JSON on stdout", () => {
+describe("--all truncation: JSON object written to stdout", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -870,10 +870,10 @@ describe("FR-037 — --all truncation JSON on stdout", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TS-015 — search people slim defaults (cli/003 FR-010/FR-011)
+// search people slim defaults
 // ---------------------------------------------------------------------------
 
-describe("TS-015 — search people slim: correct field names, excluded fields, verbose restores", () => {
+describe("search people slim: correct field names, excluded fields, verbose restores", () => {
   const peopleItem = {
     id: "abc123",
     full_name: "Alice Smith",
@@ -954,10 +954,10 @@ describe("TS-015 — search people slim: correct field names, excluded fields, v
 });
 
 // ---------------------------------------------------------------------------
-// TS-016 — search companies slim defaults
+// search companies slim defaults
 // ---------------------------------------------------------------------------
 
-describe("TS-016 — search companies slim: field set, industry conditional omission", () => {
+describe("search companies slim: field set, industry conditional omission", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -1047,10 +1047,10 @@ describe("TS-016 — search companies slim: field set, industry conditional omis
 });
 
 // ---------------------------------------------------------------------------
-// TS-017 — search jobs slim defaults
+// search jobs slim defaults
 // ---------------------------------------------------------------------------
 
-describe("TS-017 — search jobs slim: company_name flattened, verbose restores company object", () => {
+describe("search jobs slim: company_name flattened, verbose restores company object", () => {
   const jobItem = {
     job_urn: "urn:li:job:1",
     title: "AI Engineer",
@@ -1118,10 +1118,10 @@ describe("TS-017 — search jobs slim: company_name flattened, verbose restores 
 });
 
 // ---------------------------------------------------------------------------
-// TS-018 — search posts slim: 200-char text truncation + author.name only
+// search posts slim: 200-char text truncation + author.name only
 // ---------------------------------------------------------------------------
 
-describe("TS-018 — search posts slim: text truncation + author projection", () => {
+describe("search posts slim: text truncation and author projection", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
