@@ -14,7 +14,8 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_FLAGS } from "../lib/global-flags.js";
+import { slimInviteSent, slimInviteReceived, slimInviteSentItem, slimInviteReceivedItem } from "../lib/slim.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -40,6 +41,7 @@ type ConnectFlags = {
   "base-url"?: string;
   timeout?: string;
   profile?: string;
+  verbose?: boolean;
 };
 
 type OutputStreams = {
@@ -86,6 +88,7 @@ function resolveOutputOpts(flags: ConnectFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -167,11 +170,15 @@ export async function runConnectSent(
         maxPages,
         onTruncated: (msg) => out.stderr.write(msg + "\n"),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        // streamAll yields individual items; project per-item (the envelope
+        // projector slimInviteSent expects a { items } wrapper and would erase
+        // a bare item to an empty envelope).
+        const projected = !flags.verbose ? slimInviteSentItem(item as Record<string, unknown>) : item;
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.invites.listSent(params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimInviteSent }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -214,11 +221,15 @@ export async function runConnectReceived(
         maxPages,
         onTruncated: (msg) => out.stderr.write(msg + "\n"),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        // streamAll yields individual items; project per-item (the envelope
+        // projector slimInviteReceived expects a { items } wrapper and would
+        // erase a bare item to an empty envelope).
+        const projected = !flags.verbose ? slimInviteReceivedItem(item as Record<string, unknown>) : item;
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.invites.listReceived(params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimInviteReceived }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -334,7 +345,14 @@ export async function runConnectCancel(
 // ---------------------------------------------------------------------------
 
 const connectSentCommand = defineCommand({
-  meta: { name: "sent", description: "List sent connection invitations." },
+  meta: {
+    name: "sent",
+    description:
+      "Returns pending sent invitations only — accepted and declined invitations are not returned (LinkedIn API limitation). " +
+      "Use `id` with `connect cancel`; use `invited_user_public_id` or `invited_user_id` with `curviate profile`. " +
+      "`parsed_datetime` is approximate — derived from LinkedIn's relative date label; invitations sharing a label get the same computed time. " +
+      "No total count is available; use `connect sent --all` and count client-side.",
+  },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
     const flags = args as ConnectFlags;
@@ -359,7 +377,8 @@ const connectReceivedCommand = defineCommand({
   meta: {
     name: "received",
     description:
-      "List received connection invitations. Each item carries a shared_secret — pass it to `connect respond --shared-secret`.",
+      "Returns pending received invitations only — already-handled invitations are not returned. " +
+      "The `inviter.*` fields identify who sent the request. `specifics.shared_secret` is required for `connect respond`.",
   },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
@@ -384,12 +403,16 @@ const connectReceivedCommand = defineCommand({
 const connectRespondCommand = defineCommand({
   meta: { name: "respond", description: "Accept or decline a received invitation." },
   args: {
-    ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "Invitation id to respond to." },
+    ...WRITE_FLAGS,
+    id: {
+      type: "positional",
+      description: "Invitation id to respond to — use the `id` field from `connect received`.",
+    },
     action: { type: "string", description: "Response action: accept or decline.", required: true },
     "shared-secret": {
       type: "string",
-      description: "Per-invitation shared secret — read it from `connect received`.",
+      description:
+        "Per-invitation shared secret — use `specifics.shared_secret` from the same `connect received` item.",
       required: true,
     },
   },
@@ -415,7 +438,7 @@ const connectRespondCommand = defineCommand({
 const connectCancelCommand = defineCommand({
   meta: { name: "cancel", description: "Cancel a sent invitation." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_FLAGS,
     id: { type: "positional", description: "Invitation id to cancel." },
   },
   async run({ args }) {
@@ -438,11 +461,27 @@ const connectCancelCommand = defineCommand({
 });
 
 export const connectCommand = defineCommand({
-  meta: { name: "connect", description: "Send or manage connection invitations." },
+  meta: {
+    name: "connect",
+    description:
+      "Send or manage connection invitations. " +
+      "Connection requests may take 10–30 seconds to appear in the recipient's received list (LinkedIn propagation delay).",
+  },
   args: {
-    ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "Member identifier (URL, slug, or URN).", required: false },
-    note: { type: "string", description: "Optional invitation note (≤300 characters)." },
+    ...WRITE_FLAGS,
+    id: {
+      type: "positional",
+      description:
+        "Recipient's LinkedIn URL, public slug, or provider_id (ACoAAA… from `curviate profile`). " +
+        "LinkedIn URN (`urn:li:member:N`) also accepted but the numeric member ID is not exposed by this API.",
+      required: false,
+    },
+    note: {
+      type: "string",
+      description:
+        "Personalized message shown to the recipient alongside the connection request (≤300 chars; LinkedIn cap). " +
+        "Omit to send a generic note. Personalized messages increase acceptance rates.",
+    },
   },
   subCommands: {
     sent: connectSentCommand,

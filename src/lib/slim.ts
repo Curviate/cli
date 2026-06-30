@@ -169,6 +169,105 @@ export function slimProfile(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// connect sent
+// ---------------------------------------------------------------------------
+
+/**
+ * Project a single sent-invitation item to the slim field set.
+ * Drops: inviter (self-referential on sent), specifics (constant null shared_secret).
+ * Keeps: id, invited_user, invited_user_id, invited_user_public_id,
+ *         invited_user_description, date, parsed_datetime, invitation_text.
+ */
+export function slimInviteSentItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: item["id"] ?? null,
+    invited_user: item["invited_user"] ?? null,
+    invited_user_id: item["invited_user_id"] ?? null,
+    invited_user_public_id: item["invited_user_public_id"] ?? null,
+    invited_user_description: item["invited_user_description"] ?? null,
+    date: item["date"] ?? null,
+    parsed_datetime: item["parsed_datetime"] ?? null,
+    invitation_text: item["invitation_text"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for `connect sent` list response.
+ * Accepts the full list envelope { object, items, cursor } and projects each item.
+ * Applied before --fields; bypassed by --verbose.
+ */
+export function slimInviteSent(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimInviteSentItem)
+    : [];
+
+  return {
+    object: d["object"] ?? null,
+    items,
+    cursor: d["cursor"] ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// connect received
+// ---------------------------------------------------------------------------
+
+/**
+ * Project a single received-invitation item to the slim field set.
+ * Drops: invited_user* (self-referential — describes the authenticated user).
+ * Projects specifics to { shared_secret } only (drops constant provider field).
+ * Keeps: id, inviter (all sub-fields), date, parsed_datetime, invitation_text,
+ *         specifics.shared_secret (required for connect respond).
+ */
+export function slimInviteReceivedItem(item: Record<string, unknown>): Record<string, unknown> {
+  const rawSpecifics =
+    item["specifics"] !== null &&
+    item["specifics"] !== undefined &&
+    typeof item["specifics"] === "object"
+      ? (item["specifics"] as Record<string, unknown>)
+      : null;
+
+  const specifics =
+    rawSpecifics !== null
+      ? { shared_secret: rawSpecifics["shared_secret"] ?? null }
+      : null;
+
+  return {
+    id: item["id"] ?? null,
+    inviter: item["inviter"] ?? null,
+    date: item["date"] ?? null,
+    parsed_datetime: item["parsed_datetime"] ?? null,
+    invitation_text: item["invitation_text"] ?? null,
+    specifics,
+  };
+}
+
+/**
+ * Slim-default projection for `connect received` list response.
+ * Accepts the full list envelope { object, items, cursor } and projects each item.
+ * Applied before --fields; bypassed by --verbose.
+ */
+export function slimInviteReceived(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimInviteReceivedItem)
+    : [];
+
+  return {
+    object: d["object"] ?? null,
+    items,
+    cursor: d["cursor"] ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // company <id>
 // ---------------------------------------------------------------------------
 
