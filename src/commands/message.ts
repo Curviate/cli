@@ -23,8 +23,9 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { WRITE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier, normalizeChatId } from "../lib/identifier.js";
+import { resolveTextOrStdin } from "../lib/stdin.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -128,6 +129,7 @@ function normalizeAttachPaths(attach: string | string[] | undefined): string[] {
 /** Valid InMail surfaces — must match the API enum exactly. */
 const INMAIL_SURFACES = ["sales_nav", "recruiter", "classic"] as const;
 
+
 /** A LinkedIn member URN: urn:li:member:<digits>. */
 const MEMBER_URN_RE = /^urn:li:member:\d+$/;
 
@@ -166,10 +168,11 @@ export async function runMessageNew(
   client: MinimalClient,
   flags: MessageFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const rawTo = flags.to ?? "";
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
 
   // Load attachments before any SDK call.
@@ -186,6 +189,9 @@ export async function runMessageNew(
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   // Resolve the recipient to a provider ID.
   // URL/slug inputs call profiles.get; provider-ID-shaped inputs pass through directly.
@@ -249,11 +255,15 @@ export async function runMessageSend(
   client: MinimalClient,
   flags: MessageFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const chatId = normalizeChatId(flags.chatId ?? "");
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   // Load attachments before any preview or SDK call.
   let attachBuffers: Buffer[] = [];
@@ -332,10 +342,14 @@ export async function runMessageEdit(
   client: MinimalClient,
   flags: MessageFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const messageId = flags.messageId ?? "";
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -479,6 +493,7 @@ export async function runMessageInMail(
   client: MinimalClient,
   flags: MessageFlags,
   out: OutputStreams,
+  _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const surface = flags.surface ?? "";
@@ -523,7 +538,10 @@ export async function runMessageInMail(
   }
 
   const subject = flags.subject ?? "";
-  const text = flags.text ?? "";
+  const rawText = flags.text ?? "";
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   const body: Record<string, unknown> = {
     recipient_urn: recipientUrn!,
@@ -582,14 +600,15 @@ export async function runMessageInMailBalance(
 const messageNewCommand = defineCommand({
   meta: { name: "new", description: "Start a new chat with one or more members." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     to: {
       type: "string",
       description:
         "Recipient: LinkedIn profile URL (e.g. https://www.linkedin.com/in/some-slug), bare slug (e.g. some-slug), or provider ID (e.g. ACoAAA…). URL and slug inputs resolve the provider ID automatically.",
       required: true,
     },
-    text: { type: "positional", description: "Opening message text." },
+    text: { type: "positional", description: "Opening message text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
   async run({ args }) {
@@ -614,7 +633,8 @@ const messageNewCommand = defineCommand({
 const messageGetCommand = defineCommand({
   meta: { name: "get", description: "Get a message by ID." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     messageId: { type: "positional", description: "Message ID." },
   },
   async run({ args }) {
@@ -639,9 +659,10 @@ const messageGetCommand = defineCommand({
 const messageEditCommand = defineCommand({
   meta: { name: "edit", description: "Edit a message (within the allowed window)." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     messageId: { type: "positional", description: "Message ID." },
-    text: { type: "positional", description: "Replacement text." },
+    text: { type: "positional", description: "Replacement text. Pass - to read from stdin." },
   },
   async run({ args }) {
     const flags = args as MessageFlags;
@@ -665,7 +686,8 @@ const messageEditCommand = defineCommand({
 const messageDeleteCommand = defineCommand({
   meta: { name: "delete", description: "Delete a message." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     messageId: { type: "positional", description: "Message ID." },
   },
   async run({ args }) {
@@ -690,7 +712,8 @@ const messageDeleteCommand = defineCommand({
 const messageReactCommand = defineCommand({
   meta: { name: "react", description: "Add an emoji reaction to a message." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     messageId: { type: "positional", description: "Message ID." },
     emoji: { type: "string", description: "Native emoji reaction value (e.g. 👍).", required: true },
   },
@@ -716,7 +739,8 @@ const messageReactCommand = defineCommand({
 const messageAttachmentCommand = defineCommand({
   meta: { name: "attachment", description: "Download a message attachment." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     messageId: { type: "positional", description: "Message ID." },
     attachmentId: { type: "positional", description: "Attachment ID." },
     output: { type: "string", alias: "o", description: "Path to write the file to." },
@@ -748,7 +772,8 @@ const messageAttachmentCommand = defineCommand({
 const messageInMailCommand = defineCommand({
   meta: { name: "inmail", description: "Send an InMail to a member." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     to: {
       type: "string",
       description:
@@ -757,7 +782,7 @@ const messageInMailCommand = defineCommand({
     },
     surface: { type: "string", description: "InMail surface: sales_nav, recruiter, or classic (classic uses the account's own premium InMail credits).", required: true },
     subject: { type: "string", description: "InMail subject line.", required: true },
-    text: { type: "positional", description: "InMail body text." },
+    text: { type: "positional", description: "InMail body text. Pass - to read from stdin." },
   },
   async run({ args }) {
     const flags = args as MessageFlags;
@@ -780,7 +805,10 @@ const messageInMailCommand = defineCommand({
 
 const messageInMailBalanceCommand = defineCommand({
   meta: { name: "inmail-balance", description: "Get InMail credit balance." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
+  },
   async run({ args }) {
     const flags = args as MessageFlags;
     const cfg = await resolveEffectiveConfig({
@@ -803,9 +831,10 @@ const messageInMailBalanceCommand = defineCommand({
 export const messageCommand = defineCommand({
   meta: { name: "message", description: "Send and manage LinkedIn messages." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command (message send): WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     chatId: { type: "positional", description: "Chat ID to send a message to.", required: false },
-    text: { type: "positional", description: "Message text.", required: false },
+    text: { type: "positional", description: "Message text. Pass - to read from stdin.", required: false },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
   subCommands: {

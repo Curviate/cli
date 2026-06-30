@@ -110,3 +110,25 @@ export const WRITE_FLAGS = {
 };
 
 export type WriteFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages" | "fields">;
+
+/**
+ * READ_SINGLE_FLAGS: GLOBAL_FLAGS minus pagination-only flags, but keeping --fields.
+ *
+ * Spread into single-object read commands so `--limit`, `--cursor`, `--all`,
+ * and `--max-pages` do NOT appear in their `--help` output. `--fields` is
+ * retained because field projection is meaningful on single-object reads.
+ * These are non-paginated reads (inbox get, message get, inbox sync, etc.).
+ */
+export const READ_SINGLE_FLAGS = {
+  "api-key": GLOBAL_FLAGS["api-key"],
+  profile: GLOBAL_FLAGS.profile,
+  account: GLOBAL_FLAGS.account,
+  "base-url": GLOBAL_FLAGS["base-url"],
+  timeout: GLOBAL_FLAGS.timeout,
+  json: GLOBAL_FLAGS.json,
+  fields: GLOBAL_FLAGS.fields,
+  preview: GLOBAL_FLAGS.preview,
+  verbose: GLOBAL_FLAGS.verbose,
+};
+
+export type ReadSingleFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages">;

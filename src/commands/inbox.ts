@@ -16,7 +16,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { normalizeChatId } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -388,7 +388,8 @@ const inboxListCommand = defineCommand({
 const inboxGetCommand = defineCommand({
   meta: { name: "get", description: "Get details of a single chat." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },
   },
   async run({ args }) {
@@ -447,7 +448,10 @@ const inboxMessagesCommand = defineCommand({
 
 const inboxSyncCommand = defineCommand({
   meta: { name: "sync", description: "Re-sync account message history." },
-  args: { ...GLOBAL_FLAGS },
+  args: {
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
+  },
   async run({ args }) {
     const flags = args as InboxFlags;
     const cfg = await resolveEffectiveConfig({
@@ -470,15 +474,17 @@ const inboxSyncCommand = defineCommand({
 const inboxSyncChatCommand = defineCommand({
   meta: { name: "sync-chat", description: "Re-sync a specific chat's message history." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields.
+    // The timeout below overrides READ_SINGLE_FLAGS.timeout with a command-specific description.
+    ...READ_SINGLE_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },
     wait: {
       type: "boolean" as const,
       description: "Poll until sync completes (or --timeout elapses).",
       default: false,
     },
-    // Override GLOBAL_FLAGS.timeout description: for this command --timeout is the
-    // polling wait timeout in seconds (default: 30), not the SDK request timeout.
+    // Override READ_SINGLE_FLAGS.timeout: here --timeout is the polling wait timeout
+    // in seconds (default: 30), not the SDK request timeout.
     timeout: {
       type: "string" as const,
       description: "Polling timeout in seconds (default: 30, requires --wait).",
