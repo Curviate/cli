@@ -15,7 +15,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_FLAGS } from "../lib/global-flags.js";
-import { slimInviteSent, slimInviteReceived } from "../lib/slim.js";
+import { slimInviteSent, slimInviteReceived, slimInviteSentItem, slimInviteReceivedItem } from "../lib/slim.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -170,7 +170,10 @@ export async function runConnectSent(
         maxPages,
         onTruncated: (msg) => out.stderr.write(msg + "\n"),
       })) {
-        const projected = !flags.verbose ? slimInviteSent(item) : item;
+        // streamAll yields individual items; project per-item (the envelope
+        // projector slimInviteSent expects a { items } wrapper and would erase
+        // a bare item to an empty envelope).
+        const projected = !flags.verbose ? slimInviteSentItem(item as Record<string, unknown>) : item;
         out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
@@ -218,7 +221,10 @@ export async function runConnectReceived(
         maxPages,
         onTruncated: (msg) => out.stderr.write(msg + "\n"),
       })) {
-        const projected = !flags.verbose ? slimInviteReceived(item) : item;
+        // streamAll yields individual items; project per-item (the envelope
+        // projector slimInviteReceived expects a { items } wrapper and would
+        // erase a bare item to an empty envelope).
+        const projected = !flags.verbose ? slimInviteReceivedItem(item as Record<string, unknown>) : item;
         out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {

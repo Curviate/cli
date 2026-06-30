@@ -160,6 +160,41 @@ describe("connect sent / received — list reads", () => {
     expect(accountNs.invites.listSent).toHaveBeenCalled();
   });
 
+  it("connect sent --all — slim NDJSON lines carry per-item slim fields (id + invited_user kept, inviter/specifics dropped)", async () => {
+    const { runConnectSent } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.invites.listSent as Mock).mockResolvedValueOnce({
+      items: [
+        {
+          id: "s1",
+          invited_user: "Jane Doe",
+          invited_user_id: "ACoJ",
+          invited_user_public_id: "jane-doe",
+          invited_user_description: "Engineer",
+          date: "2 weeks ago",
+          parsed_datetime: "2026-06-16T00:00:00Z",
+          invitation_text: "Let's connect",
+          inviter: null,
+          specifics: { provider: "LINKEDIN", shared_secret: null },
+        },
+      ],
+      cursor: null,
+    });
+
+    await runConnectSent(client as never, { account: "acc_1", all: true } as ConnectArgs, out);
+
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
+    expect(lines).toHaveLength(1);
+    const item = JSON.parse(lines.join("")) as Record<string, unknown>;
+    expect(item["id"]).toBe("s1");
+    expect(item["invited_user"]).toBe("Jane Doe");
+    expect(item["invitation_text"]).toBe("Let's connect");
+    expect(item["inviter"]).toBeUndefined();
+    expect(item["specifics"]).toBeUndefined();
+    expect(item).not.toHaveProperty("items");
+  });
+
   it("connect sent --preview → usage error exit 2", async () => {
     const { runConnectSent } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
@@ -197,6 +232,56 @@ describe("connect sent / received — list reads", () => {
     const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
     const ndjsonLines = writtenLines.filter((l) => l.trim().startsWith("{"));
     expect(ndjsonLines).toHaveLength(3);
+  });
+
+  it("connect received --all — slim NDJSON lines carry per-item slim fields (id + specifics.shared_secret kept, invited_user dropped)", async () => {
+    const { runConnectReceived } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.invites.listReceived as Mock).mockResolvedValueOnce({
+      items: [
+        {
+          id: "r1",
+          invited_user: "Self",
+          inviter: { inviter_name: "Sender One", inviter_id: "ACo1", inviter_public_identifier: "sender-one", inviter_description: "Head of X" },
+          date: "1 day ago",
+          parsed_datetime: "2026-06-29T00:00:00Z",
+          invitation_text: "Hi",
+          specifics: { provider: "LINKEDIN", shared_secret: "SECRET_R1" },
+        },
+      ],
+      cursor: null,
+    });
+
+    await runConnectReceived(client as never, { account: "acc_1", all: true } as ConnectArgs, out);
+
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
+    expect(lines).toHaveLength(1);
+    const item = JSON.parse(lines.join("")) as Record<string, unknown>;
+    // Per-item slim shape — NOT the collapsed envelope {object,items,cursor}.
+    expect(item["id"]).toBe("r1");
+    expect((item["specifics"] as Record<string, unknown>)["shared_secret"]).toBe("SECRET_R1");
+    expect((item["specifics"] as Record<string, unknown>)["provider"]).toBeUndefined();
+    expect(item["inviter"]).toBeDefined();
+    expect(item["invited_user"]).toBeUndefined();
+    expect(item).not.toHaveProperty("items");
+  });
+
+  it("connect received --all --verbose — NDJSON lines carry the raw item unprojected", async () => {
+    const { runConnectReceived } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.invites.listReceived as Mock).mockResolvedValueOnce({
+      items: [{ id: "r1", invited_user: "Self", specifics: { provider: "LINKEDIN", shared_secret: "S" } }],
+      cursor: null,
+    });
+
+    await runConnectReceived(client as never, { account: "acc_1", all: true, verbose: true } as ConnectArgs, out);
+
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
+    const item = JSON.parse(lines.join("")) as Record<string, unknown>;
+    expect(item["invited_user"]).toBe("Self");
+    expect((item["specifics"] as Record<string, unknown>)["provider"]).toBe("LINKEDIN");
   });
 });
 

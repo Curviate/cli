@@ -178,7 +178,7 @@ export function slimProfile(data: unknown): Record<string, unknown> {
  * Keeps: id, invited_user, invited_user_id, invited_user_public_id,
  *         invited_user_description, date, parsed_datetime, invitation_text.
  */
-function slimInviteSentItem(item: Record<string, unknown>): Record<string, unknown> {
+export function slimInviteSentItem(item: Record<string, unknown>): Record<string, unknown> {
   return {
     id: item["id"] ?? null,
     invited_user: item["invited_user"] ?? null,
@@ -223,7 +223,7 @@ export function slimInviteSent(data: unknown): Record<string, unknown> {
  * Keeps: id, inviter (all sub-fields), date, parsed_datetime, invitation_text,
  *         specifics.shared_secret (required for connect respond).
  */
-function slimInviteReceivedItem(item: Record<string, unknown>): Record<string, unknown> {
+export function slimInviteReceivedItem(item: Record<string, unknown>): Record<string, unknown> {
   const rawSpecifics =
     item["specifics"] !== null &&
     item["specifics"] !== undefined &&
