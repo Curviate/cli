@@ -1213,7 +1213,7 @@ describe("search posts slim: text truncation and author projection", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     const longText = "A".repeat(300);
-    (accountNs.search.posts as Mock).mockResolvedValue({
+    (accountNs.search.posts as Mock).mockResolvedValue({  // eslint-disable-line @typescript-eslint/no-unsafe-assignment
       items: [{
         post_urn: "urn:li:activity:123",
         author: { name: "Bob", member_urn: "urn:li:member:456" },
@@ -1235,5 +1235,71 @@ describe("search posts slim: text truncation and author projection", () => {
     expect((item["author"] as Record<string, unknown>)["member_urn"]).toBe("urn:li:member:456");
     expect(item["share_url"]).toBe("https://linkedin.com/posts/bob_1");
     expect(item["repost_count"]).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs --date-posted: numeric days, no enum normalization
+// ---------------------------------------------------------------------------
+
+describe("search jobs --date-posted: numeric body field, no hyphen normalization", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--date-posted 7 → body date_posted: 7 (number)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "7",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(7);
+    expect(typeof body["date_posted"]).toBe("number");
+  });
+
+  it("--date-posted 30 → body date_posted: 30 (number)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "30",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(30);
+    expect(typeof body["date_posted"]).toBe("number");
+  });
+
+  it("jobs --date-posted is NOT hyphen-normalized (no string replacement applied)", async () => {
+    // Posts normalise past-week → past_week; jobs just coerces to Number.
+    // Passing "14" should arrive as the number 14, not a string.
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "14",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(14);
+    expect(typeof body["date_posted"]).toBe("number");
   });
 });

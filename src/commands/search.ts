@@ -97,11 +97,11 @@ const PEOPLE_INVALID_FLAGS = ["seniority", "function", "employment-type", "sort-
 const FILTER_FLAGS = {
   filters: {
     type: "string" as const,
-    description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin.",
+    description: "Filter body as a JSON object (named flags win on conflict; server validates and strips unknown fields); '-' reads JSON from stdin.",
   },
   "filters-file": {
     type: "string" as const,
-    description: "Path to a JSON file with the filter body.",
+    description: "Path to a JSON file with the filter body (named flags win on conflict).",
   },
 };
 
@@ -218,6 +218,10 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
     if (flags["job-type"]) body["job_type"] = splitCsv(flags["job-type"]);
     if (flags.company) body["company"] = splitCsv(flags.company);
     if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+    // --date-posted on jobs is a numeric age-in-days (NOT an enum string; no normalization)
+    if (flags["date-posted"] !== undefined && flags["date-posted"] !== "") {
+      body["date_posted"] = Number(flags["date-posted"]);
+    }
     // --region alias applied last so it wins over --location when both supplied
     if (flags.region) body["region"] = flags.region;
   },
@@ -585,7 +589,7 @@ const searchPostsCommand = defineCommand({
     url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, date)." },
-    "date-posted": { type: "string", description: "Date-posted window (e.g. past-day, past-week)." },
+    "date-posted": { type: "string", description: "time window: past_day, past_week, or past_month (hyphens also accepted: past-day, past-week, past-month)" },
     "content-type": { type: "string", description: "Content type (e.g. videos, images, jobs)." },
   },
   async run({ args }) {
@@ -615,14 +619,15 @@ const searchJobsCommand = defineCommand({
     url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     // On jobs, --location maps to the geo region filter (not a location array — different API shape for jobs vs people)
-    location: { type: "string", description: "Geo region id (opaque, from `search parameters --type LOCATION`). Alias for --region." },
+    location: { type: "string", description: "geo region id (single id; resolve via search parameters --type LOCATION); maps to region filter" },
     industry: { type: "string", description: "Industry ids (comma-separated)." },
     seniority: { type: "string", description: "Seniority ids (comma-separated)." },
     function: { type: "string", description: "Job function ids (comma-separated)." },
     "job-type": { type: "string", description: "Job type ids, e.g. F,P (comma-separated)." },
     company: { type: "string", description: "Company ids (comma-separated)." },
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, recent)." },
-    region: { type: "string", description: "Geo region id (opaque, from `search parameters --type LOCATION`). Same as --location for jobs." },
+    "date-posted": { type: "string", description: "maximum job age in days (a number — e.g. 7, 14, 30; not an enum string)" },
+    region: { type: "string", description: "alias for --location (same body field: region)" },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
