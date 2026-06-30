@@ -434,7 +434,7 @@ export async function runRecruiterSearchPeople(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -503,7 +503,7 @@ export async function runRecruiterListProjects(
       const fn = (p: Record<string, unknown>) => ns.recruiter.listProjects(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -682,7 +682,7 @@ export async function runRecruiterListJobs(
       const fn = (p: Record<string, unknown>) => ns.recruiter.listJobs(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

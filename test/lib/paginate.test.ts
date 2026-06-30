@@ -25,25 +25,26 @@ describe("lib/paginate — streamAll", () => {
     expect(method).toHaveBeenCalledTimes(2);
   });
 
-  it("stops after maxPages and emits a truncation note", async () => {
+  it("stops after maxPages and calls onTruncated with (pagesFetched, hasMore)", async () => {
     const method = makePaginatedMethod([
       { items: ["a"], cursor: "next" },
       { items: ["b"], cursor: "next2" },
       { items: ["c"], cursor: null },
     ]);
 
-    const notes: string[] = [];
+    const truncations: Array<{ pagesFetched: number; hasMore: boolean }> = [];
     const collected: string[] = [];
     for await (const item of streamAll(
       method as never,
       {},
-      { maxPages: 2, onTruncated: (msg: string) => notes.push(msg) },
+      { maxPages: 2, onTruncated: (pagesFetched: number, hasMore: boolean) => truncations.push({ pagesFetched, hasMore }) },
     )) {
       collected.push(item as string);
     }
     expect(collected).toEqual(["a", "b"]);
-    expect(notes.length).toBeGreaterThan(0);
-    expect(notes[0]).toContain("truncated");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]!.pagesFetched).toBe(2);
+    expect(truncations[0]!.hasMore).toBe(true);
   });
 
   it("exits 0 after truncation (no error thrown)", async () => {
