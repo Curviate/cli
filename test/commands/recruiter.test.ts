@@ -287,15 +287,14 @@ describe("recruiter message new", () => {
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(ns.recruiter.startChat).toHaveBeenCalledWith(
-      expect.objectContaining({ attendee_ids: ["AEM789"], text: "hello recruiter" }),
+      expect.objectContaining({ attendees_ids: ["AEM789"], text: "hello recruiter" }),
     );
   });
 
-  // ── Wire-encoding regression: the Recruiter chat body MUST use `attendee_ids`
-  // (SINGULAR) — recruiter-only. Classic + SN chats use the plural `attendees_ids`.
-  // OpenAPI required = [account_id, attendee_ids, text]. account_id rides via
-  // client.account(id). A prior version sent the plural key → guaranteed API 400.
-  it("recruiter message new — body uses attendee_ids (singular), not attendees_ids", async () => {
+  // ── Wire-encoding regression: the Recruiter chat body MUST use `attendees_ids`
+  // (PLURAL) — matches the server-renamed field (F2, SN/Recruiter parity pass).
+  // A prior version sent the singular `attendee_ids` → guaranteed API 400.
+  it("recruiter message new — body uses attendees_ids (plural), not attendee_ids", async () => {
     const { runRecruiterMessageNew } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
 
@@ -307,10 +306,10 @@ describe("recruiter message new", () => {
     }, out);
 
     const body = (ns.recruiter.startChat as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    expect(body["attendee_ids"]).toEqual(["AEM789"]);
+    expect(body["attendees_ids"]).toEqual(["AEM789"]);
     expect(body["text"]).toBe("hello recruiter");
-    // The plural form is the classic/SN key — it must NOT appear on a Recruiter chat.
-    expect(body).not.toHaveProperty("attendees_ids");
+    // The singular form must NOT appear — it was the old pre-parity field name.
+    expect(body).not.toHaveProperty("attendee_ids");
   });
 
   it("--attach file passes Buffer in attachments", async () => {

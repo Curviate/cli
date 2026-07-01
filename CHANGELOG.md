@@ -8,6 +8,16 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-01
+
+### Fixed
+
+- `recruiter message new` — the `--to` recipient ID is now sent as `attendees_ids` (plural) in the request body, matching the updated server contract. A prior version used the old `attendee_ids` (singular) field name which the API no longer accepts.
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.6.0`.
+
 ## [0.7.0] - 2026-07-01
 
 ### Added
