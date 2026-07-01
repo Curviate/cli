@@ -352,16 +352,22 @@ export function slimSearchCompanies(data: unknown): Record<string, unknown> {
 /**
  * Slim-default projection for a single `search jobs` item.
  *
- * Exact fields: job_urn, title, location, company_name (flattened),
- * posted_at, easy_apply. Verbose-only: company nested object, reference_id,
- * url, reposted, promoted, benefits.
+ * Exact fields: job_urn, title, location, company_name, posted_at, easy_apply.
+ * Verbose-only: company nested object, reference_id, url, reposted, promoted,
+ * benefits.
+ *
+ * `company_name` is a CLI-side SYNTHESIZED field — there is no top-level
+ * `company_name` on the raw response, only a nested `company.name` (some job
+ * postings have `company: null` entirely, e.g. agency/confidential listings;
+ * this resolves to `null` by construction, not a crash).
  */
 export function slimSearchJobsItem(item: Record<string, unknown>): Record<string, unknown> {
+  const company = item["company"] as Record<string, unknown> | null | undefined;
   return {
     job_urn: item["job_urn"] ?? null,
     title: item["title"] ?? null,
     location: item["location"] ?? null,
-    company_name: item["company_name"] ?? null,
+    company_name: company?.["name"] ?? null,
     posted_at: item["posted_at"] ?? null,
     easy_apply: item["easy_apply"] ?? null,
   };

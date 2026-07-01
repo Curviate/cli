@@ -1050,12 +1050,14 @@ describe("search companies slim: field set, industry conditional omission", () =
 // search jobs slim defaults
 // ---------------------------------------------------------------------------
 
-describe("search jobs slim: company_name flattened, verbose restores company object", () => {
+describe("search jobs slim: company_name synthesized from nested company.name, verbose restores raw company object", () => {
+  // REQ-164 regression fixture: NO top-level company_name key anywhere — only
+  // the nested company.name. A projector reading item["company_name"] directly
+  // would emit null here; only reading company.name passes.
   const jobItem = {
     job_urn: "urn:li:job:1",
     title: "AI Engineer",
     location: "Berlin, Germany",
-    company_name: "Acme AI",
     posted_at: "2026-01-01T00:00:00Z",
     easy_apply: true,
     company: { id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" },
@@ -1079,7 +1081,7 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     vi.restoreAllMocks();
   });
 
-  it("slim mode: job_urn/title/location/company_name/posted_at/easy_apply; excludes company/reference_id/url", async () => {
+  it("slim mode: company_name derived from nested company.name (no top-level key exists)", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -1092,6 +1094,8 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     expect(item["job_urn"]).toBe("urn:li:job:1");
     expect(item["title"]).toBe("AI Engineer");
     expect(item["location"]).toBe("Berlin, Germany");
+    // This is the REQ-164 regression assertion: derived from company.name, not
+    // a flat item["company_name"] passthrough (which does not exist on the fixture).
     expect(item["company_name"]).toBe("Acme AI");
     expect(item["posted_at"]).toBe("2026-01-01T00:00:00Z");
     expect(item["easy_apply"]).toBe(true);
@@ -1103,7 +1107,7 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     expect(item["benefits"]).toBeUndefined();
   });
 
-  it("--verbose restores company nested object", async () => {
+  it("--verbose restores the raw company nested object; company_name is NOT synthesized in verbose", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -1113,7 +1117,25 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
     const item = result.items[0]!;
     expect(item["company"]).toEqual({ id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" });
-    expect(item["company_name"]).toBe("Acme AI");  // both present in verbose
+    // --verbose prints the raw response verbatim (no synthesis) — the raw
+    // response has no top-level company_name key at all.
+    expect(item["company_name"]).toBeUndefined();
+  });
+
+  it("company: null (REQ-177 — agency/confidential listing) → slim company_name is null, no crash", async () => {
+    (accountNs.search.jobs as Mock).mockResolvedValue({
+      items: [{ ...jobItem, company: null }],
+      cursor: null,
+    });
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["company_name"]).toBeNull();
   });
 });
 
