@@ -204,7 +204,7 @@ export async function runProfileMe(
             ns.profiles.listPosts(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
           for await (const item of streamAll(fn, params, {
             maxPages,
-            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+            onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
           })) {
             out.stdout.write(JSON.stringify(item) + "\n");
           }
@@ -218,7 +218,7 @@ export async function runProfileMe(
             ns.profiles.listComments(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
           for await (const item of streamAll(fn, params, {
             maxPages,
-            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+            onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
           })) {
             out.stdout.write(JSON.stringify(item) + "\n");
           }
@@ -232,7 +232,7 @@ export async function runProfileMe(
             ns.profiles.listReactions(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
           for await (const item of streamAll(fn, params, {
             maxPages,
-            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+            onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
           })) {
             out.stdout.write(JSON.stringify(item) + "\n");
           }
@@ -246,7 +246,7 @@ export async function runProfileMe(
             ns.profiles.listFollowers(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
           for await (const item of streamAll(fn, params, {
             maxPages,
-            onTruncated: (msg) => out.stderr.write(msg + "\n"),
+            onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
           })) {
             out.stdout.write(JSON.stringify(item) + "\n");
           }
@@ -349,7 +349,7 @@ export async function runProfileGet(
         const fn = (p: Record<string, unknown>) => ns.profiles.listPosts(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
         for await (const item of streamAll(fn, params, {
           maxPages,
-          onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
         })) {
           out.stdout.write(JSON.stringify(item) + "\n");
         }
@@ -366,7 +366,7 @@ export async function runProfileGet(
         const fn = (p: Record<string, unknown>) => ns.profiles.listComments(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
         for await (const item of streamAll(fn, params, {
           maxPages,
-          onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
         })) {
           out.stdout.write(JSON.stringify(item) + "\n");
         }
@@ -383,7 +383,7 @@ export async function runProfileGet(
         const fn = (p: Record<string, unknown>) => ns.profiles.listReactions(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
         for await (const item of streamAll(fn, params, {
           maxPages,
-          onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
         })) {
           out.stdout.write(JSON.stringify(item) + "\n");
         }
@@ -400,7 +400,7 @@ export async function runProfileGet(
         const fn = (p: Record<string, unknown>) => ns.profiles.listFollowers(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
         for await (const item of streamAll(fn, params, {
           maxPages,
-          onTruncated: (msg) => out.stderr.write(msg + "\n"),
+          onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
         })) {
           out.stdout.write(JSON.stringify(item) + "\n");
         }
@@ -464,7 +464,7 @@ export async function runProfileConnections(
       const fn = (p: Record<string, unknown>) => ns.profiles.listConnections(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

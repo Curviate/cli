@@ -268,6 +268,175 @@ export function slimInviteReceived(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// search people
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `search people` item.
+ *
+ * Exact fields: id, public_identifier, full_name, headline, location,
+ * network_distance. Verbose-only: avatar_url, linkedin_urn, is_premium,
+ * is_open_profile.
+ */
+export function slimSearchPeopleItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: item["id"] ?? null,
+    public_identifier: item["public_identifier"] ?? null,
+    full_name: item["full_name"] ?? null,
+    headline: item["headline"] ?? null,
+    location: item["location"] ?? null,
+    network_distance: item["network_distance"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for the `search people` list envelope.
+ * Projects each item via slimSearchPeopleItem; preserves envelope shape.
+ */
+export function slimSearchPeople(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimSearchPeopleItem)
+    : [];
+
+  return { ...d, items };
+}
+
+// ---------------------------------------------------------------------------
+// search companies
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `search companies` item.
+ *
+ * Exact fields: id, name, location, followers_count, and `industry` when
+ * present in the server response (key is omitted entirely when absent).
+ * Verbose-only: summary, headcount, profile_url.
+ */
+export function slimSearchCompaniesItem(item: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    id: item["id"] ?? null,
+    name: item["name"] ?? null,
+    location: item["location"] ?? null,
+    followers_count: item["followers_count"] ?? null,
+  };
+  // Omit `industry` key entirely when not present (not null — absent)
+  if (Object.prototype.hasOwnProperty.call(item, "industry")) {
+    result["industry"] = item["industry"];
+  }
+  return result;
+}
+
+/**
+ * Slim-default projection for the `search companies` list envelope.
+ */
+export function slimSearchCompanies(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimSearchCompaniesItem)
+    : [];
+
+  return { ...d, items };
+}
+
+// ---------------------------------------------------------------------------
+// search jobs
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `search jobs` item.
+ *
+ * Exact fields: job_urn, title, location, company_name (flattened),
+ * posted_at, easy_apply. Verbose-only: company nested object, reference_id,
+ * url, reposted, promoted, benefits.
+ */
+export function slimSearchJobsItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    job_urn: item["job_urn"] ?? null,
+    title: item["title"] ?? null,
+    location: item["location"] ?? null,
+    company_name: item["company_name"] ?? null,
+    posted_at: item["posted_at"] ?? null,
+    easy_apply: item["easy_apply"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for the `search jobs` list envelope.
+ */
+export function slimSearchJobs(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimSearchJobsItem)
+    : [];
+
+  return { ...d, items };
+}
+
+// ---------------------------------------------------------------------------
+// search posts
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `search posts` item.
+ *
+ * Exact fields: post_urn, posted_at, author ({name} only), text (truncated
+ * to 200 chars; null preserved), reaction_count, comment_count.
+ * Verbose-only: share_url, repost_count, impressions_count, full author object.
+ */
+export function slimSearchPostsItem(item: Record<string, unknown>): Record<string, unknown> {
+  // Project author to {name} only
+  const rawAuthor =
+    item["author"] !== null && item["author"] !== undefined && typeof item["author"] === "object"
+      ? (item["author"] as Record<string, unknown>)
+      : null;
+  const author = rawAuthor !== null ? { name: rawAuthor["name"] ?? null } : null;
+
+  // Truncate text to 200 chars; preserve null
+  const rawText = item["text"];
+  let text: string | null;
+  if (rawText === null || rawText === undefined) {
+    text = null;
+  } else {
+    const s = String(rawText);
+    text = s.length > 200 ? s.slice(0, 200) : s;
+  }
+
+  return {
+    post_urn: item["post_urn"] ?? null,
+    posted_at: item["posted_at"] ?? null,
+    author,
+    text,
+    reaction_count: item["reaction_count"] ?? null,
+    comment_count: item["comment_count"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for the `search posts` list envelope.
+ */
+export function slimSearchPosts(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimSearchPostsItem)
+    : [];
+
+  return { ...d, items };
+}
+
+// ---------------------------------------------------------------------------
 // company <id>
 // ---------------------------------------------------------------------------
 

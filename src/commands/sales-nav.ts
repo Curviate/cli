@@ -226,7 +226,7 @@ export async function runSalesNavSearchPeople(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -289,7 +289,7 @@ export async function runSalesNavSearchCompanies(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

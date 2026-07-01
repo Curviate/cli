@@ -35,6 +35,7 @@ type SearchArgs = {
   "max-pages"?: string;
   account?: string;
   json?: boolean;
+  verbose?: boolean;
   preview?: boolean;
   fields?: string;
   "api-key"?: string;
@@ -57,8 +58,12 @@ type SearchArgs = {
   "content-type"?: string;
   seniority?: string;
   function?: string;
+  "employment-type"?: string;
   "job-type"?: string;
   region?: string;
+  // People-specific filter flags
+  title?: string;
+  "profile-language"?: string;
 };
 
 function makeExitMock() {
@@ -376,7 +381,7 @@ describe("search companies / posts / jobs", () => {
     expect(body).toEqual({
       url: searchUrl,
       sort_by: "relevance",
-      date_posted: "past-week",
+      date_posted: "past_week",  // hyphen → underscore normalized
       content_type: "videos",
     });
   });
@@ -413,17 +418,18 @@ describe("search companies / posts / jobs", () => {
     } as SearchArgs, out);
 
     const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    // --location on jobs maps to body region (single string, not location array).
+    // When both --location and --region are supplied, --region wins (applied last).
     expect(body).toEqual({
       easy_apply: true,
       url: searchUrl,
-      location: ["103644278", "90000084"],
       industry: ["96"],
       seniority: ["3"],
       function: ["eng"],
       job_type: ["F"],
       company: ["1441"],
       sort_by: "DD",
-      region: "eu",
+      region: "eu",  // --region wins over --location on jobs
     });
   });
 
@@ -513,5 +519,787 @@ describe("search parameters — GET, not paginated", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search people new filter flags + invalid-flag rejection
+// ---------------------------------------------------------------------------
+
+describe("search people filter flags (title, profile-language, invalid-flag rejection)", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.people as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--title maps to advanced_keywords.title (keyword string, not id)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      title: "AI Engineer",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["advanced_keywords"]).toEqual({ title: "AI Engineer" });
+  });
+
+  it("--title merges INTO existing advanced_keywords from --filters (named flag wins on conflict)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      filters: '{"advanced_keywords":{"company":"Acme","title":"OLD"}}',
+      title: "AI Engineer",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    // title overrides, company preserved (merge not overwrite)
+    expect(body["advanced_keywords"]).toEqual({ company: "Acme", title: "AI Engineer" });
+  });
+
+  it("--profile-language maps to profile_language (comma-split array)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      "profile-language": "en,de,fr",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["profile_language"]).toEqual(["en", "de", "fr"]);
+  });
+
+  it("--seniority on people → exit 2 (invalid on classic search)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchPeople(client as never, {
+        account: "acc_1",
+        seniority: "3",
+        json: true,
+      } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.people).not.toHaveBeenCalled();
+  });
+
+  it("--function on people → exit 2 (invalid on classic search)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchPeople(client as never, {
+        account: "acc_1",
+        function: "eng",
+        json: true,
+      } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.people).not.toHaveBeenCalled();
+  });
+
+  it("--employment-type on people → exit 2 (invalid on classic search)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchPeople(client as never, {
+        account: "acc_1",
+        "employment-type": "F",
+        json: true,
+      } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.people).not.toHaveBeenCalled();
+  });
+
+  it("--sort-by on people → exit 2 (invalid on classic search)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchPeople(client as never, {
+        account: "acc_1",
+        "sort-by": "recent",
+        json: true,
+      } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.people).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs --location → body region (single string)
+// ---------------------------------------------------------------------------
+
+describe("search jobs --location maps to region body field", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--location on jobs maps to body region (single string, not location array)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      location: "103644278",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["region"]).toBe("103644278");
+    expect(body["location"]).toBeUndefined();
+  });
+
+  it("--region on jobs maps to body region (alias)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      region: "eu",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["region"]).toBe("eu");
+  });
+
+  it("--location on people/companies still maps to location array (unchanged)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    (accountNs.search.people as Mock).mockResolvedValue({ items: [], cursor: null });
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      location: "103644278",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["location"]).toEqual(["103644278"]);
+    expect(body["region"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search posts --date-posted hyphen → underscore normalization
+// ---------------------------------------------------------------------------
+
+describe("search posts --date-posted normalization (hyphen to underscore)", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.posts as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("past-day alias normalizes to past_day", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      account: "acc_1",
+      "date-posted": "past-day",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe("past_day");
+  });
+
+  it("past-week alias normalizes to past_week", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      account: "acc_1",
+      "date-posted": "past-week",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe("past_week");
+  });
+
+  it("past-month alias normalizes to past_month", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      account: "acc_1",
+      "date-posted": "past-month",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe("past_month");
+  });
+
+  it("already-underscore value passes through unchanged", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      account: "acc_1",
+      "date-posted": "past_week",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe("past_week");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --all truncation: JSON sentinel to stdout, not prose to stderr
+// ---------------------------------------------------------------------------
+
+describe("--all truncation: JSON object written to stdout", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("search people --all truncated → last stdout line is stream_truncated JSON object", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    // Two pages with cursor — max-pages=1 triggers truncation after page 1
+    (accountNs.search.people as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "p1" }], cursor: "c1" })
+      .mockResolvedValueOnce({ items: [{ id: "p2" }], cursor: null });
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      all: true,
+      "max-pages": "1",
+    } as SearchArgs, out);
+
+    const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    const lastLine = writtenLines[writtenLines.length - 1]!.trim();
+    const parsed = JSON.parse(lastLine) as Record<string, unknown>;
+    expect(parsed["object"]).toBe("stream_truncated");
+    expect(parsed["pages_fetched"]).toBe(1);
+    expect(parsed["has_more"]).toBe(true);
+    // Nothing on stderr about truncation (no prose)
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).includes("truncated"))).toBe(false);
+  });
+
+  it("search jobs --all truncated → last stdout line is stream_truncated JSON", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.jobs as Mock)
+      .mockResolvedValueOnce({ items: [{ job_urn: "j1" }], cursor: "c1" })
+      .mockResolvedValueOnce({ items: [{ job_urn: "j2" }], cursor: null });
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      all: true,
+      "max-pages": "1",
+    } as SearchArgs, out);
+
+    const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    const lastLine = writtenLines[writtenLines.length - 1]!.trim();
+    const parsed = JSON.parse(lastLine) as Record<string, unknown>;
+    expect(parsed["object"]).toBe("stream_truncated");
+    expect(parsed["pages_fetched"]).toBe(1);
+    expect(parsed["has_more"]).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search people slim defaults
+// ---------------------------------------------------------------------------
+
+describe("search people slim: correct field names, excluded fields, verbose restores", () => {
+  const peopleItem = {
+    id: "abc123",
+    full_name: "Alice Smith",
+    public_identifier: "alice-smith",
+    headline: "AI Engineer",
+    location: "Berlin, Germany",
+    network_distance: "DISTANCE_2",
+    avatar_url: "https://example.com/pic.jpg",
+    linkedin_urn: "urn:li:member:123",
+    is_premium: false,
+    is_open_profile: false,
+  };
+
+  const sdkResponse = {
+    object: "people_search_result",
+    items: [peopleItem],
+    config: { params: {} },
+    paging: { start: 0, page_count: 1, total_count: 1 },
+    cursor: null,
+  };
+
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.people as Mock).mockResolvedValue(sdkResponse);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("slim mode: contains id/full_name/public_identifier/headline/location/network_distance ONLY", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+
+    // Expected slim fields
+    expect(item["id"]).toBe("abc123");
+    expect(item["full_name"]).toBe("Alice Smith");
+    expect(item["public_identifier"]).toBe("alice-smith");
+    expect(item["headline"]).toBe("AI Engineer");
+    expect(item["location"]).toBe("Berlin, Germany");
+    expect(item["network_distance"]).toBe("DISTANCE_2");
+
+    // Excluded verbose-only fields
+    expect(item["avatar_url"]).toBeUndefined();
+    expect(item["linkedin_urn"]).toBeUndefined();
+    expect(item["is_premium"]).toBeUndefined();
+    expect(item["is_open_profile"]).toBeUndefined();
+
+    // Must NOT use old incorrect field names
+    expect(item["provider_id"]).toBeUndefined();
+    expect(item["first_name"]).toBeUndefined();
+    expect(item["last_name"]).toBeUndefined();
+  });
+
+  it("--verbose restores avatar_url, linkedin_urn, is_premium", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, { keywords: "ai", account: "acc_1", json: true, verbose: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["avatar_url"]).toBe("https://example.com/pic.jpg");
+    expect(item["linkedin_urn"]).toBe("urn:li:member:123");
+    expect(item["is_premium"]).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search companies slim defaults
+// ---------------------------------------------------------------------------
+
+describe("search companies slim: field set, industry conditional omission", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("slim mode: id/name/industry/location/followers_count; excludes summary/headcount/profile_url", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.companies as Mock).mockResolvedValue({
+      items: [{
+        id: "c1",
+        name: "Acme AI",
+        industry: ["technology", "internet"],
+        location: "San Francisco, CA",
+        followers_count: 5000,
+        summary: "AI solutions",
+        headcount: "51-200",
+        profile_url: "https://linkedin.com/company/acme",
+      }],
+      cursor: null,
+    });
+
+    await runSearchCompanies(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+
+    expect(item["id"]).toBe("c1");
+    expect(item["name"]).toBe("Acme AI");
+    expect(item["industry"]).toEqual(["technology", "internet"]);
+    expect(item["location"]).toBe("San Francisco, CA");
+    expect(item["followers_count"]).toBe(5000);
+    expect(item["summary"]).toBeUndefined();
+    expect(item["headcount"]).toBeUndefined();
+    expect(item["profile_url"]).toBeUndefined();
+  });
+
+  it("industry key ABSENT (not null/empty) when not returned by server", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.companies as Mock).mockResolvedValue({
+      items: [{ id: "c2", name: "BetaCo", location: null, followers_count: null }],
+      cursor: null,
+    });
+
+    await runSearchCompanies(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+
+    expect(item["id"]).toBe("c2");
+    expect(Object.prototype.hasOwnProperty.call(item, "industry")).toBe(false);
+  });
+
+  it("--verbose restores summary, headcount, profile_url", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.companies as Mock).mockResolvedValue({
+      items: [{
+        id: "c1", name: "Acme AI",
+        summary: "AI solutions", headcount: "51-200", profile_url: "https://linkedin.com/company/acme",
+      }],
+      cursor: null,
+    });
+
+    await runSearchCompanies(client as never, { keywords: "ai", account: "acc_1", json: true, verbose: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["summary"]).toBe("AI solutions");
+    expect(item["headcount"]).toBe("51-200");
+    expect(item["profile_url"]).toBe("https://linkedin.com/company/acme");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs slim defaults
+// ---------------------------------------------------------------------------
+
+describe("search jobs slim: company_name flattened, verbose restores company object", () => {
+  const jobItem = {
+    job_urn: "urn:li:job:1",
+    title: "AI Engineer",
+    location: "Berlin, Germany",
+    company_name: "Acme AI",
+    posted_at: "2026-01-01T00:00:00Z",
+    easy_apply: true,
+    company: { id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" },
+    reference_id: "ref_abc",
+    url: "https://linkedin.com/jobs/view/1",
+    reposted: false,
+    promoted: false,
+    benefits: [],
+  };
+
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [jobItem], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("slim mode: job_urn/title/location/company_name/posted_at/easy_apply; excludes company/reference_id/url", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+
+    expect(item["job_urn"]).toBe("urn:li:job:1");
+    expect(item["title"]).toBe("AI Engineer");
+    expect(item["location"]).toBe("Berlin, Germany");
+    expect(item["company_name"]).toBe("Acme AI");
+    expect(item["posted_at"]).toBe("2026-01-01T00:00:00Z");
+    expect(item["easy_apply"]).toBe(true);
+    expect(item["company"]).toBeUndefined();
+    expect(item["reference_id"]).toBeUndefined();
+    expect(item["url"]).toBeUndefined();
+    expect(item["reposted"]).toBeUndefined();
+    expect(item["promoted"]).toBeUndefined();
+    expect(item["benefits"]).toBeUndefined();
+  });
+
+  it("--verbose restores company nested object", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { keywords: "ai", account: "acc_1", json: true, verbose: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["company"]).toEqual({ id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" });
+    expect(item["company_name"]).toBe("Acme AI");  // both present in verbose
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search posts slim: 200-char text truncation + author.name only
+// ---------------------------------------------------------------------------
+
+describe("search posts slim: text truncation and author projection", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("text >200 chars truncated to 200 chars in slim mode", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.posts as Mock).mockResolvedValue({
+      items: [{
+        post_urn: "urn:li:activity:123",
+        posted_at: "2026-01-01T00:00:00Z",
+        author: { name: "Bob", member_urn: "urn:li:member:456", linkedin_urn: "urn:li:member:456" },
+        text: "A".repeat(300),
+        reaction_count: 42,
+        comment_count: 7,
+        share_url: "https://linkedin.com/posts/bob_1",
+        repost_count: 1,
+        impressions_count: 500,
+      }],
+      cursor: null,
+    });
+
+    await runSearchPosts(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+
+    // Expected slim fields
+    expect(item["post_urn"]).toBe("urn:li:activity:123");
+    expect(item["posted_at"]).toBe("2026-01-01T00:00:00Z");
+    expect(item["author"]).toEqual({ name: "Bob" });  // only name sub-field
+    expect((item["text"] as string).length).toBe(200);
+    expect(item["text"]).toBe("A".repeat(200));
+    expect(item["reaction_count"]).toBe(42);
+    expect(item["comment_count"]).toBe(7);
+
+    // Excluded verbose-only fields
+    expect(item["share_url"]).toBeUndefined();
+    expect(item["repost_count"]).toBeUndefined();
+    expect(item["impressions_count"]).toBeUndefined();
+    // author sub-fields beyond name excluded
+    expect((item["author"] as Record<string, unknown>)["member_urn"]).toBeUndefined();
+  });
+
+  it("text <=200 chars not truncated", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.posts as Mock).mockResolvedValue({
+      items: [{ post_urn: "urn:li:activity:124", author: { name: "Alice" }, text: "Short post", reaction_count: 1, comment_count: 0 }],
+      cursor: null,
+    });
+
+    await runSearchPosts(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    expect(result.items[0]!["text"]).toBe("Short post");
+  });
+
+  it("null text emits text: null", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.posts as Mock).mockResolvedValue({
+      items: [{ post_urn: "urn:li:activity:125", author: { name: "Carl" }, text: null, reaction_count: 0, comment_count: 0 }],
+      cursor: null,
+    });
+
+    await runSearchPosts(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    expect(result.items[0]!["text"]).toBeNull();
+  });
+
+  it("--verbose restores full text and full author object", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const longText = "A".repeat(300);
+    (accountNs.search.posts as Mock).mockResolvedValue({  // eslint-disable-line @typescript-eslint/no-unsafe-assignment
+      items: [{
+        post_urn: "urn:li:activity:123",
+        author: { name: "Bob", member_urn: "urn:li:member:456" },
+        text: longText,
+        reaction_count: 42,
+        comment_count: 7,
+        share_url: "https://linkedin.com/posts/bob_1",
+        repost_count: 1,
+      }],
+      cursor: null,
+    });
+
+    await runSearchPosts(client as never, { keywords: "ai", account: "acc_1", json: true, verbose: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["text"]).toBe(longText);
+    expect((item["author"] as Record<string, unknown>)["member_urn"]).toBe("urn:li:member:456");
+    expect(item["share_url"]).toBe("https://linkedin.com/posts/bob_1");
+    expect(item["repost_count"]).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs --date-posted: numeric days, no enum normalization
+// ---------------------------------------------------------------------------
+
+describe("search jobs --date-posted: numeric body field, no hyphen normalization", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--date-posted 7 → body date_posted: 7 (number)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "7",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(7);
+    expect(typeof body["date_posted"]).toBe("number");
+  });
+
+  it("--date-posted 30 → body date_posted: 30 (number)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "30",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(30);
+    expect(typeof body["date_posted"]).toBe("number");
+  });
+
+  it("jobs --date-posted is NOT hyphen-normalized (no string replacement applied)", async () => {
+    // Posts normalise past-week → past_week; jobs just coerces to Number.
+    // Passing "14" should arrive as the number 14, not a string.
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      account: "acc_1",
+      "date-posted": "14",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body["date_posted"]).toBe(14);
+    expect(typeof body["date_posted"]).toBe("number");
   });
 });

@@ -31,8 +31,13 @@ type PaginatableMethod<P extends Record<string, unknown>> = (
 export interface StreamAllOptions {
   /** Maximum pages to fetch. Default 100. */
   maxPages?: number;
-  /** Called with a human-readable message when streaming is truncated. */
-  onTruncated?: (message: string) => void;
+  /**
+   * Called when streaming is truncated at maxPages.
+   * Receives the number of pages fetched and whether more pages exist.
+   * Callers decide how to surface this (e.g. JSON object to stdout for search,
+   * or a prose note to stderr for other commands).
+   */
+  onTruncated?: (pagesFetched: number, hasMore: boolean) => void;
 }
 
 /**
@@ -85,10 +90,8 @@ export async function* streamAll<P extends Record<string, unknown>>(
     if (!cursor) break;
 
     if (pageCount >= maxPages) {
-      const msg = `Streaming truncated at ${maxPages} page(s) — more results may exist. ` +
-        `Increase --max-pages or use --cursor / --limit for manual paging.`;
       if (opts.onTruncated) {
-        opts.onTruncated(msg);
+        opts.onTruncated(pageCount, cursor !== null && cursor !== undefined);
       }
       break;
     }

@@ -30,6 +30,16 @@ import {
   DEFAULT_FILTER_READERS,
   type FilterReaders,
 } from "../lib/search-filters.js";
+import {
+  slimSearchPeople,
+  slimSearchPeopleItem,
+  slimSearchCompanies,
+  slimSearchCompaniesItem,
+  slimSearchJobs,
+  slimSearchJobsItem,
+  slimSearchPosts,
+  slimSearchPostsItem,
+} from "../lib/slim.js";
 import type { CurviateError } from "@curviate/sdk";
 
 type SearchFlags = {
@@ -42,6 +52,7 @@ type SearchFlags = {
   "max-pages"?: string;
   account?: string;
   json?: boolean;
+  verbose?: boolean;
   fields?: string;
   preview?: boolean;
   "api-key"?: string;
@@ -60,24 +71,37 @@ type SearchFlags = {
   "network-distance"?: string;
   "connections-of"?: string;
   "followers-of"?: string;
+  // People-only filter flags
+  title?: string;
+  "profile-language"?: string;
+  // Posts filter flags
   "sort-by"?: string;
   "date-posted"?: string;
   "content-type"?: string;
+  // Jobs filter flags (NOT valid on classic people search)
   seniority?: string;
   function?: string;
+  "employment-type"?: string;
   "job-type"?: string;
   region?: string;
 };
+
+/**
+ * Flags that are valid on jobs/SN but NOT on `search people` (classic LinkedIn
+ * people search does not support them). Passing any of these to runSearchPeople
+ * exits 2.
+ */
+const PEOPLE_INVALID_FLAGS = ["seniority", "function", "employment-type", "sort-by"] as const;
 
 /** Named convenience flags reused across the search description sets. */
 const FILTER_FLAGS = {
   filters: {
     type: "string" as const,
-    description: "Filter body as a JSON object (escape hatch for the full filter surface); '-' reads JSON from stdin.",
+    description: "Filter body as a JSON object (named flags win on conflict; server validates and strips unknown fields); '-' reads JSON from stdin.",
   },
   "filters-file": {
     type: "string" as const,
-    description: "Path to a JSON file with the filter body.",
+    description: "Path to a JSON file with the filter body (named flags win on conflict).",
   },
 };
 
@@ -132,6 +156,7 @@ function resolveOutputOpts(flags: SearchFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -159,6 +184,19 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
     if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
     if (flags["connections-of"]) body["connections_of"] = flags["connections-of"];
     if (flags["followers-of"]) body["followers_of"] = flags["followers-of"];
+    // --title: merge into existing advanced_keywords object (not overwrite)
+    if (flags.title) {
+      const existingAK =
+        body["advanced_keywords"] !== null &&
+        body["advanced_keywords"] !== undefined &&
+        typeof body["advanced_keywords"] === "object" &&
+        !Array.isArray(body["advanced_keywords"])
+          ? (body["advanced_keywords"] as Record<string, unknown>)
+          : {};
+      body["advanced_keywords"] = { ...existingAK, title: flags.title };
+    }
+    // --profile-language: profile_language array (comma-split)
+    if (flags["profile-language"]) body["profile_language"] = splitCsv(flags["profile-language"]);
   },
   companies(body, flags) {
     if (flags.industry) body["industry"] = splitCsv(flags.industry);
@@ -167,17 +205,24 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
   },
   posts(body, flags) {
     if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
-    if (flags["date-posted"]) body["date_posted"] = flags["date-posted"];
+    // normalize hyphen aliases (e.g. past-week → past_week) before sending
+    if (flags["date-posted"]) body["date_posted"] = flags["date-posted"].replace(/-/g, "_");
     if (flags["content-type"]) body["content_type"] = flags["content-type"];
   },
   jobs(body, flags) {
-    if (flags.location) body["location"] = splitCsv(flags.location);
+    // --location on jobs maps to body region (single opaque geo-id, not location array)
+    if (flags.location) body["region"] = flags.location;
     if (flags.industry) body["industry"] = splitCsv(flags.industry);
     if (flags.seniority) body["seniority"] = splitCsv(flags.seniority);
     if (flags.function) body["function"] = splitCsv(flags.function);
     if (flags["job-type"]) body["job_type"] = splitCsv(flags["job-type"]);
     if (flags.company) body["company"] = splitCsv(flags.company);
     if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+    // --date-posted on jobs is a numeric age-in-days (NOT an enum string; no normalization)
+    if (flags["date-posted"] !== undefined && flags["date-posted"] !== "") {
+      body["date_posted"] = Number(flags["date-posted"]);
+    }
+    // --region alias applied last so it wins over --location when both supplied
     if (flags.region) body["region"] = flags.region;
   },
 };
@@ -217,9 +262,20 @@ export async function runSearchPeople(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
+  // Reject flags that are only valid for jobs / Sales Navigator (not classic people search)
+  for (const f of PEOPLE_INVALID_FLAGS) {
+    if (flags[f as keyof SearchFlags]) {
+      out.stderr.write(
+        `error: --${f} is not valid for \`search people\` (classic LinkedIn search). Use \`search jobs\` or \`sales-nav search people\` for this filter.\n`,
+      );
+      process.exit(2);
+    }
+  }
+
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+  const verbose = flags.verbose ?? false;
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const assembled = await buildSearchBody("people", flags, readers);
@@ -234,13 +290,17 @@ export async function runSearchPeople(
       const fn = (p: Record<string, unknown>) => ns.search.people(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        // Write JSON truncation sentinel to stdout as the last NDJSON line
+        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
+          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
+        ),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        const projected = verbose ? item : slimSearchPeopleItem(item as Record<string, unknown>);
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.search.people(body);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimSearchPeople }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -269,6 +329,7 @@ export async function runSearchCompanies(
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+  const verbose = flags.verbose ?? false;
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const assembled = await buildSearchBody("companies", flags, readers);
@@ -283,13 +344,16 @@ export async function runSearchCompanies(
       const fn = (p: Record<string, unknown>) => ns.search.companies(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
+          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
+        ),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        const projected = verbose ? item : slimSearchCompaniesItem(item as Record<string, unknown>);
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.search.companies(body);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimSearchCompanies }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -318,6 +382,7 @@ export async function runSearchPosts(
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+  const verbose = flags.verbose ?? false;
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const assembled = await buildSearchBody("posts", flags, readers);
@@ -332,13 +397,16 @@ export async function runSearchPosts(
       const fn = (p: Record<string, unknown>) => ns.search.posts(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
+          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
+        ),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        const projected = verbose ? item : slimSearchPostsItem(item as Record<string, unknown>);
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.search.posts(body);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimSearchPosts }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -367,6 +435,7 @@ export async function runSearchJobs(
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+  const verbose = flags.verbose ?? false;
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const assembled = await buildSearchBody("jobs", flags, readers);
@@ -381,13 +450,16 @@ export async function runSearchJobs(
       const fn = (p: Record<string, unknown>) => ns.search.jobs(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (msg) => out.stderr.write(msg + "\n"),
+        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
+          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
+        ),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        const projected = verbose ? item : slimSearchJobsItem(item as Record<string, unknown>);
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await ns.search.jobs(body);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimSearchJobs }, out);
     }
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -456,6 +528,9 @@ const searchPeopleCommand = defineCommand({
     "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
     "connections-of": { type: "string", description: "Member id whose connections to search." },
     "followers-of": { type: "string", description: "Member id whose followers to search." },
+    // People-specific filter flags
+    title: { type: "string", description: "Job title keyword filter (maps to advanced_keywords.title)." },
+    "profile-language": { type: "string", description: "Profile language codes (comma-separated, e.g. en,de)." },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -514,7 +589,7 @@ const searchPostsCommand = defineCommand({
     url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, date)." },
-    "date-posted": { type: "string", description: "Date-posted window (e.g. past-day, past-week)." },
+    "date-posted": { type: "string", description: "time window: past_day, past_week, or past_month (hyphens also accepted: past-day, past-week, past-month)" },
     "content-type": { type: "string", description: "Content type (e.g. videos, images, jobs)." },
   },
   async run({ args }) {
@@ -543,14 +618,16 @@ const searchJobsCommand = defineCommand({
     keywords: { type: "string", description: "Full-text keyword search." },
     url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
-    location: { type: "string", description: "Location ids (comma-separated)." },
+    // On jobs, --location maps to the geo region filter (not a location array — different API shape for jobs vs people)
+    location: { type: "string", description: "geo region id (single id; resolve via search parameters --type LOCATION); maps to region filter" },
     industry: { type: "string", description: "Industry ids (comma-separated)." },
     seniority: { type: "string", description: "Seniority ids (comma-separated)." },
     function: { type: "string", description: "Job function ids (comma-separated)." },
     "job-type": { type: "string", description: "Job type ids, e.g. F,P (comma-separated)." },
     company: { type: "string", description: "Company ids (comma-separated)." },
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, recent)." },
-    region: { type: "string", description: "Region id." },
+    "date-posted": { type: "string", description: "maximum job age in days (a number — e.g. 7, 14, 30; not an enum string)" },
+    region: { type: "string", description: "alias for --location (same body field: region)" },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
