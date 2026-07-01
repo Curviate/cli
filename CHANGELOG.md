@@ -8,6 +8,49 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-01
+
+### Added
+
+- `search` — named filter flags that previously required raw `--filters` JSON:
+  - **companies**: `--has-job-offers`, `--headcount <buckets>` (comma-separated
+    size buckets `1-10 … 5001-10000`; `10001+` reports a usage error).
+  - **jobs**: `--title <ids>`, `--presence`, `--benefits`, `--commitments`,
+    `--has-verifications`, `--under-10-applicants`, `--in-your-network`,
+    `--fair-chance-employer`, `--location-within-area <miles>`.
+  - **people**: `--connections-of`, `--followers-of` (comma-separated → array).
+  - **posts**: `--posted-by-member`, `--posted-by-company`, `--posted-by-me`,
+    `--mentioning-member`, `--mentioning-company`, `--author-industry`,
+    `--author-company`, `--author-keywords`.
+
+### Fixed
+
+- `search jobs` slim `company_name` was always `null` — now derived from the
+  nested `company.name` (handles postings with no linked company). `--verbose`
+  still returns the raw response unchanged.
+- `search parameters --type`, `search jobs --seniority`/`--job-type`, and
+  `search posts --content-type` help text now lists the correct/complete
+  enumerations (no behavior change).
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.5.0`.
+
+## [0.6.1] - 2026-07-01
+
+### Added
+
+- `search people --title` (→ `advanced_keywords.title` keyword, nested-merged),
+  `--industry`, `--profile-language`; `--filters` deep-merge (named flags win).
+- `search jobs --location` → `region` (single id) + `--region` alias +
+  `--date-posted <days>` (number).
+- `search posts --date-posted` hyphen→underscore normalize.
+- `--all` truncation emits `{"object":"stream_truncated",…}` JSON.
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.4.1`.
+
 ## [0.6.0] - 2026-06-30
 
 ### Added
