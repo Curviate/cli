@@ -64,6 +64,27 @@ type SearchArgs = {
   // People-specific filter flags
   title?: string;
   "profile-language"?: string;
+  // search-AX v2: search companies
+  "has-job-offers"?: boolean;
+  headcount?: string;
+  // search-AX v2: search jobs
+  presence?: string;
+  benefits?: string;
+  commitments?: string;
+  "has-verifications"?: boolean;
+  "under-10-applicants"?: boolean;
+  "in-your-network"?: boolean;
+  "fair-chance-employer"?: boolean;
+  "location-within-area"?: string;
+  // search-AX v2: search posts
+  "posted-by-member"?: string;
+  "posted-by-company"?: string;
+  "posted-by-me"?: boolean;
+  "mentioning-member"?: string;
+  "mentioning-company"?: string;
+  "author-industry"?: string;
+  "author-company"?: string;
+  "author-keywords"?: string;
 };
 
 function makeExitMock() {
@@ -231,8 +252,8 @@ describe("search people — filters escape hatch + named flags", () => {
       past_company: ["111"],
       school: ["222"],
       network_distance: [1, 2],
-      connections_of: "ACoAAB",
-      followers_of: "ACoAAC",
+      connections_of: ["ACoAAB"],
+      followers_of: ["ACoAAC"],
     });
   });
 
@@ -1050,12 +1071,14 @@ describe("search companies slim: field set, industry conditional omission", () =
 // search jobs slim defaults
 // ---------------------------------------------------------------------------
 
-describe("search jobs slim: company_name flattened, verbose restores company object", () => {
+describe("search jobs slim: company_name synthesized from nested company.name, verbose restores raw company object", () => {
+  // REQ-164 regression fixture: NO top-level company_name key anywhere — only
+  // the nested company.name. A projector reading item["company_name"] directly
+  // would emit null here; only reading company.name passes.
   const jobItem = {
     job_urn: "urn:li:job:1",
     title: "AI Engineer",
     location: "Berlin, Germany",
-    company_name: "Acme AI",
     posted_at: "2026-01-01T00:00:00Z",
     easy_apply: true,
     company: { id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" },
@@ -1079,7 +1102,7 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     vi.restoreAllMocks();
   });
 
-  it("slim mode: job_urn/title/location/company_name/posted_at/easy_apply; excludes company/reference_id/url", async () => {
+  it("slim mode: company_name derived from nested company.name (no top-level key exists)", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -1092,6 +1115,8 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     expect(item["job_urn"]).toBe("urn:li:job:1");
     expect(item["title"]).toBe("AI Engineer");
     expect(item["location"]).toBe("Berlin, Germany");
+    // This is the REQ-164 regression assertion: derived from company.name, not
+    // a flat item["company_name"] passthrough (which does not exist on the fixture).
     expect(item["company_name"]).toBe("Acme AI");
     expect(item["posted_at"]).toBe("2026-01-01T00:00:00Z");
     expect(item["easy_apply"]).toBe(true);
@@ -1103,7 +1128,7 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     expect(item["benefits"]).toBeUndefined();
   });
 
-  it("--verbose restores company nested object", async () => {
+  it("--verbose restores the raw company nested object; company_name is NOT synthesized in verbose", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -1113,7 +1138,25 @@ describe("search jobs slim: company_name flattened, verbose restores company obj
     const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
     const item = result.items[0]!;
     expect(item["company"]).toEqual({ id: "c1", name: "Acme AI", logo_url: "https://logo.example.com" });
-    expect(item["company_name"]).toBe("Acme AI");  // both present in verbose
+    // --verbose prints the raw response verbatim (no synthesis) — the raw
+    // response has no top-level company_name key at all.
+    expect(item["company_name"]).toBeUndefined();
+  });
+
+  it("company: null (REQ-177 — agency/confidential listing) → slim company_name is null, no crash", async () => {
+    (accountNs.search.jobs as Mock).mockResolvedValue({
+      items: [{ ...jobItem, company: null }],
+      cursor: null,
+    });
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { keywords: "ai", account: "acc_1", json: true } as SearchArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    const item = result.items[0]!;
+    expect(item["company_name"]).toBeNull();
   });
 });
 
@@ -1301,5 +1344,490 @@ describe("search jobs --date-posted: numeric body field, no hyphen normalization
     const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
     expect(body["date_posted"]).toBe(14);
     expect(typeof body["date_posted"]).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search companies --has-job-offers / --headcount
+// ---------------------------------------------------------------------------
+
+describe("search companies: --has-job-offers / --headcount named flags", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.companies as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--has-job-offers → body has_job_offers: true", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchCompanies(client as never, { "has-job-offers": true, account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.companies as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ has_job_offers: true });
+  });
+
+  it("--headcount 1001-5000 → body headcount: [{min:1001,max:5000}]", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchCompanies(client as never, { headcount: "1001-5000", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.companies as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ headcount: [{ min: 1001, max: 5000 }] });
+  });
+
+  it("--headcount 1-10,501-1000 → two bucket objects in listed order", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchCompanies(client as never, { headcount: "1-10,501-1000", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.companies as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      headcount: [
+        { min: 1, max: 10 },
+        { min: 501, max: 1000 },
+      ],
+    });
+  });
+
+  it("--has-job-offers + --headcount 51-200 → both keys present", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchCompanies(client as never, {
+      "has-job-offers": true,
+      headcount: "51-200",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.companies as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ has_job_offers: true, headcount: [{ min: 51, max: 200 }] });
+  });
+
+  it("--headcount not-a-bucket → exit 2, no SDK call", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchCompanies(client as never, { headcount: "not-a-bucket", account: "acc_1" } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.companies).not.toHaveBeenCalled();
+  });
+
+  it("all 7 fully-specified buckets are individually recognized (no exit 2)", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const buckets = ["1-10", "11-50", "51-200", "201-500", "501-1000", "1001-5000", "5001-10000"];
+
+    for (const bucket of buckets) {
+      accountNs = makeAccountNs();
+      client = makeClient(accountNs);
+      (accountNs.search.companies as Mock).mockResolvedValue({ items: [], cursor: null });
+      const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+      await runSearchCompanies(client as never, { headcount: bucket, account: "acc_1", json: true } as SearchArgs, out);
+
+      expect(accountNs.search.companies).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("--headcount 10001+ (open/unresolved top bucket) → exit 2, deferred rather than guessed", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchCompanies(client as never, { headcount: "10001+", account: "acc_1" } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.companies).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs --title → body role
+// ---------------------------------------------------------------------------
+
+describe("search jobs --title maps to body role", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--title 30128 → body role: ['30128']", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { title: "30128", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ role: ["30128"] });
+  });
+
+  it("--title 30128,26089 → body role: ['30128','26089']", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { title: "30128,26089", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ role: ["30128", "26089"] });
+  });
+
+  it("--keywords engineer --title 30128 → both keywords and role present", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      keywords: "engineer",
+      title: "30128",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ keywords: "engineer", role: ["30128"] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs additional named flags
+// ---------------------------------------------------------------------------
+
+describe("search jobs: presence/benefits/commitments/has-verifications/under-10-applicants/in-your-network/fair-chance-employer", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--presence remote,hybrid → body presence: ['remote','hybrid']", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { presence: "remote,hybrid", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ presence: ["remote", "hybrid"] });
+  });
+
+  it("--benefits medical_insurance → body benefits: ['medical_insurance']", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { benefits: "medical_insurance", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ benefits: ["medical_insurance"] });
+  });
+
+  it("--commitments full_time → body commitments: ['full_time']", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { commitments: "full_time", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ commitments: ["full_time"] });
+  });
+
+  it("--has-verifications → body has_verifications: true", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { "has-verifications": true, account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ has_verifications: true });
+  });
+
+  it("--under-10-applicants → body under_10_applicants: true", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { "under-10-applicants": true, account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ under_10_applicants: true });
+  });
+
+  it("--in-your-network → body in_your_network: true", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { "in-your-network": true, account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ in_your_network: true });
+  });
+
+  it("--fair-chance-employer → body fair_chance_employer: true", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, { "fair-chance-employer": true, account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ fair_chance_employer: true });
+  });
+
+  it("all 7 flags combined → all 7 keys present together", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      presence: "remote",
+      benefits: "medical_insurance",
+      commitments: "full_time",
+      "has-verifications": true,
+      "under-10-applicants": true,
+      "in-your-network": true,
+      "fair-chance-employer": true,
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      presence: ["remote"],
+      benefits: ["medical_insurance"],
+      commitments: ["full_time"],
+      has_verifications: true,
+      under_10_applicants: true,
+      in_your_network: true,
+      fair_chance_employer: true,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search people --connections-of / --followers-of → array
+// ---------------------------------------------------------------------------
+
+describe("search people: --connections-of / --followers-of comma-separated → array", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.people as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--connections-of urn:li:member:747216553 → body connections_of: [<value>] (single value wrapped in array)", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, {
+      "connections-of": "urn:li:member:747216553",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ connections_of: ["urn:li:member:747216553"] });
+  });
+
+  it("--connections-of 'id1,id2' → body connections_of: ['id1','id2']", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, { "connections-of": "id1,id2", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ connections_of: ["id1", "id2"] });
+  });
+
+  it("--followers-of id1 → body followers_of: ['id1']", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPeople(client as never, { "followers-of": "id1", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.people as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ followers_of: ["id1"] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search posts nested filter flags
+// ---------------------------------------------------------------------------
+
+describe("search posts: posted_by / mentioning / author nested filter flags merge, do not replace", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.posts as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--posted-by-member id1 → body posted_by: {member:['id1']}", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, { "posted-by-member": "id1", account: "acc_1", json: true } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ posted_by: { member: ["id1"] } });
+  });
+
+  it("--posted-by-member id1 --posted-by-me → both merge into ONE posted_by object", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      "posted-by-member": "id1",
+      "posted-by-me": true,
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ posted_by: { member: ["id1"], me: true } });
+  });
+
+  it("--mentioning-member id1 --mentioning-company c1 → body mentioning: {member:['id1'],company:['c1']}", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      "mentioning-member": "id1",
+      "mentioning-company": "c1",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ mentioning: { member: ["id1"], company: ["c1"] } });
+  });
+
+  it("--author-industry i1 --author-company c1 --author-keywords 'CTO' → body author: {industry:['i1'],company:['c1'],keywords:'CTO'}", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      "author-industry": "i1",
+      "author-company": "c1",
+      "author-keywords": "CTO",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ author: { industry: ["i1"], company: ["c1"], keywords: "CTO" } });
+  });
+
+  it("--posted-by-member id1 --mentioning-company c1 → distinct top-level keys, not merged with each other", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchPosts(client as never, {
+      "posted-by-member": "id1",
+      "mentioning-company": "c1",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({
+      posted_by: { member: ["id1"] },
+      mentioning: { company: ["c1"] },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search jobs --location-within-area
+// ---------------------------------------------------------------------------
+
+describe("search jobs --location-within-area parses to a number", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.search.jobs as Mock).mockResolvedValue({ items: [], cursor: null });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--location-within-area 25 --location 101282230 → location_within_area: 25 (number) + region (jobs geo mapping)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runSearchJobs(client as never, {
+      "location-within-area": "25",
+      location: "101282230",
+      account: "acc_1",
+      json: true,
+    } as SearchArgs, out);
+
+    const body = (accountNs.search.jobs as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).toEqual({ location_within_area: 25, region: "101282230" });
+    expect(typeof body["location_within_area"]).toBe("number");
+  });
+
+  it("--location-within-area abc → exit 2, no SDK call (non-numeric, before any SDK call)", async () => {
+    const { runSearchJobs } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = makeExitMock();
+
+    try {
+      await runSearchJobs(client as never, { "location-within-area": "abc", account: "acc_1" } as SearchArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.jobs).not.toHaveBeenCalled();
   });
 });

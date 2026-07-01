@@ -84,6 +84,44 @@ type SearchFlags = {
   "employment-type"?: string;
   "job-type"?: string;
   region?: string;
+  // Companies filter flags
+  "has-job-offers"?: boolean;
+  headcount?: string;
+  // Additional jobs filter flags
+  "has-verifications"?: boolean;
+  "under-10-applicants"?: boolean;
+  "in-your-network"?: boolean;
+  "fair-chance-employer"?: boolean;
+  presence?: string;
+  benefits?: string;
+  commitments?: string;
+  "location-within-area"?: string;
+  // Posts nested filter flags
+  "posted-by-member"?: string;
+  "posted-by-company"?: string;
+  "posted-by-me"?: boolean;
+  "mentioning-member"?: string;
+  "mentioning-company"?: string;
+  "author-industry"?: string;
+  "author-company"?: string;
+  "author-keywords"?: string;
+};
+
+/**
+ * The 7 fully-specified company headcount buckets. The substrate's 8th
+ * bucket (`10001+`) has no confirmed `{min,max}` pairing in the documented
+ * enum for the unbounded top bucket — it is deliberately deferred rather
+ * than guessed; passing it is an unrecognized bucket (exit 2), and `--help`
+ * documents the gap.
+ */
+const HEADCOUNT_BUCKETS: Record<string, { min: number; max: number }> = {
+  "1-10": { min: 1, max: 10 },
+  "11-50": { min: 11, max: 50 },
+  "51-200": { min: 51, max: 200 },
+  "201-500": { min: 201, max: 500 },
+  "501-1000": { min: 501, max: 1000 },
+  "1001-5000": { min: 1001, max: 5000 },
+  "5001-10000": { min: 5001, max: 10000 },
 };
 
 /**
@@ -170,11 +208,31 @@ function applyCommonSearchFlags(body: Record<string, unknown>, flags: SearchFlag
 }
 
 /**
+ * Merge a patch object INTO a nested body key, preserving any sub-fields
+ * already set there (by --filters or an earlier named flag targeting the same
+ * nested object) rather than replacing the object wholesale. Used by the
+ * search posts nested filter flags (posted-by / mentioning / author).
+ */
+function mergeNested(body: Record<string, unknown>, key: string, patch: Record<string, unknown>): void {
+  const existing =
+    body[key] !== null && body[key] !== undefined && typeof body[key] === "object" && !Array.isArray(body[key])
+      ? (body[key] as Record<string, unknown>)
+      : {};
+  body[key] = { ...existing, ...patch };
+}
+
+/**
  * Per-command named-flag mappers. Each maps the curated convenience flags to the
  * exact API request-body field names, merging OVER the --filters base body.
  * String-array fields are comma-separated; network_distance is a number array.
+ * A mapper may return an error string (usage error, exit 2 before any SDK call)
+ * instead of mutating the body — e.g. an unrecognized --headcount bucket or a
+ * non-numeric --location-within-area.
  */
-const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: SearchFlags) => void> = {
+const NAMED_FLAG_MAPPERS: Record<
+  string,
+  (body: Record<string, unknown>, flags: SearchFlags) => string | void
+> = {
   people(body, flags) {
     if (flags.industry) body["industry"] = splitCsv(flags.industry);
     if (flags.location) body["location"] = splitCsv(flags.location);
@@ -182,8 +240,9 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
     if (flags["past-company"]) body["past_company"] = splitCsv(flags["past-company"]);
     if (flags.school) body["school"] = splitCsv(flags.school);
     if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
-    if (flags["connections-of"]) body["connections_of"] = flags["connections-of"];
-    if (flags["followers-of"]) body["followers_of"] = flags["followers-of"];
+    // --connections-of / --followers-of: comma-separated → array
+    if (flags["connections-of"]) body["connections_of"] = splitCsv(flags["connections-of"]);
+    if (flags["followers-of"]) body["followers_of"] = splitCsv(flags["followers-of"]);
     // --title: merge into existing advanced_keywords object (not overwrite)
     if (flags.title) {
       const existingAK =
@@ -202,12 +261,38 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
     if (flags.industry) body["industry"] = splitCsv(flags.industry);
     if (flags.location) body["location"] = splitCsv(flags.location);
     if (flags["network-distance"]) body["network_distance"] = splitCsvNumbers(flags["network-distance"]);
+    // --has-job-offers / --headcount
+    if (flags["has-job-offers"]) body["has_job_offers"] = true;
+    if (flags.headcount) {
+      const buckets = splitCsv(flags.headcount);
+      const mapped: Array<{ min: number; max: number }> = [];
+      for (const bucket of buckets) {
+        const range = HEADCOUNT_BUCKETS[bucket];
+        if (!range) return `--headcount: unrecognized bucket "${bucket}"`;
+        mapped.push(range);
+      }
+      body["headcount"] = mapped;
+    }
   },
   posts(body, flags) {
     if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
     // normalize hyphen aliases (e.g. past-week → past_week) before sending
     if (flags["date-posted"]) body["date_posted"] = flags["date-posted"].replace(/-/g, "_");
     if (flags["content-type"]) body["content_type"] = flags["content-type"];
+
+    // Nested posted_by / mentioning / author filters. Each named flag
+    // merges INTO the shared nested object rather than replacing it wholesale
+    // (same deep-merge discipline as --title → advanced_keywords above).
+    if (flags["posted-by-member"]) mergeNested(body, "posted_by", { member: splitCsv(flags["posted-by-member"]) });
+    if (flags["posted-by-company"]) mergeNested(body, "posted_by", { company: splitCsv(flags["posted-by-company"]) });
+    if (flags["posted-by-me"]) mergeNested(body, "posted_by", { me: true });
+
+    if (flags["mentioning-member"]) mergeNested(body, "mentioning", { member: splitCsv(flags["mentioning-member"]) });
+    if (flags["mentioning-company"]) mergeNested(body, "mentioning", { company: splitCsv(flags["mentioning-company"]) });
+
+    if (flags["author-industry"]) mergeNested(body, "author", { industry: splitCsv(flags["author-industry"]) });
+    if (flags["author-company"]) mergeNested(body, "author", { company: splitCsv(flags["author-company"]) });
+    if (flags["author-keywords"]) mergeNested(body, "author", { keywords: flags["author-keywords"] });
   },
   jobs(body, flags) {
     // --location on jobs maps to body region (single opaque geo-id, not location array)
@@ -224,6 +309,25 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
     }
     // --region alias applied last so it wins over --location when both supplied
     if (flags.region) body["region"] = flags.region;
+    // --title: job_title_ids, comma-separated → body role
+    if (flags.title) body["role"] = splitCsv(flags.title);
+    // Additional named flags, all already server-wired but previously flag-less
+    if (flags.presence) body["presence"] = splitCsv(flags.presence);
+    if (flags.benefits) body["benefits"] = splitCsv(flags.benefits);
+    if (flags.commitments) body["commitments"] = splitCsv(flags.commitments);
+    if (flags["has-verifications"]) body["has_verifications"] = true;
+    if (flags["under-10-applicants"]) body["under_10_applicants"] = true;
+    if (flags["in-your-network"]) body["in_your_network"] = true;
+    if (flags["fair-chance-employer"]) body["fair_chance_employer"] = true;
+    // --location-within-area: miles, numeric only
+    if (flags["location-within-area"] !== undefined) {
+      const raw = flags["location-within-area"];
+      const n = Number(raw);
+      if (raw.trim() === "" || !Number.isFinite(n)) {
+        return `--location-within-area: must be a number (miles)`;
+      }
+      body["location_within_area"] = n;
+    }
   },
 };
 
@@ -231,7 +335,8 @@ const NAMED_FLAG_MAPPERS: Record<string, (body: Record<string, unknown>, flags: 
  * Build the POST search body: the --filters JSON base, then --keywords / --url /
  * pagination and the per-command named convenience flags merged OVER it.
  * Returns the body, or an `error` string when --filters does not parse to an
- * object (the caller exits 2 without an API call).
+ * object, or a named flag rejects its own value (e.g. --headcount, exit 2
+ * without an API call in either case).
  */
 async function buildSearchBody(
   kind: keyof typeof NAMED_FLAG_MAPPERS,
@@ -242,7 +347,8 @@ async function buildSearchBody(
   if ("error" in assembled) return assembled;
   const body = assembled.body;
   applyCommonSearchFlags(body, flags);
-  NAMED_FLAG_MAPPERS[kind]!(body, flags);
+  const mapperError = NAMED_FLAG_MAPPERS[kind]!(body, flags);
+  if (mapperError) return { error: mapperError };
   return { body };
 }
 
@@ -514,7 +620,7 @@ export async function runSearchParameters(
 // ---------------------------------------------------------------------------
 
 const searchPeopleCommand = defineCommand({
-  meta: { name: "people", description: "Search LinkedIn members with structured filters." },
+  meta: { name: "people", description: "Search members with structured filters." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -526,8 +632,8 @@ const searchPeopleCommand = defineCommand({
     "past-company": { type: "string", description: "Past company ids (comma-separated)." },
     school: { type: "string", description: "School ids (comma-separated)." },
     "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
-    "connections-of": { type: "string", description: "Member id whose connections to search." },
-    "followers-of": { type: "string", description: "Member id whose followers to search." },
+    "connections-of": { type: "string", description: "member id(s), comma-separated (resolve: search parameters --type CONNECTIONS --keywords \"<name>\")" },
+    "followers-of": { type: "string", description: "member id(s), comma-separated (resolve: search parameters --type PEOPLE --keywords \"<name>\")" },
     // People-specific filter flags
     title: { type: "string", description: "Job title keyword filter (maps to advanced_keywords.title)." },
     "profile-language": { type: "string", description: "Profile language codes (comma-separated, e.g. en,de)." },
@@ -552,7 +658,7 @@ const searchPeopleCommand = defineCommand({
 });
 
 const searchCompaniesCommand = defineCommand({
-  meta: { name: "companies", description: "Search LinkedIn companies." },
+  meta: { name: "companies", description: "Search companies." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -561,6 +667,12 @@ const searchCompaniesCommand = defineCommand({
     industry: { type: "string", description: "Industry ids (comma-separated)." },
     location: { type: "string", description: "Location ids (comma-separated)." },
     "network-distance": { type: "string", description: "Network distance, 1-3 (comma-separated)." },
+    "has-job-offers": { type: "boolean", description: "only companies with active job listings" },
+    headcount: {
+      type: "string",
+      description:
+        "company size, comma-separated: 1-10, 11-50, 51-200, 201-500, 501-1000, 1001-5000, 5001-10000, 10001+ (10001+ not yet supported)",
+    },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -582,7 +694,7 @@ const searchCompaniesCommand = defineCommand({
 });
 
 const searchPostsCommand = defineCommand({
-  meta: { name: "posts", description: "Search LinkedIn posts." },
+  meta: { name: "posts", description: "Search posts." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -590,7 +702,15 @@ const searchPostsCommand = defineCommand({
     ...FILTER_FLAGS,
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, date)." },
     "date-posted": { type: "string", description: "time window: past_day, past_week, or past_month (hyphens also accepted: past-day, past-week, past-month)" },
-    "content-type": { type: "string", description: "Content type (e.g. videos, images, jobs)." },
+    "content-type": { type: "string", description: "content type: videos, images, live_videos, collaborative_articles, documents" },
+    "posted-by-member": { type: "string", description: "member id(s), comma-separated (resolve: search parameters --type PEOPLE); merges into posted_by" },
+    "posted-by-company": { type: "string", description: "company id(s), comma-separated (resolve: search parameters --type COMPANY); merges into posted_by" },
+    "posted-by-me": { type: "boolean", description: "only posts authored by you; merges into posted_by" },
+    "mentioning-member": { type: "string", description: "member id(s) mentioned in the post, comma-separated (resolve: search parameters --type PEOPLE); merges into mentioning" },
+    "mentioning-company": { type: "string", description: "company id(s) mentioned in the post, comma-separated (resolve: search parameters --type COMPANY); merges into mentioning" },
+    "author-industry": { type: "string", description: "author's industry id(s), comma-separated (resolve: search parameters --type INDUSTRY); merges into author" },
+    "author-company": { type: "string", description: "author's company id(s), comma-separated (resolve: search parameters --type COMPANY); merges into author" },
+    "author-keywords": { type: "string", description: "author keyword filter (free text); merges into author" },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -612,7 +732,7 @@ const searchPostsCommand = defineCommand({
 });
 
 const searchJobsCommand = defineCommand({
-  meta: { name: "jobs", description: "Search LinkedIn jobs." },
+  meta: { name: "jobs", description: "Search jobs." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -621,13 +741,29 @@ const searchJobsCommand = defineCommand({
     // On jobs, --location maps to the geo region filter (not a location array — different API shape for jobs vs people)
     location: { type: "string", description: "geo region id (single id; resolve via search parameters --type LOCATION); maps to region filter" },
     industry: { type: "string", description: "Industry ids (comma-separated)." },
-    seniority: { type: "string", description: "Seniority ids (comma-separated)." },
+    seniority: { type: "string", description: "seniority level, closed enum: executive|director|mid_senior|associate|entry|intern (comma-separated)" },
     function: { type: "string", description: "Job function ids (comma-separated)." },
-    "job-type": { type: "string", description: "Job type ids, e.g. F,P (comma-separated)." },
+    "job-type": { type: "string", description: "job type, independent 7-value enum: full_time|part_time|contract|temporary|volunteer|internship|other (comma-separated)" },
     company: { type: "string", description: "Company ids (comma-separated)." },
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, recent)." },
     "date-posted": { type: "string", description: "maximum job age in days (a number — e.g. 7, 14, 30; not an enum string)" },
     region: { type: "string", description: "alias for --location (same body field: region)" },
+    title: {
+      type: "string",
+      description:
+        "job title id(s), comma-separated (resolve: search parameters --type JOB_TITLE); ID-based targeting — unlike search people --title, which is free-text",
+    },
+    presence: { type: "string", description: "work presence, comma-separated: on_site, hybrid, remote" },
+    benefits: { type: "string", description: "benefit ids, comma-separated" },
+    commitments: { type: "string", description: "commitment/employment types, comma-separated" },
+    "has-verifications": { type: "boolean", description: "only jobs with verified details" },
+    "under-10-applicants": { type: "boolean", description: "only jobs with fewer than 10 applicants" },
+    "in-your-network": { type: "boolean", description: "only jobs where you have a connection at the company" },
+    "fair-chance-employer": { type: "boolean", description: "only fair-chance employer jobs" },
+    "location-within-area": {
+      type: "string",
+      description: "radius in miles from --location (requires --location; numeric only)",
+    },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -652,7 +788,12 @@ const searchParametersCommand = defineCommand({
   meta: { name: "parameters", description: "Resolve human-readable terms to opaque filter IDs." },
   args: {
     ...GLOBAL_FLAGS,
-    type: { type: "string", description: "Parameter type (e.g. LOCATION, COMPANY, INDUSTRY).", required: true },
+    type: {
+      type: "string",
+      description:
+        "Parameter type: LOCATION, PEOPLE, CONNECTIONS, COMPANY, SCHOOL, INDUSTRY, SERVICE, JOB_FUNCTION, JOB_TITLE, EMPLOYMENT_TYPE, SKILL.",
+      required: true,
+    },
     keywords: { type: "string", description: "Human term to resolve (not required for EMPLOYMENT_TYPE)." },
   },
   async run({ args }) {
@@ -675,7 +816,7 @@ const searchParametersCommand = defineCommand({
 });
 
 export const searchCommand = defineCommand({
-  meta: { name: "search", description: "Search LinkedIn members, companies, posts, and jobs." },
+  meta: { name: "search", description: "Search people, companies, posts, and jobs." },
   subCommands: {
     people: searchPeopleCommand,
     companies: searchCompaniesCommand,
