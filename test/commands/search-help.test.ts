@@ -333,6 +333,39 @@ describe("help-text-only corrections: --type / --seniority / --job-type / --cont
     expect(contentTypeLine).not.toContain("jobs");
   });
 
+  it("branding rename: search --help group description drops 'LinkedIn'", () => {
+    const text = helpText(["search"]);
+    expect(text).toContain("Search people, companies, posts, and jobs.");
+  });
+
+  it("branding rename: none of the 4 subcommand one-liners contain 'LinkedIn'", () => {
+    for (const sub of ["people", "companies", "posts", "jobs"]) {
+      const text = helpText(["search", sub]);
+      // Isolate the one-line description (the first non-blank line under the
+      // command usage banner) so an unrelated flag description elsewhere in
+      // the same --help output can't false-positive this assertion.
+      const oneLiner = text.split("\n").find((l) => l.trim().length > 0) ?? "";
+      expect(oneLiner, `search ${sub} --help one-liner must not mention LinkedIn`).not.toMatch(/LinkedIn/i);
+    }
+  });
+
+  // Scoped to the group + 4 subcommand one-line descriptions (the actual
+  // branding-rename surface), not the full flag-by-flag --help dump: the dump
+  // legitimately still carries "Pasted LinkedIn search URL" on the --url flag,
+  // which is untouched by design — only titles/one-liners are in scope, not
+  // flag prose.
+  it("branding rename: concat of the group + 4 subcommand one-liners has zero 'LinkedIn' matches", () => {
+    const oneLiner = (text: string) => text.split("\n").find((l) => l.trim().length > 0) ?? "";
+    const combined = [
+      oneLiner(helpText(["search"])),
+      oneLiner(helpText(["search", "people"])),
+      oneLiner(helpText(["search", "companies"])),
+      oneLiner(helpText(["search", "posts"])),
+      oneLiner(helpText(["search", "jobs"])),
+    ].join("\n");
+    expect(combined).not.toMatch(/LinkedIn/i);
+  });
+
   it("regression guard: search jobs --seniority ceo is still a client-side no-op passthrough (help-text-only change)", () => {
     // The CLI does not validate --seniority values client-side — it splits on
     // comma and passes the value through; the server rejects an invalid enum

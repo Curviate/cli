@@ -620,7 +620,7 @@ export async function runSearchParameters(
 // ---------------------------------------------------------------------------
 
 const searchPeopleCommand = defineCommand({
-  meta: { name: "people", description: "Search LinkedIn members with structured filters." },
+  meta: { name: "people", description: "Search members with structured filters." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -658,7 +658,7 @@ const searchPeopleCommand = defineCommand({
 });
 
 const searchCompaniesCommand = defineCommand({
-  meta: { name: "companies", description: "Search LinkedIn companies." },
+  meta: { name: "companies", description: "Search companies." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -694,7 +694,7 @@ const searchCompaniesCommand = defineCommand({
 });
 
 const searchPostsCommand = defineCommand({
-  meta: { name: "posts", description: "Search LinkedIn posts." },
+  meta: { name: "posts", description: "Search posts." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -732,7 +732,7 @@ const searchPostsCommand = defineCommand({
 });
 
 const searchJobsCommand = defineCommand({
-  meta: { name: "jobs", description: "Search LinkedIn jobs." },
+  meta: { name: "jobs", description: "Search jobs." },
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
@@ -816,7 +816,7 @@ const searchParametersCommand = defineCommand({
 });
 
 export const searchCommand = defineCommand({
-  meta: { name: "search", description: "Search LinkedIn members, companies, posts, and jobs." },
+  meta: { name: "search", description: "Search people, companies, posts, and jobs." },
   subCommands: {
     people: searchPeopleCommand,
     companies: searchCompaniesCommand,
