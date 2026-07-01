@@ -8,6 +8,12 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-01
+
+### Changed
+
+- Updated `@curviate/sdk` dependency to `^0.7.0`. The `recruiter message new` command output now reflects the aligned start-chat response `{ object, chat_id, message_id }` (the SDK dropped the `attendee_ids` echo and now surfaces `message_id`). The command sends the request unchanged (`attendees_ids` plus recruiter-specific flags); it renders the server response verbatim, so no command flags change.
+
 ## [0.7.1] - 2026-07-01
 
 ### Fixed
