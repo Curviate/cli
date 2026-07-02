@@ -8,6 +8,20 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-02
+
+### Added
+
+- `recruiter reject-applicant` gained `--message` and `--notify-at` flags. The applicant is only notified of the rejection when `--message` is provided (the prior behavior — no notification — is unchanged when both are omitted). `--notify-at` schedules the notification (a UNIX-milliseconds timestamp) and requires `--message`; passing `--notify-at` alone, or a non-numeric value, is a usage error (exit `2`).
+- README gained dedicated "Sales Navigator" and "Recruiter" sections with numbered, runnable examples covering every in-scope command: searching and getting profiles, saving a lead, starting a chat, listing/searching Recruiter people and hiring projects, the job create → publish → checkpoint lifecycle, listing/getting applicants, downloading a resume, and rejecting an applicant with and without a notification.
+
+### Changed
+
+- **Help output cleanup:** Recruiter and Sales Navigator write commands (`add-candidate`, `add-applicant`, `reject-applicant`, `job create`/`publish`/`checkpoint`, `save-lead`, `message new`) and single-object read commands (`profile`, `project`, `applicant`, `applicant resume`) no longer advertise `--limit`/`--cursor`/`--all`/`--max-pages` in `--help` — those flags only ever applied to list/search commands, which keep them unchanged. Single-object reads keep `--fields`.
+- Corrected the `search parameters --type` flag description on both `recruiter` and `sales-nav` — it previously suggested example values (`LOCATION`, `INDUSTRY`, `TITLE`) that the API does not accept for either surface; it now lists the real accepted values.
+- Polished the `message new --to` flag description on both surfaces with the expected provider-ID format and a note that it is not resolved from a URL or slug.
+- Updated `@curviate/sdk` dependency to `^0.8.0`. No resource method signatures changed (per the SDK 0.8.0 changelog); Recruiter's job-lifecycle endpoints (applicant get/reject/resume, applicant list, job publish/checkpoint, Recruiter profile) are now fully implemented server-side instead of returning `501`.
+
 ## [0.7.2] - 2026-07-01
 
 ### Changed
