@@ -190,6 +190,25 @@ curviate sales-nav save-lead ACwAAA1234567 \
 curviate sales-nav save-lead ACwAAA1234567 --account acc_1 --list-id 987654
 ```
 
+### 3. Start a new Sales Navigator chat
+
+```bash
+curviate sales-nav message new \
+  --to ACwAAA1234567 \
+  --account acc_1 \
+  "Hi — I'd love to connect about an opportunity at our company."
+```
+
+### 4. Search Sales Navigator companies
+
+```bash
+curviate sales-nav search companies \
+  --keywords "series B fintech" \
+  --account acc_1 \
+  --limit 5 --json \
+  | jq -r '.items[] | "\(.id)\t\(.name)"'
+```
+
 ## Recruiter
 
 Recruiter commands (`curviate recruiter ...`) require an account with the Recruiter add-on tier
@@ -261,6 +280,51 @@ curviate recruiter reject-applicant AEM789 \
   --reason NOT_MEET_BASIC_QUALIFICATIONS \
   --message "Thanks for applying — we've decided to move forward with other candidates." \
   --preview
+```
+
+### 6. Search Recruiter people
+
+```bash
+curviate recruiter search people \
+  --keywords "senior backend engineer" \
+  --account acc_1 \
+  --limit 5 --json \
+  | jq -r '.items[] | "\(.id)\t\(.full_name // .headline)"'
+```
+
+### 7. Add a candidate to a hiring project, then promote them to applicant
+
+```bash
+curviate recruiter add-candidate AEM789 \
+  --account acc_1 \
+  --hiring-project-id proj_abc \
+  --stage UNCONTACTED
+
+# Once they've applied, move them to the applicant pool:
+curviate recruiter add-applicant AEM789 \
+  --account acc_1 \
+  --hiring-project-id proj_abc \
+  --stage CONTACTED
+```
+
+### 8. Inspect a single hiring project, then list its job postings
+
+```bash
+curviate recruiter project proj_abc --account acc_1 --json
+
+curviate recruiter jobs --account acc_1 --limit 10 --json \
+  | jq -r '.items[] | "\(.id)\t\(.title)\t\(.state)"'
+```
+
+### 9. Get a Recruiter-enriched profile, then start a chat with them
+
+```bash
+curviate recruiter profile "https://www.linkedin.com/in/example" --account acc_1 --json
+
+curviate recruiter message new \
+  --to AEM789 \
+  --account acc_1 \
+  "Hi — I came across your profile and think you'd be a great fit for a role we're hiring for."
 ```
 
 ## Exit codes

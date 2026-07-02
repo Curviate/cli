@@ -626,6 +626,8 @@ export async function runRecruiterAddApplicant(
  * omitting --message keeps the applicant unnotified, matching the API default.
  * --notify-at (rejection_notification.send_notification_at, UNIX ms) is only meaningful inside
  * rejection_notification, so it requires --message; passing --notify-at alone is a usage error (exit 2).
+ * A non-numeric --notify-at is also a usage error (exit 2) — caught client-side rather than
+ * forwarded as a malformed number for the server to reject with a 400.
  */
 export async function runRecruiterRejectApplicant(
   client: MinimalClient,
@@ -643,12 +645,21 @@ export async function runRecruiterRejectApplicant(
     process.exit(2);
   }
 
+  let notifyAt: number | undefined;
+  if (flags["notify-at"]) {
+    notifyAt = Number(flags["notify-at"]);
+    if (!Number.isFinite(notifyAt)) {
+      out.stderr.write("error: --notify-at must be a UNIX milliseconds timestamp (a number).\n");
+      process.exit(2);
+    }
+  }
+
   const body: Record<string, unknown> = {};
   if (flags["hiring-project-id"]) body["hiring_project_id"] = flags["hiring-project-id"];
   if (flags.reason) body["reason"] = flags.reason;
   if (flags.message) {
     const rejectionNotification: Record<string, unknown> = { message: flags.message };
-    if (flags["notify-at"]) rejectionNotification["send_notification_at"] = parseInt(flags["notify-at"], 10);
+    if (notifyAt !== undefined) rejectionNotification["send_notification_at"] = notifyAt;
     body["rejection_notification"] = rejectionNotification;
   }
 

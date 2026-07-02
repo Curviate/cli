@@ -964,6 +964,33 @@ describe("recruiter reject-applicant", () => {
     expect(stderrWritten).toContain("--message");
   });
 
+  it("non-numeric --notify-at (with --message) → usage error, exit 2, no SDK call", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterRejectApplicant(client as never, {
+        account: "acc_1",
+        userId: "AEM789",
+        "hiring-project-id": "proj_abc",
+        reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+        message: "Thanks for applying.",
+        "notify-at": "not-a-number",
+        json: true,
+      }, out);
+      expect.fail("expected process.exit(2)");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
+    const stderrWritten = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrWritten).toContain("--notify-at");
+  });
+
   it("--preview with --message renders rejection_notification in the previewed body", async () => {
     const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
