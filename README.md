@@ -158,6 +158,90 @@ curviate account list --all --json \
   > accounts.csv
 ```
 
+## Sales Navigator
+
+Sales Navigator commands (`curviate sales-nav ...`) require an account with the Sales Navigator
+add-on tier attached. A call against an account without it fails with **exit code `5`** and a
+`TIER_NOT_ACTIVE` error body naming the required tier (`sales_nav`) — branch on the exit code the
+same way as example 4 above. Write commands (`save-lead`, `message new`) accept `--preview` to
+render the request without sending it.
+
+### 1. Search Sales Navigator profiles, then get one full profile
+
+```bash
+curviate sales-nav search people \
+  --keywords "VP Engineering" \
+  --account acc_1 \
+  --limit 5 \
+  | jq -r '.items[0].id' \
+  | xargs -I{} curviate sales-nav profile {} --account acc_1
+```
+
+### 2. Save a lead to a specific lead list
+
+Preview first, then send:
+
+```bash
+curviate sales-nav save-lead ACwAAA1234567 \
+  --account acc_1 \
+  --list-id 987654 \
+  --preview
+
+curviate sales-nav save-lead ACwAAA1234567 --account acc_1 --list-id 987654
+```
+
+## Recruiter
+
+Recruiter commands (`curviate recruiter ...`) require an account with the Recruiter add-on tier
+attached. A call against an account without it fails with **exit code `5`** and a `TIER_NOT_ACTIVE`
+error body naming the required tier (`recruiter`). Write commands (`add-candidate`,
+`add-applicant`, `reject-applicant`, `job create`/`publish`/`checkpoint`, `message new`) accept
+`--preview` to render the request without sending it.
+
+### 1. List hiring projects
+
+```bash
+curviate recruiter projects --account acc_1 --limit 20 --json \
+  | jq -r '.items[] | "\(.id)\t\(.name)"'
+```
+
+### 2. Create a job posting draft, then publish it (with the checkpoint flow)
+
+Publishing can return a verification checkpoint instead of a published job — solve it with the
+`job_id` from the publish response, then retry:
+
+```bash
+curviate recruiter job create \
+  --account acc_1 \
+  --job-title "Senior Backend Engineer" \
+  --description "Remote-first team building the core platform." \
+  --employment-type FULL_TIME \
+  --json > draft.json
+
+JOB_ID=$(jq -r '.job_id' draft.json)
+
+curviate recruiter job publish "$JOB_ID" --account acc_1 --mode FREE --json > publish.json
+
+# If publish returns a checkpoint object instead of a published job, solve it:
+if [ "$(jq -r '.object // empty' publish.json)" = "job_posting_checkpoint" ]; then
+  curviate recruiter job checkpoint "$JOB_ID" --account acc_1 --input "123456"
+fi
+```
+
+### 3. List applicants for a job, then get one applicant's detail
+
+```bash
+curviate recruiter job applicants "$JOB_ID" --account acc_1 --limit 10 --json \
+  | jq -r '.items[0].id' \
+  | xargs -I{} curviate recruiter applicant {} --account acc_1
+```
+
+### 4. Download an applicant's resume
+
+```bash
+curviate recruiter applicant resume APPLICANT_ID --account acc_1 -o resume.pdf
+```
+
 ## Exit codes
 
 | Code | Meaning |

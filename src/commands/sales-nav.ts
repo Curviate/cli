@@ -16,7 +16,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -493,12 +493,18 @@ const salesNavSyncCommand = defineCommand({
 const salesNavMessageNewCommand = defineCommand({
   meta: { name: "new", description: "Start a new Sales Navigator chat." },
   args: {
-    ...GLOBAL_FLAGS,
-    to: { type: "string", description: "Recipient provider ID.", required: true },
-    text: { type: "positional", description: "Message text." },
-    attach: { type: "string", description: "File to attach (repeatable)." },
-    voice: { type: "string", description: "Voice message file." },
-    video: { type: "string", description: "Video message file." },
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    to: {
+      type: "string",
+      description:
+        "Recipient's LinkedIn provider ID (ACw… format, e.g. from a Sales Navigator search result or profile). Not resolved from a URL/slug — pass the provider ID directly.",
+      required: true,
+    },
+    text: { type: "positional", description: "Opening message text." },
+    attach: { type: "string", description: "File to attach (repeatable, max 7 MiB each)." },
+    voice: { type: "string", description: "Voice message file (max 7 MiB)." },
+    video: { type: "string", description: "Video message file (max 7 MiB)." },
   },
   async run({ args }) {
     const flags = args as SalesNavFlags;
@@ -595,7 +601,12 @@ const salesNavSearchParametersCommand = defineCommand({
   meta: { name: "parameters", description: "Resolve Sales Navigator filter parameter IDs." },
   args: {
     ...GLOBAL_FLAGS,
-    type: { type: "string", description: "Parameter type (e.g. LOCATION, INDUSTRY, TITLE).", required: true },
+    type: {
+      type: "string",
+      description:
+        "Parameter type to resolve. One of: GROUPS, SALES_INDUSTRY, DEPARTMENT, PERSONA, ACCOUNT_LISTS, LEAD_LISTS, TECHNOLOGIES, SAVED_ACCOUNTS, SAVED_SEARCHES, RECENT_SEARCHES, REGION, POSTAL_CODE.",
+      required: true,
+    },
     keywords: { type: "string", description: "Human term to resolve (e.g. Berlin)." },
   },
   async run({ args }) {
@@ -637,7 +648,8 @@ const salesNavSearchCommand = defineCommand({
 const salesNavProfileCommand = defineCommand({
   meta: { name: "profile", description: "Get a Sales Navigator enriched member profile." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     identifier: { type: "positional", description: "LinkedIn URL, slug, or native id." },
   },
   async run({ args }) {
@@ -662,7 +674,8 @@ const salesNavProfileCommand = defineCommand({
 const salesNavSaveLeadCommand = defineCommand({
   meta: { name: "save-lead", description: "Save a Sales Navigator member as a lead." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     userId: { type: "positional", description: "Sales Navigator member ID (ACw… format)." },
     "list-id": { type: "string", description: "Lead list ID to save the lead into." },
   },

@@ -27,7 +27,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -931,14 +931,20 @@ const recruiterSyncCommand = defineCommand({
 });
 
 const recruiterMessageNewCommand = defineCommand({
-  meta: { name: "new", description: "Start a new Recruiter chat (InMail)." },
+  meta: { name: "new", description: "Start a new Recruiter chat with a member." },
   args: {
-    ...GLOBAL_FLAGS,
-    to: { type: "string", description: "Recipient provider ID.", required: true },
-    text: { type: "positional", description: "Message text." },
-    attach: { type: "string", description: "File to attach (repeatable)." },
-    voice: { type: "string", description: "Voice message file." },
-    video: { type: "string", description: "Video message file." },
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    to: {
+      type: "string",
+      description:
+        "Recipient's LinkedIn provider ID (AE… format, e.g. from a Recruiter search result or profile). Not resolved from a URL/slug — pass the provider ID directly.",
+      required: true,
+    },
+    text: { type: "positional", description: "Opening message text." },
+    attach: { type: "string", description: "File to attach (repeatable, max 7 MiB each)." },
+    voice: { type: "string", description: "Voice message file (max 7 MiB)." },
+    video: { type: "string", description: "Video message file (max 7 MiB)." },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -973,7 +979,8 @@ const recruiterMessageCommand = defineCommand({
 const recruiterProfileCommand = defineCommand({
   meta: { name: "profile", description: "Get a Recruiter enriched member profile." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     identifier: { type: "positional", description: "LinkedIn URL, slug, or native id." },
   },
   async run({ args }) {
@@ -1030,7 +1037,12 @@ const recruiterSearchParametersCommand = defineCommand({
   meta: { name: "parameters", description: "Resolve Recruiter filter parameter IDs." },
   args: {
     ...GLOBAL_FLAGS,
-    type: { type: "string", description: "Parameter type (e.g. LOCATION, INDUSTRY, TITLE).", required: true },
+    type: {
+      type: "string",
+      description:
+        "Parameter type to resolve. One of: GROUPS, DEPARTMENT, HIRING_PROJECTS, SAVED_SEARCHES, SAVED_FILTERS, DEGREE.",
+      required: true,
+    },
     keywords: { type: "string", description: "Human term to resolve (e.g. Berlin)." },
   },
   async run({ args }) {
@@ -1092,7 +1104,8 @@ const recruiterProjectsCommand = defineCommand({
 const recruiterProjectCommand = defineCommand({
   meta: { name: "project", description: "Get a Recruiter hiring project by ID." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     projectId: { type: "positional", description: "Recruiter project ID." },
   },
   async run({ args }) {
@@ -1117,7 +1130,8 @@ const recruiterProjectCommand = defineCommand({
 const recruiterAddCandidateCommand = defineCommand({
   meta: { name: "add-candidate", description: "Add a member as a candidate in a hiring project." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     userId: { type: "positional", description: "Member ID (AEM… format)." },
     "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
     stage: { type: "string", description: "Pipeline stage (UNCONTACTED, CONTACTED, REPLIED)." },
@@ -1144,7 +1158,8 @@ const recruiterAddCandidateCommand = defineCommand({
 const recruiterAddApplicantCommand = defineCommand({
   meta: { name: "add-applicant", description: "Add a member as an applicant in a hiring project." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     userId: { type: "positional", description: "Member ID (AEM… format)." },
     "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
     stage: { type: "string", description: "Pipeline stage (UNCONTACTED, CONTACTED, REPLIED)." },
@@ -1171,7 +1186,8 @@ const recruiterAddApplicantCommand = defineCommand({
 const recruiterRejectApplicantCommand = defineCommand({
   meta: { name: "reject-applicant", description: "Reject an applicant from a hiring project." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     userId: { type: "positional", description: "Member ID (AEM… format)." },
     "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
     reason: {
@@ -1224,7 +1240,8 @@ const recruiterJobsCommand = defineCommand({
 const recruiterJobCreateCommand = defineCommand({
   meta: { name: "create", description: "Create a Recruiter job posting draft." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     "body-file": { type: "string", description: "Path to a JSON file with the full job-create body." },
     body: { type: "string", description: "Read the JSON job-create body from stdin (pass '-')." },
     "job-title": { type: "string", description: "Job title text (merged over the JSON as job_title.text)." },
@@ -1253,7 +1270,8 @@ const recruiterJobCreateCommand = defineCommand({
 const recruiterJobPublishCommand = defineCommand({
   meta: { name: "publish", description: "Publish a Recruiter job posting draft." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     jobId: { type: "positional", description: "Job posting ID." },
     mode: { type: "string", description: "Publish mode: FREE (default), PROMOTED, or PROMOTED_PLUS." },
   },
@@ -1279,7 +1297,8 @@ const recruiterJobPublishCommand = defineCommand({
 const recruiterJobCheckpointCommand = defineCommand({
   meta: { name: "checkpoint", description: "Solve a job posting publish verification checkpoint." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
     jobId: { type: "positional", description: "Job posting ID." },
     input: { type: "string", description: "Verification value (OTP or email confirmation).", required: true },
   },
@@ -1349,7 +1368,8 @@ const recruiterJobCommand = defineCommand({
 const recruiterApplicantResumeCommand = defineCommand({
   meta: { name: "resume", description: "Download a job applicant's resume." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     applicantId: { type: "positional", description: "Applicant ID." },
     output: { type: "string", alias: "o", description: "Path to write the resume file." },
   },
@@ -1380,7 +1400,8 @@ const recruiterApplicantResumeCommand = defineCommand({
 const recruiterApplicantCommand = defineCommand({
   meta: { name: "applicant", description: "Recruiter job applicant operations." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     applicantId: { type: "positional", description: "Applicant ID.", required: false },
   },
   subCommands: {
