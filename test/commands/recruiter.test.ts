@@ -868,6 +868,124 @@ describe("recruiter reject-applicant", () => {
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("recruiter.rejectApplicant");
   });
+
+  it("omitting --message and --notify-at sends no rejection_notification (default: applicant not notified)", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterRejectApplicant(client as never, {
+      account: "acc_1",
+      userId: "AEM789",
+      "hiring-project-id": "proj_abc",
+      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+      json: true,
+    }, out);
+
+    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("rejection_notification");
+  });
+
+  it("--message alone adds rejection_notification.message, no send_notification_at", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterRejectApplicant(client as never, {
+      account: "acc_1",
+      userId: "AEM789",
+      "hiring-project-id": "proj_abc",
+      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+      message: "Thanks for applying — we've decided to move forward with other candidates.",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.rejectApplicant).toHaveBeenCalledWith(
+      "AEM789",
+      expect.objectContaining({
+        rejection_notification: {
+          message: "Thanks for applying — we've decided to move forward with other candidates.",
+        },
+      }),
+    );
+    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body["rejection_notification"]).not.toHaveProperty("send_notification_at");
+  });
+
+  it("--message + --notify-at adds both fields, send_notification_at as a number", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterRejectApplicant(client as never, {
+      account: "acc_1",
+      userId: "AEM789",
+      "hiring-project-id": "proj_abc",
+      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+      message: "Thanks for applying.",
+      "notify-at": "1735689600000",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.rejectApplicant).toHaveBeenCalledWith(
+      "AEM789",
+      expect.objectContaining({
+        rejection_notification: {
+          message: "Thanks for applying.",
+          send_notification_at: 1735689600000,
+        },
+      }),
+    );
+    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
+    const notification = body["rejection_notification"] as Record<string, unknown>;
+    expect(typeof notification["send_notification_at"]).toBe("number");
+  });
+
+  it("--notify-at without --message → usage error, exit 2, no SDK call", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterRejectApplicant(client as never, {
+        account: "acc_1",
+        userId: "AEM789",
+        "hiring-project-id": "proj_abc",
+        reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+        "notify-at": "1735689600000",
+        json: true,
+      }, out);
+      expect.fail("expected process.exit(2)");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
+    const stderrWritten = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrWritten).toContain("--message");
+  });
+
+  it("--preview with --message renders rejection_notification in the previewed body", async () => {
+    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterRejectApplicant(client as never, {
+      account: "acc_1",
+      userId: "AEM789",
+      "hiring-project-id": "proj_abc",
+      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
+      message: "Thanks for applying.",
+      "notify-at": "1735689600000",
+      preview: true,
+    }, out);
+
+    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.body.rejection_notification).toEqual({
+      message: "Thanks for applying.",
+      send_notification_at: 1735689600000,
+    });
+  });
 });
 
 // ─── recruiter jobs ────────────────────────────────────────────────────────

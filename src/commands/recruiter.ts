@@ -11,7 +11,7 @@
  *   recruiter project <project_id>                                               — get project (read, verbatim id)
  *   recruiter add-candidate <user_id> --hiring-project-id <id> [--stage <s>]    — add candidate (write)
  *   recruiter add-applicant <user_id> --hiring-project-id <id> [--stage <s>]    — add applicant (write)
- *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>  — reject applicant (write)
+ *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r> [--message <m>] [--notify-at <ms>] — reject applicant (write; applicant is notified only when --message is given)
  *   recruiter jobs [--all] [--limit] [--cursor]                                  — list jobs (read)
  *   recruiter job create [--body-file <path> | --body -] [--job-title <t>] [--description <d>] [--employment-type <e>] — create job draft (write; JSON body + scalar flags)
  *   recruiter job publish <job_id> [--mode <m>]                                  — publish job (write)
@@ -86,6 +86,8 @@ type RecruiterFlags = {
   "hiring-project-id"?: string;
   stage?: string;
   reason?: string;
+  message?: string;
+  "notify-at"?: string;
   mode?: string;
   input?: string;
   output?: string;
@@ -616,8 +618,14 @@ export async function runRecruiterAddApplicant(
 }
 
 /**
- * Run `recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>`.
+ * Run `recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r> [--message <m>] [--notify-at <ms>]`.
  * Write command — supports --preview. user_id passes verbatim.
+ *
+ * --message is optional; when present it adds rejection_notification.message to the body,
+ * which is the only thing that causes LinkedIn to notify the applicant of the rejection —
+ * omitting --message keeps the applicant unnotified, matching the API default.
+ * --notify-at (rejection_notification.send_notification_at, UNIX ms) is only meaningful inside
+ * rejection_notification, so it requires --message; passing --notify-at alone is a usage error (exit 2).
  */
 export async function runRecruiterRejectApplicant(
   client: MinimalClient,
@@ -628,9 +636,21 @@ export async function runRecruiterRejectApplicant(
   const userId = flags.userId ?? "";
   const outOpts = resolveOutputOpts(flags);
 
+  if (flags["notify-at"] && !flags.message) {
+    out.stderr.write(
+      "error: --notify-at requires --message (rejection_notification.message is required to send a notification).\n",
+    );
+    process.exit(2);
+  }
+
   const body: Record<string, unknown> = {};
   if (flags["hiring-project-id"]) body["hiring_project_id"] = flags["hiring-project-id"];
   if (flags.reason) body["reason"] = flags.reason;
+  if (flags.message) {
+    const rejectionNotification: Record<string, unknown> = { message: flags.message };
+    if (flags["notify-at"]) rejectionNotification["send_notification_at"] = parseInt(flags["notify-at"], 10);
+    body["rejection_notification"] = rejectionNotification;
+  }
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -1194,6 +1214,14 @@ const recruiterRejectApplicantCommand = defineCommand({
       type: "string",
       description: "Rejection reason (NOT_MEET_BASIC_QUALIFICATIONS, NOT_IN_DESIRED_LOCATION, MORE_QUALIFIED_CANDIDATES, WITHDREW_APPLICATION, NOT_CONSIDERED_OR_REASON_NOT_SPECIFIED).",
       required: true,
+    },
+    message: {
+      type: "string",
+      description: "Rejection notification text. The applicant is only notified when --message is provided; omit it to reject silently.",
+    },
+    "notify-at": {
+      type: "string",
+      description: "UNIX milliseconds timestamp to schedule the notification (default: now). Requires --message.",
     },
   },
   async run({ args }) {

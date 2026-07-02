@@ -242,6 +242,27 @@ curviate recruiter job applicants "$JOB_ID" --account acc_1 --limit 10 --json \
 curviate recruiter applicant resume APPLICANT_ID --account acc_1 -o resume.pdf
 ```
 
+### 5. Reject an applicant, optionally notifying them
+
+The applicant is only notified when `--message` is given; omit it to reject silently.
+`--notify-at` (a UNIX-ms timestamp to schedule the notification) requires `--message`.
+
+```bash
+# Silent rejection — no notification sent
+curviate recruiter reject-applicant AEM789 \
+  --account acc_1 \
+  --hiring-project-id proj_abc \
+  --reason NOT_MEET_BASIC_QUALIFICATIONS
+
+# Rejection with a notification to the applicant
+curviate recruiter reject-applicant AEM789 \
+  --account acc_1 \
+  --hiring-project-id proj_abc \
+  --reason NOT_MEET_BASIC_QUALIFICATIONS \
+  --message "Thanks for applying — we've decided to move forward with other candidates." \
+  --preview
+```
+
 ## Exit codes
 
 | Code | Meaning |
