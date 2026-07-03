@@ -17,6 +17,7 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ### Changed
 
+- `@curviate/sdk` dependency bumped to `^0.9.0`.
 - `account get --help` no longer advertises `--limit`/`--cursor`/`--all`/`--max-pages` — a single-object read, those flags never applied. `--fields` is unchanged and still available. `account list` is unaffected (a genuine list read, keeps all pagination flags).
 
 ## [0.8.0] - 2026-07-02
