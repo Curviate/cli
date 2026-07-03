@@ -17,15 +17,24 @@
  * account_id positionals pass verbatim (NOT resolveIdentifier — not a member/company id).
  * Checkpoint ops are body-addressed: the checkpoint id goes in the body as `account_id`
  * (the provisional account from the 202 response), passed via --checkpoint flag.
+ *
+ * Slim projection (default): account list and account get return a
+ * compact field subset — six cached account-enrichment fields (username,
+ * premium_id, public_identifier, substrate_created_at, signatures, groups)
+ * are verbose-only. Pass --verbose for the full SDK response. account get
+ * keeps --fields but suppresses --limit/--cursor/--all/--max-pages (a
+ * single-object read) — account list is unaffected (a genuine list read,
+ * keeps all pagination flags).
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
+import { slimAccountList, slimAccountListItem, slimAccountGet } from "../lib/slim.js";
 import type { CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +75,7 @@ type AccountFlags = {
   all?: boolean;
   "max-pages"?: string;
   preview?: boolean;
+  verbose?: boolean;
   "api-key"?: string;
   "base-url"?: string;
   timeout?: string;
@@ -123,6 +133,7 @@ function resolveOutputOpts(flags: AccountFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -167,11 +178,13 @@ export async function runAccountList(
         maxPages,
         onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        // Slim mode (default) projects each NDJSON item too; --verbose emits raw items.
+        const projected = outOpts.verbose ? item : slimAccountListItem(item as Record<string, unknown>);
+        out.stdout.write(JSON.stringify(projected) + "\n");
       }
     } else {
       const result = await client.accounts.list(params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimAccountList }, out);
     }
   } catch (err) {
     await handleError(err, outOpts, out);
@@ -192,7 +205,7 @@ export async function runAccountGet(
 
   try {
     const result = await client.accounts.get(accountId);
-    renderSuccess(result, outOpts, out);
+    renderSuccess(result, { ...outOpts, slim: slimAccountGet }, out);
   } catch (err) {
     await handleError(err, outOpts, out);
   }
@@ -557,7 +570,8 @@ const accountListCommand = defineCommand({
 const accountGetCommand = defineCommand({
   meta: { name: "get", description: "Get a connected LinkedIn account." },
   args: {
-    ...GLOBAL_FLAGS,
+    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...READ_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
   },
   async run({ args }) {

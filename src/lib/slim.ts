@@ -443,6 +443,74 @@ export function slimSearchPosts(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// account list / account get
+// ---------------------------------------------------------------------------
+
+/**
+ * Project a single `account list` item to the slim field set.
+ *
+ * Exact fields: account_id, status, auth_method, full_name, headline,
+ * seat_id, connected_at. The six cached account-enrichment fields (username,
+ * premium_id, public_identifier, substrate_created_at, signatures, groups)
+ * are verbose-only — excluded here by construction (fresh object literal,
+ * no spread of the source item).
+ */
+export function slimAccountListItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    account_id: item["account_id"] ?? null,
+    status: item["status"] ?? null,
+    auth_method: item["auth_method"] ?? null,
+    full_name: item["full_name"] ?? null,
+    headline: item["headline"] ?? null,
+    seat_id: item["seat_id"] ?? null,
+    connected_at: item["connected_at"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for the `account list` list envelope.
+ * Projects each item via slimAccountListItem; preserves envelope shape.
+ */
+export function slimAccountList(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimAccountListItem)
+    : [];
+
+  return { object: d["object"] ?? null, items, cursor: d["cursor"] ?? null };
+}
+
+/**
+ * Slim-default projection for `account get` — the first slim/verbose split
+ * on this command (previously slim and verbose were byte-identical).
+ *
+ * Exact fields: account_id, status, auth_method, full_name, headline,
+ * seat_id, connected_at, last_checked_at, quotas. `seat_id` is a slim field
+ * here (unlike the six enrichment fields) — core identity/troubleshooting
+ * data, not part of the enrichment cache.
+ */
+export function slimAccountGet(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  return {
+    account_id: d["account_id"] ?? null,
+    status: d["status"] ?? null,
+    auth_method: d["auth_method"] ?? null,
+    full_name: d["full_name"] ?? null,
+    headline: d["headline"] ?? null,
+    seat_id: d["seat_id"] ?? null,
+    connected_at: d["connected_at"] ?? null,
+    last_checked_at: d["last_checked_at"] ?? null,
+    quotas: d["quotas"] ?? [],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // company <id>
 // ---------------------------------------------------------------------------
 

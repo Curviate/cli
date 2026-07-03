@@ -79,6 +79,7 @@ type AccountFlags = {
   cursor?: string;
   fields?: string;
   preview?: boolean;
+  verbose?: boolean;
   "api-key"?: string;
   "base-url"?: string;
   timeout?: string;
@@ -122,14 +123,14 @@ describe("account list", () => {
     expect(client.accounts.list).toHaveBeenCalledWith({ limit: 5, cursor: "tok_abc" });
   });
 
-  it("--all streams NDJSON over two pages", async () => {
+  it("--all streams NDJSON over two pages (--verbose to isolate pagination mechanics from slim projection — see the dedicated slim/verbose describe block below)", async () => {
     const { runAccountList } = await import("../../src/commands/account.js");
     const out = makeOut();
     (client.accounts.list as Mock)
       .mockResolvedValueOnce({ items: [{ account_id: "acc_1" }, { account_id: "acc_2" }], cursor: "c1" })
       .mockResolvedValueOnce({ items: [{ account_id: "acc_3" }], cursor: null });
 
-    await runAccountList(client as never, { all: true } as AccountFlags, out);
+    await runAccountList(client as never, { all: true, verbose: true } as AccountFlags, out);
 
     const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
     const ndjson = lines.filter((l) => l.trim().startsWith("{"));
@@ -197,6 +198,238 @@ describe("account get", () => {
       expect((e as Error).message).toContain("process.exit(2)");
     } finally {
       exitSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// account list / account get — slim/verbose split
+// ---------------------------------------------------------------------------
+
+const ENRICHED_ITEM = {
+  account_id: "acc_1",
+  status: "active",
+  auth_method: "credentials",
+  full_name: "Ada Lovelace",
+  headline: "Engineer",
+  seat_id: "seat_1",
+  connected_at: "2026-06-01T09:00:00Z",
+  username: "ada.lovelace",
+  premium_id: "prem_1",
+  public_identifier: "ada-lovelace",
+  substrate_created_at: "2020-01-01T00:00:00Z",
+  signatures: [{ title: "Default", content: "Best, Ada" }],
+  groups: ["Alumni Network"],
+};
+
+const NEVER_ENRICHED_ITEM = {
+  account_id: "acc_2",
+  status: "active",
+  auth_method: "credentials",
+  full_name: "Bob Babbage",
+  headline: null,
+  seat_id: "seat_2",
+  connected_at: "2026-06-02T09:00:00Z",
+  username: null,
+  premium_id: null,
+  public_identifier: null,
+  substrate_created_at: null,
+  signatures: [],
+  groups: [],
+};
+
+const SLIM_LIST_KEYS = ["account_id", "status", "auth_method", "full_name", "headline", "seat_id", "connected_at"];
+const ENRICHMENT_KEYS = ["username", "premium_id", "public_identifier", "substrate_created_at", "signatures", "groups"];
+
+describe("account list — slim/verbose split", () => {
+  let client: Client;
+
+  beforeEach(() => {
+    client = makeClient();
+    (client.accounts.list as Mock).mockResolvedValue({
+      object: "account_list",
+      items: [ENRICHED_ITEM],
+      cursor: null,
+    });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("slim mode: item has exactly the 7 slim keys, no enrichment fields", async () => {
+    const { runAccountList } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountList(client as never, { json: true } as AccountFlags, out);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(Object.keys(parsed.items[0]).sort()).toEqual([...SLIM_LIST_KEYS].sort());
+    for (const key of ENRICHMENT_KEYS) {
+      expect(parsed.items[0]).not.toHaveProperty(key);
+    }
+  });
+
+  it("--verbose: item additionally has all six enrichment fields matching the fixture", async () => {
+    const { runAccountList } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountList(client as never, { json: true, verbose: true } as AccountFlags, out);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.items[0]).toMatchObject({
+      username: "ada.lovelace",
+      premium_id: "prem_1",
+      public_identifier: "ada-lovelace",
+      substrate_created_at: "2020-01-01T00:00:00Z",
+      signatures: [{ title: "Default", content: "Best, Ada" }],
+      groups: ["Alumni Network"],
+    });
+  });
+
+  it("--verbose on a never-enriched item shows explicit null/[] — not undefined, not a missing key", async () => {
+    (client.accounts.list as Mock).mockResolvedValue({
+      object: "account_list",
+      items: [NEVER_ENRICHED_ITEM],
+      cursor: null,
+    });
+    const { runAccountList } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountList(client as never, { json: true, verbose: true } as AccountFlags, out);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    const item = parsed.items[0];
+    for (const key of ["username", "premium_id", "public_identifier", "substrate_created_at"]) {
+      expect(item).toHaveProperty(key);
+      expect(item[key]).toBeNull();
+    }
+    expect(item.signatures).toEqual([]);
+    expect(item.groups).toEqual([]);
+  });
+
+  it("--all NDJSON stream applies slim projection per item unless --verbose", async () => {
+    (client.accounts.list as Mock)
+      .mockResolvedValueOnce({ items: [ENRICHED_ITEM], cursor: null });
+    const { runAccountList } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountList(client as never, { all: true } as AccountFlags, out);
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
+    const item = JSON.parse(lines[0]!);
+    expect(Object.keys(item).sort()).toEqual([...SLIM_LIST_KEYS].sort());
+  });
+
+  it("--all --verbose NDJSON stream emits the full item verbatim", async () => {
+    (client.accounts.list as Mock)
+      .mockResolvedValueOnce({ items: [ENRICHED_ITEM], cursor: null });
+    const { runAccountList } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountList(client as never, { all: true, verbose: true } as AccountFlags, out);
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
+    const item = JSON.parse(lines[0]!);
+    expect(item.username).toBe("ada.lovelace");
+  });
+});
+
+describe("account get — slim/verbose split (first-ever on this command)", () => {
+  let client: Client;
+
+  const GET_FIXTURE = { ...ENRICHED_ITEM, last_checked_at: "2026-06-08T09:00:00Z", quotas: [] };
+  const SLIM_GET_KEYS = [...SLIM_LIST_KEYS, "last_checked_at", "quotas"];
+
+  beforeEach(() => {
+    client = makeClient();
+    (client.accounts.get as Mock).mockResolvedValue(GET_FIXTURE);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("slim mode: exactly the 9 slim keys, seat_id present, no enrichment fields", async () => {
+    const { runAccountGet } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true } as AccountFlags, out);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(Object.keys(parsed).sort()).toEqual([...SLIM_GET_KEYS].sort());
+    expect(parsed.seat_id).toBe("seat_1");
+    for (const key of ENRICHMENT_KEYS) {
+      expect(parsed).not.toHaveProperty(key);
+    }
+  });
+
+  it("--verbose: all six enrichment fields present and matching", async () => {
+    const { runAccountGet } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true, verbose: true } as AccountFlags, out);
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed).toMatchObject({
+      username: "ada.lovelace",
+      premium_id: "prem_1",
+      public_identifier: "ada-lovelace",
+      substrate_created_at: "2020-01-01T00:00:00Z",
+      signatures: [{ title: "Default", content: "Best, Ada" }],
+      groups: ["Alumni Network"],
+    });
+  });
+
+  it("admin seatless account: slim seat_id === null in both modes", async () => {
+    (client.accounts.get as Mock).mockResolvedValue({ ...GET_FIXTURE, seat_id: null });
+    const { runAccountGet } = await import("../../src/commands/account.js");
+
+    const out1 = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true } as AccountFlags, out1);
+    const parsed1 = JSON.parse((out1.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+    expect(parsed1.seat_id).toBeNull();
+
+    const out2 = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true, verbose: true } as AccountFlags, out2);
+    const parsed2 = JSON.parse((out2.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+    expect(parsed2.seat_id).toBeNull();
+  });
+
+  it("slim output is a strict subset of keys of the verbose output", async () => {
+    const { runAccountGet } = await import("../../src/commands/account.js");
+
+    const outSlim = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true } as AccountFlags, outSlim);
+    const slimParsed = JSON.parse((outSlim.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+
+    const outVerbose = makeOut();
+    await runAccountGet(client as never, { "account-id": "acc_1", json: true, verbose: true } as AccountFlags, outVerbose);
+    const verboseParsed = JSON.parse((outVerbose.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+
+    for (const key of Object.keys(slimParsed)) {
+      expect(verboseParsed).toHaveProperty(key);
+      expect(verboseParsed[key]).toEqual(slimParsed[key]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// account get — pagination-flag suppression
+// ---------------------------------------------------------------------------
+
+describe("account get — args definition suppresses pagination flags, keeps --fields", () => {
+  const PAGINATION_ONLY_FLAGS = ["limit", "cursor", "all", "max-pages"] as const;
+
+  it("account get — args definition has no pagination-only flags", async () => {
+    const { accountCommand } = await import("../../src/commands/account.js");
+    const subCmds = (accountCommand as Record<string, unknown>).subCommands as Record<
+      string,
+      { args?: Record<string, unknown> }
+    >;
+    const args = subCmds["get"]?.args ?? {};
+    for (const flag of PAGINATION_ONLY_FLAGS) {
+      expect(args, `account get args must NOT include --${flag}`).not.toHaveProperty(flag);
+    }
+    expect(args, "account get must keep --fields (single-object read)").toHaveProperty("fields");
+  });
+
+  it("account list — args definition DOES have all pagination flags (negative control)", async () => {
+    const { accountCommand } = await import("../../src/commands/account.js");
+    const subCmds = (accountCommand as Record<string, unknown>).subCommands as Record<
+      string,
+      { args?: Record<string, unknown> }
+    >;
+    const args = subCmds["list"]?.args ?? {};
+    for (const flag of PAGINATION_ONLY_FLAGS) {
+      expect(args, `account list args must include --${flag}`).toHaveProperty(flag);
     }
   });
 });

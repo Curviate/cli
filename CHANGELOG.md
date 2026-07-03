@@ -8,6 +8,17 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-03
+
+### Added
+
+- `account list` and `account get` gain a compact **slim-default** output — pass `--verbose` for the full API response. Slim `account list` items: `account_id`, `status`, `auth_method`, `full_name`, `headline`, `seat_id`, `connected_at`. Slim `account get`: the same seven fields plus `last_checked_at` and `quotas`. Six cached account-detail fields (`username`, `premium_id`, `public_identifier`, `substrate_created_at`, `signatures`, `groups`) are verbose-only on both commands — they are `null`/`[]` on an account that hasn't been enriched yet, never a missing key. `--all` NDJSON streaming on `account list` applies the same slim projection per item unless `--verbose` is passed.
+- `account get` gains `seat_id` in its slim output (previously only `account list` carried it) — the seat the account occupies, `null` for an admin seatless account.
+
+### Changed
+
+- `account get --help` no longer advertises `--limit`/`--cursor`/`--all`/`--max-pages` — a single-object read, those flags never applied. `--fields` is unchanged and still available. `account list` is unaffected (a genuine list read, keeps all pagination flags).
+
 ## [0.8.0] - 2026-07-02
 
 ### Added
