@@ -171,6 +171,42 @@ describe("router — subcommands still route after the bare-form fix", () => {
     const lines = r.stdout.trim().split("\n").filter(Boolean);
     expect(lines.length).toBe(1);
   });
+
+  it("job get <url> reaches the jobs.get SDK path (subcommand, not bare)", () => {
+    const r = run([
+      "job", "get", "https://www.linkedin.com/jobs/view/4428113858",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("recruiter job get <id> reaches the recruiter.getJob SDK path (nested subcommand)", () => {
+    const r = run([
+      "recruiter", "job", "get", "4428113858",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("recruiter job applicants <job_id> still routes correctly (job get does not shadow other job verbs)", () => {
+    const r = run([
+      "recruiter", "job", "applicants", "job_99",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
 });
 
 describe("router — usage/routing errors exit 2", () => {

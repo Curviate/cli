@@ -158,6 +158,20 @@ curviate account list --all --json \
   > accounts.csv
 ```
 
+### 7. Search jobs, then fetch full detail on the top result
+
+`job get` accepts either a job URL or the bare numeric id — including the `job_urn` field a
+job-search result already returns:
+
+```bash
+curviate search jobs --keywords "founding engineer" --location "Berlin" --account acc_1 --json \
+  | jq -r '.items[0].job_urn' \
+  | xargs -I{} curviate job get {} --account acc_1 --json
+
+# A pasted job URL works identically:
+curviate job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1
+```
+
 ## Sales Navigator
 
 Sales Navigator commands (`curviate sales-nav ...`) require an account with the Sales Navigator
@@ -325,6 +339,19 @@ curviate recruiter message new \
   --to AEM789 \
   --account acc_1 \
   "Hi — I came across your profile and think you'd be a great fit for a role we're hiring for."
+```
+
+### 10. Get any public job posting through the Recruiter lens
+
+Unlike `recruiter jobs` (which lists postings you manage), `recruiter job get` retrieves the full
+detail of *any* public LinkedIn job posting — the Recruiter-seated counterpart to the top-level
+`job get` command:
+
+```bash
+curviate recruiter job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1 --json
+
+# Bare numeric id works identically:
+curviate recruiter job get 4428113858 --account acc_1 --verbose
 ```
 
 ## Exit codes

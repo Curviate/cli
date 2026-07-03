@@ -49,6 +49,7 @@ describe("recruiter single-object read commands — no pagination flags in help 
     ["project", ["project"]],
     ["applicant (get)", ["applicant"]],
     ["applicant.resume", ["applicant", "resume"]],
+    ["job.get", ["job", "get"]],
   ])("recruiter %s — no pagination-only flags", async (_label, path) => {
     const { recruiterCommand } = await import("../../src/commands/recruiter.js");
     let cmd = recruiterCommand as unknown as CommandLike;

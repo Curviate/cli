@@ -8,6 +8,19 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-03
+
+### Added
+
+- `job get <url|id>` — a new top-level `job` command retrieving one public LinkedIn job posting's full detail. Accepts a job URL (`https://www.linkedin.com/jobs/view/<id>`) or a bare numeric id — a job URL is resolved to its numeric id client-side; anything else passes through and the API is the final validator. Slim-default output: `object`, `id`, `title`, `company`, `company_id`, `location`, `state`, `applicants_counter`, `published_at`, `description` — `description` stays in the default output since retrieving it is the point of the command. Pass `--verbose` for the full response (adds `cost`, `created_at`, `hiring_team`). An unknown job id exits with the not-found exit code. This is a read command — `--preview` is a usage error, matching every other single-object read.
+- `recruiter job get <url|id>` — the Recruiter-lens sibling of `job get`, joining the existing `recruiter job` command group. Retrieves any public job posting (not only postings you manage) — unlike `recruiter jobs`, which lists your own. Same URL/id resolution and slim/verbose projection as the top-level command; requires the Recruiter add-on tier (exit `5` without it).
+- README gained a new numbered example chaining `search jobs` into `job get`, and a "Get any public job posting through the Recruiter lens" example in the Recruiter section.
+
+### Changed
+
+- `@curviate/sdk` dependency bumped to `^0.10.0`.
+- `recruiter job get --help` does not advertise `--limit`/`--cursor`/`--all`/`--max-pages` — a single-object read, consistent with the other Recruiter single-reads (`profile`, `project`, `applicant`). `--fields` and `--verbose` are unchanged and available.
+
 ## [0.9.0] - 2026-07-03
 
 ### Added

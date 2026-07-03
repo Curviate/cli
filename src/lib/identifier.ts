@@ -92,3 +92,30 @@ export function normalizeChatId(raw: string): string {
   if (match?.[1]) return match[1];
   return raw;
 }
+
+/**
+ * LinkedIn job posting URL pattern.
+ * Matches `.../jobs/view/<id>` (with or without a locale/country subdomain,
+ * trailing slash, or query string) and captures the numeric job id.
+ */
+const JOB_URL_RE = /\/jobs\/view\/(\d+)/;
+
+/**
+ * Resolve a job identifier positional (`job get <url|id>`,
+ * `recruiter job get <url|id>`) to a bare numeric job id.
+ *
+ * A full LinkedIn job URL is reduced to its numeric id:
+ *   https://www.linkedin.com/jobs/view/4428113858 → 4428113858
+ *
+ * A bare numeric id, or any value that does not match the job-URL pattern,
+ * passes through unchanged. This function never fabricates or rejects a
+ * value — the SDK's own job-id resolution (shared by `jobs.get()` and
+ * `recruiter.getJob()`) is the fallback validator: it throws a synchronous
+ * `INVALID_REQUEST` error when neither a numeric id nor its own URL pattern
+ * matches.
+ */
+export function resolveJobIdentifier(raw: string): string {
+  const match = JOB_URL_RE.exec(raw);
+  if (match?.[1]) return match[1];
+  return raw;
+}

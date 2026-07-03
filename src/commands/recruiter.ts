@@ -17,23 +17,27 @@
  *   recruiter job publish <job_id> [--mode <m>]                                  — publish job (write)
  *   recruiter job checkpoint <job_id> --input <v>                                — solve checkpoint (write)
  *   recruiter job applicants <job_id>                                             — list applicants (read)
+ *   recruiter job get <url|id>                                                    — get a job posting via the Recruiter lens (read, any public job)
  *   recruiter applicant <applicant_id>                                            — get applicant (read, verbatim id)
  *   recruiter applicant resume <applicant_id> -o <file>                          — download resume (binary)
  *
  * All subcommands are account-scoped.
  * Tier-gate: CLI never pre-checks — SDK call goes out; TIER_NOT_ACTIVE / LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5.
- * Identifier resolution: applied to `profile <identifier>` only.
+ * Identifier resolution: applied to `profile <identifier>` only; `job get <url|id>`
+ * resolves a job URL to its numeric id via resolveJobIdentifier (same helper
+ * the top-level `job get` command uses).
  * user_id / job_id / applicant_id / project_id pass verbatim.
  */
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
-import { resolveIdentifier } from "../lib/identifier.js";
+import { resolveIdentifier, resolveJobIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
+import { slimJob } from "../lib/slim.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import {
@@ -58,6 +62,7 @@ type RecruiterFlags = {
   all?: boolean;
   "max-pages"?: string;
   preview?: boolean;
+  verbose?: boolean;
   "api-key"?: string;
   "base-url"?: string;
   timeout?: string;
@@ -123,6 +128,7 @@ type MinimalClient = {
       solveJobCheckpoint: (jobId: string, body: Record<string, unknown>) => Promise<unknown>;
       listApplicants: (jobId: string, params?: Record<string, unknown>) => Promise<unknown>;
       getApplicant: (applicantId: string) => Promise<unknown>;
+      getJob: (jobId: string) => Promise<unknown>;
       downloadResume: (applicantId: string) => Promise<ArrayBuffer>;
     };
   };
@@ -159,6 +165,7 @@ function resolveOutputOpts(flags: RecruiterFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -878,6 +885,35 @@ export async function runRecruiterListApplicants(
 }
 
 /**
+ * Run `recruiter job get <url|id>`.
+ * Read command — rejects --preview. Retrieves any public job posting via the
+ * Recruiter lens (not only the operator's own postings) — the Recruiter
+ * sibling of the top-level `job get` command, same underlying job-posting
+ * shape. The positional accepts a job URL or a bare numeric id, resolved via
+ * `resolveJobIdentifier` (mirrors `job get`'s resolution).
+ */
+export async function runRecruiterGetJob(
+  client: MinimalClient,
+  flags: RecruiterFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const rawJobId = flags.jobId ?? "";
+  const jobId = resolveJobIdentifier(rawJobId);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.recruiter.getJob(jobId);
+    renderSuccess(result, { ...outOpts, slim: slimJob }, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
  * Run `recruiter applicant <applicant_id>`.
  * Read command — rejects --preview. applicant_id passes verbatim.
  */
@@ -1385,6 +1421,31 @@ const recruiterJobApplicantsCommand = defineCommand({
   },
 });
 
+const recruiterJobGetCommand = defineCommand({
+  meta: { name: "get", description: "Get a job posting via the Recruiter lens (any public posting, not only your own)." },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    jobId: { type: "positional", description: "Job URL (e.g. https://www.linkedin.com/jobs/view/4428113858) or a bare numeric job id." },
+  },
+  async run({ args }) {
+    const flags = args as RecruiterFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runRecruiterGetJob(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 const recruiterJobCommand = defineCommand({
   meta: { name: "job", description: "Recruiter job posting operations." },
   args: { ...GLOBAL_FLAGS },
@@ -1393,13 +1454,15 @@ const recruiterJobCommand = defineCommand({
     publish: recruiterJobPublishCommand,
     checkpoint: recruiterJobCheckpointCommand,
     applicants: recruiterJobApplicantsCommand,
+    get: recruiterJobGetCommand,
   },
   async run() {
     process.stderr.write(
       "Usage: curviate recruiter job create [flags…]\n" +
       "       curviate recruiter job publish <job_id> [--mode <m>]\n" +
       "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
-      "       curviate recruiter job applicants <job_id>\n",
+      "       curviate recruiter job applicants <job_id>\n" +
+      "       curviate recruiter job get <url|id>\n",
     );
   },
 });
@@ -1506,6 +1569,7 @@ export const recruiterCommand = defineCommand({
       "       curviate recruiter job publish <job_id> [--mode <m>]\n" +
       "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
       "       curviate recruiter job applicants <job_id>\n" +
+      "       curviate recruiter job get <url|id>\n" +
       "       curviate recruiter applicant <applicant_id>\n" +
       "       curviate recruiter applicant resume <applicant_id> -o <file>\n",
     );

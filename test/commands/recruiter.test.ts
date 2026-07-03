@@ -58,6 +58,7 @@ function makeRecruiterNs() {
       solveJobCheckpoint: vi.fn(),
       listApplicants: vi.fn(),
       getApplicant: vi.fn(),
+      getJob: vi.fn(),
       downloadResume: vi.fn(),
     },
   };
@@ -1368,6 +1369,177 @@ describe("recruiter job applicants", () => {
     const calls = (ns.recruiter.listApplicants as Mock).mock.calls;
     expect(calls.length).toBe(1);
     expect(calls[0]![0]).toBe("job_99");
+  });
+});
+
+// ─── recruiter job get ────────────────────────────────────────────────────
+
+const richRecruiterJob = {
+  object: "job_posting",
+  id: "4428113858",
+  title: "Founders Associate",
+  company: "LEAGUES",
+  company_id: "67756343",
+  state: "active",
+  location: "Stuttgart, Baden-Württemberg, Germany",
+  cost: 0,
+  applicants_counter: 75,
+  description: "Über deine Rolle: build the founding team.",
+  created_at: "2026-06-12T10:07:09.000Z",
+  published_at: "2026-06-12T10:08:03.000Z",
+  hiring_team: [],
+};
+
+describe("recruiter job get", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.getJob as Mock).mockResolvedValue(richRecruiterJob);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("full job URL resolves to the numeric id and calls recruiter.getJob", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetJob(client as never, {
+      account: "acc_1",
+      jobId: "https://www.linkedin.com/jobs/view/4428113858",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.getJob).toHaveBeenCalledWith("4428113858");
+  });
+
+  it("bare numeric id calls recruiter.getJob with an identical request", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetJob(client as never, {
+      account: "acc_1",
+      jobId: "4428113858",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.getJob).toHaveBeenCalledWith("4428113858");
+  });
+
+  it("--preview is a usage error on this read command; no SDK call is made", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterGetJob(client as never, {
+        account: "acc_1",
+        jobId: "4428113858",
+        preview: true,
+      }, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.getJob).not.toHaveBeenCalled();
+  });
+
+  it("slim output has exactly the 10 documented fields, excludes hiring_team/cost", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetJob(client as never, {
+      account: "acc_1",
+      jobId: "4428113858",
+      json: true,
+    }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(Object.keys(result)).toHaveLength(10);
+    expect(result).not.toHaveProperty("hiring_team");
+    expect(result).not.toHaveProperty("cost");
+    expect(result["description"]).toBe(richRecruiterJob.description);
+  });
+
+  it("--verbose returns the full SDK response including hiring_team, cost, created_at", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetJob(client as never, {
+      account: "acc_1",
+      jobId: "4428113858",
+      json: true,
+      verbose: true,
+    }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result).toHaveProperty("hiring_team");
+    expect(result).toHaveProperty("cost");
+    expect(result).toHaveProperty("created_at");
+  });
+
+  it("tier gate: TIER_NOT_ACTIVE → exit 5, requiredTier:recruiter", async () => {
+    const tierErr = makeTierError("TIER_NOT_ACTIVE", "recruiter");
+    (ns.recruiter.getJob as Mock).mockRejectedValue(tierErr);
+
+    const { CurviateError } = await import("@curviate/sdk");
+    Object.setPrototypeOf(tierErr, CurviateError.prototype);
+
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterGetJob(client as never, { account: "acc_1", jobId: "4428113858", json: true }, out);
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(5)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.error.code).toBe("TIER_NOT_ACTIVE");
+    expect(parsed.error.requiredTier).toBe("recruiter");
+  });
+
+  it("unknown job exits with the resource-not-found exit code", async () => {
+    const notFoundErr = Object.assign(new Error("Job offer not found"), {
+      code: "RESOURCE_NOT_FOUND",
+      userFixable: true,
+      retryLikelyToSucceed: false,
+      toJSON: () => ({ code: "RESOURCE_NOT_FOUND", message: "Job offer not found" }),
+    });
+    (ns.recruiter.getJob as Mock).mockRejectedValue(notFoundErr);
+
+    const { CurviateError } = await import("@curviate/sdk");
+    Object.setPrototypeOf(notFoundErr, CurviateError.prototype);
+
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterGetJob(client as never, { account: "acc_1", jobId: "9999999999999", json: true }, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.error.code).toBe("RESOURCE_NOT_FOUND");
   });
 });
 

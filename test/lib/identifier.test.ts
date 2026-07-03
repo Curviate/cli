@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveIdentifier } from "../../src/lib/identifier.js";
+import { resolveIdentifier, resolveJobIdentifier } from "../../src/lib/identifier.js";
 
 describe("lib/identifier — resolveIdentifier", () => {
   // Member URLs → slug
@@ -111,5 +111,47 @@ describe("lib/identifier — resolveIdentifier", () => {
     expect(
       resolveIdentifier("https://evillinkedin.com/in/jane-doe-123"),
     ).toBe("https://evillinkedin.com/in/jane-doe-123");
+  });
+});
+
+describe("lib/identifier — resolveJobIdentifier", () => {
+  it("LinkedIn job URL → numeric id", () => {
+    expect(
+      resolveJobIdentifier("https://www.linkedin.com/jobs/view/4428113858"),
+    ).toBe("4428113858");
+  });
+
+  it("job URL with trailing slash → numeric id", () => {
+    expect(
+      resolveJobIdentifier("https://www.linkedin.com/jobs/view/4428113858/"),
+    ).toBe("4428113858");
+  });
+
+  it("job URL with query string → numeric id", () => {
+    expect(
+      resolveJobIdentifier(
+        "https://www.linkedin.com/jobs/view/4428113858?refId=abc&trk=flagship",
+      ),
+    ).toBe("4428113858");
+  });
+
+  it("bare numeric id passes through unchanged", () => {
+    expect(resolveJobIdentifier("4428113858")).toBe("4428113858");
+  });
+
+  it("locale-subdomain job URL → numeric id", () => {
+    expect(
+      resolveJobIdentifier("https://de.linkedin.com/jobs/view/4428113858"),
+    ).toBe("4428113858");
+  });
+
+  it("unresolvable value passes through unchanged (SDK is the fallback validator)", () => {
+    expect(resolveJobIdentifier("not-a-job-identifier")).toBe(
+      "not-a-job-identifier",
+    );
+  });
+
+  it("empty string passes through unchanged", () => {
+    expect(resolveJobIdentifier("")).toBe("");
   });
 });

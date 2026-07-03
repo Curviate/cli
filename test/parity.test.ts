@@ -1,6 +1,6 @@
 /**
  * SDK-parity test — asserts the CLI provides exactly one command for each of
- * the SDK's 80 public resource methods.
+ * the SDK's 82 public resource methods.
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -9,7 +9,7 @@
  *   3. The test asserts:
  *      (a) every manifest entry resolves to an existing SDK method,
  *      (b) every SDK method is covered by exactly one manifest entry,
- *      (c) the total mapped-method count is 80.
+ *      (c) the total mapped-method count is 82.
  *
  * A negative fixture at the bottom demonstrates that removing an SDK method
  * causes the bijection assertion to fail.
@@ -116,6 +116,10 @@ const PARITY_MANIFEST: Record<string, string> = {
   "recruiter job applicants":     "recruiter.listApplicants",
   "recruiter applicant":          "recruiter.getApplicant",
   "recruiter applicant resume":   "recruiter.downloadResume",
+  "recruiter job get":            "recruiter.getJob",
+
+  // jobs (1)
+  "job get": "jobs.get",
 
   // webhooks (6)
   "webhook create":     "webhooks.create",
@@ -157,6 +161,7 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
     ["posts", scoped.posts],
     ["salesNavigator", scoped.salesNavigator],
     ["recruiter", scoped.recruiter],
+    ["jobs", scoped.jobs],
   ];
 
   const methods = new Set<string>();
@@ -175,9 +180,9 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — command manifest", () => {
-  it("manifest has exactly 80 entries", () => {
+  it("manifest has exactly 82 entries", () => {
     const count = Object.keys(PARITY_MANIFEST).length;
-    expect(count, `manifest length should be 80, got ${count}`).toBe(80);
+    expect(count, `manifest length should be 82, got ${count}`).toBe(82);
   });
 
   it("every manifest entry maps to a real SDK method (no phantom references)", async () => {
@@ -229,9 +234,9 @@ describe("SDK parity — command manifest", () => {
     ).toHaveLength(0);
   });
 
-  it("SDK has exactly 80 public resource methods", async () => {
+  it("SDK has exactly 82 public resource methods", async () => {
     const sdkMethods = await buildSdkMethodSet();
-    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 80`).toBe(80);
+    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 82`).toBe(82);
   });
 });
 

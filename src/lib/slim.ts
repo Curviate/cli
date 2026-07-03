@@ -511,6 +511,42 @@ export function slimAccountGet(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// job get / recruiter job get (shared projection — both endpoints return the
+// same job-posting shape, Core vs. Recruiter lens)
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for `job get` and `recruiter job get`.
+ *
+ * Exact fields returned (10):
+ *   object, id, title, company, company_id, location, state,
+ *   applicants_counter, published_at, description
+ *
+ * `description` stays in the slim projection — retrieving a job's full
+ * description is the point of this command. Excludes `hiring_team` and
+ * `cost` (verbose-only) and `created_at` (verbose-only). `--verbose` returns
+ * the full SDK response.
+ */
+export function slimJob(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  return {
+    object: d["object"] ?? null,
+    id: d["id"] ?? null,
+    title: d["title"] ?? null,
+    company: d["company"] ?? null,
+    company_id: d["company_id"] ?? null,
+    location: d["location"] ?? null,
+    state: d["state"] ?? null,
+    applicants_counter: d["applicants_counter"] ?? null,
+    published_at: d["published_at"] ?? null,
+    description: d["description"] ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // company <id>
 // ---------------------------------------------------------------------------
 

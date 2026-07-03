@@ -12,6 +12,7 @@ import {
   slimProfileMe,
   slimProfile,
   slimCompany,
+  slimJob,
 } from "../../src/lib/slim.js";
 
 // ---------------------------------------------------------------------------
@@ -415,5 +416,86 @@ describe("slimCompany", () => {
     expect(result).not.toHaveProperty("description");
     expect(result).not.toHaveProperty("activities");
     expect(result).not.toHaveProperty("locations");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slimJob (job get / recruiter job get — shared projection)
+// ---------------------------------------------------------------------------
+
+describe("slimJob", () => {
+  const fullJob = {
+    object: "job_posting",
+    id: "4428113858",
+    title: "Founders Associate",
+    company: "LEAGUES",
+    company_id: "67756343",
+    state: "active",
+    location: "Stuttgart, Baden-Württemberg, Germany",
+    cost: 0,
+    applicants_counter: 75,
+    description: "Über deine Rolle: build the founding team.",
+    created_at: "2026-06-12T10:07:09.000Z",
+    published_at: "2026-06-12T10:08:03.000Z",
+    hiring_team: [],
+  };
+
+  it("returns exactly the 10 documented slim fields", () => {
+    const result = slimJob(fullJob);
+    expect(Object.keys(result).sort()).toEqual(
+      [
+        "applicants_counter",
+        "company",
+        "company_id",
+        "description",
+        "id",
+        "location",
+        "object",
+        "published_at",
+        "state",
+        "title",
+      ].sort(),
+    );
+  });
+
+  it("keeps description non-empty (the point of the fetch)", () => {
+    const result = slimJob(fullJob);
+    expect(result["description"]).toBe(fullJob.description);
+  });
+
+  it("excludes hiring_team and cost", () => {
+    const result = slimJob(fullJob);
+    expect(result).not.toHaveProperty("hiring_team");
+    expect(result).not.toHaveProperty("cost");
+  });
+
+  it("excludes created_at (verbose-only)", () => {
+    const result = slimJob(fullJob);
+    expect(result).not.toHaveProperty("created_at");
+  });
+
+  it("passes id, title, company, company_id, location, state, applicants_counter, published_at through verbatim", () => {
+    const result = slimJob(fullJob);
+    expect(result["id"]).toBe("4428113858");
+    expect(result["title"]).toBe("Founders Associate");
+    expect(result["company"]).toBe("LEAGUES");
+    expect(result["company_id"]).toBe("67756343");
+    expect(result["location"]).toBe(fullJob.location);
+    expect(result["state"]).toBe("active");
+    expect(result["applicants_counter"]).toBe(75);
+    expect(result["published_at"]).toBe(fullJob.published_at);
+  });
+
+  it("nullable fields project to null when absent", () => {
+    const result = slimJob({ object: "job_posting", id: "1" });
+    expect(result["location"]).toBeNull();
+    expect(result["published_at"]).toBeNull();
+    expect(result["applicants_counter"]).toBeNull();
+  });
+
+  it("non-object input projects to an all-null shape (never throws)", () => {
+    const result = slimJob(null);
+    expect(result["id"]).toBeNull();
+    expect(result["object"]).toBeNull();
   });
 });
