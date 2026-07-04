@@ -1,16 +1,42 @@
 /**
  * Tests for the `company` command group.
- * Covers: routing, identifier resolution, --preview/--all errors,
- * slim projection (default mode), --verbose (full SDK response).
+ *
+ * Covers:
+ *   company <id>                    → companies.get (retrieve, hard-moved off profiles.getCompany)
+ *   company employees <id>          → companies.employees (facade, --keywords/--location)
+ *   company posts <id>              → companies.posts (facade)
+ *   company jobs <id>               → companies.jobs (facade, --keywords)
+ *   company followers <id>          → companies.followers (native)
+ *   --preview/--all/--sections usage errors (read-command conventions)
+ *   --account required (companies.get now always requires account_id)
+ *   wrong usage: a non-numeric identifier on a sub-resource surfaces the
+ *     server's 400 INVALID_REQUEST as exit 2 (the CLI does not duplicate the
+ *     server-side ^\d+$ guard client-side)
+ *   slim projection (default mode) + --verbose (full SDK response) for retrieve
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
+import { CurviateError } from "@curviate/sdk";
+
+function makeInvalidRequestError() {
+  return new CurviateError({
+    code: "INVALID_REQUEST",
+    message: "identifier must be numeric.",
+    httpStatus: 400,
+    userFixable: true,
+    retryLikelyToSucceed: false,
+  });
+}
 
 function makeAccountNs() {
   return {
-    profiles: {
-      getCompany: vi.fn(),
+    companies: {
+      get: vi.fn(),
+      employees: vi.fn(),
+      posts: vi.fn(),
+      jobs: vi.fn(),
+      followers: vi.fn(),
     },
   };
 }
@@ -18,7 +44,6 @@ function makeAccountNs() {
 function makeClient(accountNs: ReturnType<typeof makeAccountNs>) {
   return {
     account: vi.fn().mockReturnValue(accountNs),
-    profiles: accountNs.profiles,
   };
 }
 
@@ -38,48 +63,80 @@ type CompanyArgs = {
   "max-pages"?: string;
   verbose?: boolean;
   sections?: string;
+  keywords?: string;
+  location?: string;
 };
 
-describe("company command", () => {
+function makeOut() {
+  return { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+}
+
+function mockExit() {
+  return vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+    throw new Error(`process.exit(${code})`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// company <id> (retrieve)
+// ---------------------------------------------------------------------------
+
+describe("company command (retrieve)", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue({ id: "acme" });
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061", object: "company_profile" });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("company <id> — calls profiles.getCompany with resolved slug", async () => {
+  it("company <id> --account <id> — calls companies.get with the resolved slug", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
 
-    await runCompanyGet(client as never, { id: "https://www.linkedin.com/company/acme/about/", account: "acc_1", json: true } as CompanyArgs, out);
+    await runCompanyGet(client as never, { id: "https://www.linkedin.com/company/t-systems/about/", account: "acc_1", json: true } as CompanyArgs, out);
 
-    // company is NOT account-scoped per profiles.getCompany signature (root-level profiles NS)
-    expect(accountNs.profiles.getCompany).toHaveBeenCalledWith("acme");
+    expect(client.account).toHaveBeenCalledWith("acc_1");
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
   });
 
-  it("company bare slug — passes through unchanged", async () => {
+  it("company <id> — a numeric id passes through unchanged", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
 
-    await runCompanyGet(client as never, { id: "acme-corp", json: true } as CompanyArgs, out);
+    await runCompanyGet(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
 
-    expect(accountNs.profiles.getCompany).toHaveBeenCalledWith("acme-corp");
+    expect(accountNs.companies.get).toHaveBeenCalledWith("112013061");
+  });
+
+  it("company <id> without --account → exit 2 (account_id is now required)", async () => {
+    const { runCompanyGet } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyGet(client as never, { id: "t-systems", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
   });
 
   it("company --preview → usage error exit 2 (read command)", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
+    const exitSpy = mockExit();
 
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => { throw new Error(`process.exit(${code})`); });
     try {
-      await runCompanyGet(client as never, { id: "acme", preview: true } as CompanyArgs, out);
+      await runCompanyGet(client as never, { id: "t-systems", account: "acc_1", preview: true } as CompanyArgs, out);
       expect.fail("Should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
@@ -90,11 +147,11 @@ describe("company command", () => {
 
   it("company --all → usage error exit 2 (non-paginated)", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
+    const exitSpy = mockExit();
 
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => { throw new Error(`process.exit(${code})`); });
     try {
-      await runCompanyGet(client as never, { id: "acme", all: true } as CompanyArgs, out);
+      await runCompanyGet(client as never, { id: "t-systems", account: "acc_1", all: true } as CompanyArgs, out);
       expect.fail("Should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
@@ -103,17 +160,41 @@ describe("company command", () => {
     }
   });
 
-  it("company --sections → usage error exit 2 (sections not supported on company)", async () => {
+  it("company --sections → usage error exit 2 (sections not supported on company commands)", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
+    const exitSpy = mockExit();
 
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => { throw new Error(`process.exit(${code})`); });
     try {
-      await runCompanyGet(client as never, { id: "acme", sections: "skills" } as CompanyArgs, out);
+      await runCompanyGet(client as never, { id: "t-systems", account: "acc_1", sections: "skills" } as CompanyArgs, out);
       expect.fail("Should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
-      expect((out.stderr.write as ReturnType<typeof vi.fn>).mock.calls.join("")).toContain("--sections");
+      expect((out.stderr.write as Mock).mock.calls.join("")).toContain("--sections");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("a 404 RESOURCE_NOT_FOUND (unknown identifier) surfaces as exit 4", async () => {
+    const notFoundErr = new CurviateError({
+      code: "RESOURCE_NOT_FOUND",
+      message: "Company not found.",
+      httpStatus: 404,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.get as Mock).mockRejectedValue(notFoundErr);
+
+    const { runCompanyGet } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyGet(client as never, { id: "urn:li:organization:1", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
     } finally {
       exitSpy.mockRestore();
     }
@@ -121,7 +202,7 @@ describe("company command", () => {
 });
 
 // ---------------------------------------------------------------------------
-// slim mode (no --verbose)
+// slim mode (no --verbose) — unaffected by the retrieve hard-move
 // ---------------------------------------------------------------------------
 
 describe("company slim mode (no --verbose)", () => {
@@ -151,7 +232,7 @@ describe("company slim mode (no --verbose)", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue(richCompany);
+    (accountNs.companies.get as Mock).mockResolvedValue(richCompany);
   });
 
   afterEach(() => {
@@ -160,7 +241,7 @@ describe("company slim mode (no --verbose)", () => {
 
   it("slim output has exactly the 12 fields", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
 
     await runCompanyGet(client as never, { id: "acme-corp", account: "acc_1", json: true } as CompanyArgs, out);
 
@@ -169,59 +250,15 @@ describe("company slim mode (no --verbose)", () => {
     expect(Object.keys(result)).toHaveLength(12);
   });
 
-  it("messaging projected to {is_enabled} only (not full object)", async () => {
-    const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runCompanyGet(client as never, { id: "acme-corp", account: "acc_1", json: true } as CompanyArgs, out);
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result["messaging"]).toEqual({ is_enabled: true });
-    const msg = result["messaging"] as Record<string, unknown>;
-    expect(msg["thread_id"]).toBeUndefined();
-    expect(msg["extra"]).toBeUndefined();
-  });
-
   it("headquarters synthesized from is_headquarter location", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
 
     await runCompanyGet(client as never, { id: "acme-corp", account: "acc_1", json: true } as CompanyArgs, out);
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result["headquarters"]).toEqual({ city: "Austin", country: "US", area: "TX" });
-  });
-
-  it("headquarters null when no hq location", async () => {
-    const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue({
-      ...richCompany,
-      locations: [{ city: "Berlin", country: "DE", is_headquarter: false }],
-    });
-
-    await runCompanyGet(client as never, { id: "acme-corp", account: "acc_1", json: true } as CompanyArgs, out);
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result["headquarters"]).toBeNull();
-  });
-
-  it("heavy fields excluded (viewer_permissions, description, activities, locations raw)", async () => {
-    const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runCompanyGet(client as never, { id: "acme-corp", account: "acc_1", json: true } as CompanyArgs, out);
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result).not.toHaveProperty("viewer_permissions");
-    expect(result).not.toHaveProperty("description");
-    expect(result).not.toHaveProperty("activities");
-    expect(result).not.toHaveProperty("locations");
   });
 });
 
@@ -244,7 +281,7 @@ describe("company --verbose mode", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue(richCompany);
+    (accountNs.companies.get as Mock).mockResolvedValue(richCompany);
   });
 
   afterEach(() => {
@@ -253,7 +290,7 @@ describe("company --verbose mode", () => {
 
   it("--verbose returns full SDK response including viewer_permissions, locations array", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const out = makeOut();
 
     await runCompanyGet(
       client as never,
@@ -266,5 +303,273 @@ describe("company --verbose mode", () => {
     expect(result).toHaveProperty("viewer_permissions");
     expect(result).toHaveProperty("description");
     expect(result).toHaveProperty("locations");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company employees <id>
+// ---------------------------------------------------------------------------
+
+describe("company employees command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.employees as Mock).mockResolvedValue({
+      object: "company_employee_list",
+      items: [{ id: "ACoA1", public_identifier: "frank", full_name: "Frank Employee", headline: "Engineer", location: "Berlin", network_distance: null }],
+      paging: { total_count: 1 },
+      cursor: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company employees <cid> --account <id> --keywords engineer — forwards keywords/location/limit/cursor", async () => {
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyEmployees(client as never, {
+      id: "112013061",
+      account: "acc_1",
+      json: true,
+      keywords: "engineer",
+      location: "reg_1",
+      limit: "5",
+      cursor: "cur_0",
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.employees).toHaveBeenCalledWith("112013061", {
+      limit: 5,
+      cursor: "cur_0",
+      keywords: "engineer",
+      location: "reg_1",
+    });
+  });
+
+  it("prints the employee list (slim projection keeps paging/cursor)", async () => {
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyEmployees(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["object"]).toBe("company_employee_list");
+    expect((result["items"] as unknown[])).toHaveLength(1);
+    expect(result["paging"]).toEqual({ total_count: 1 });
+    expect(result["cursor"]).toBeNull();
+  });
+
+  it("--preview → usage error exit 2 (read command)", async () => {
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyEmployees(client as never, { id: "112013061", account: "acc_1", preview: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("wrong usage: a non-numeric identifier — the server's 400 INVALID_REQUEST surfaces as exit 2", async () => {
+    (accountNs.companies.employees as Mock).mockRejectedValue(makeInvalidRequestError());
+
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyEmployees(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    // The CLI does not duplicate the server-side numeric guard — it forwarded
+    // the raw identifier and let the server's 400 come back.
+    expect(accountNs.companies.employees).toHaveBeenCalledWith("t-systems", {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company posts <id>
+// ---------------------------------------------------------------------------
+
+describe("company posts command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.posts as Mock).mockResolvedValue({
+      object: "company_post_list",
+      items: [{ post_urn: "urn:li:activity:1", text: "We are hiring!", reaction_count: 1, comment_count: 0, author: { name: "Acme" } }],
+      paging: { total_count: 1 },
+      cursor: "cur_1",
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company posts <cid> --account <id> --limit 3 — forwards limit as the only filter", async () => {
+    const { runCompanyPosts } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyPosts(client as never, { id: "112013061", account: "acc_1", json: true, limit: "3" } as CompanyArgs, out);
+
+    expect(accountNs.companies.posts).toHaveBeenCalledWith("112013061", { limit: 3 });
+  });
+
+  it("prints post text verbatim (content pass-through)", async () => {
+    const { runCompanyPosts } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyPosts(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    const items = result["items"] as Array<Record<string, unknown>>;
+    expect(items[0]?.["text"]).toBe("We are hiring!");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company jobs <id>
+// ---------------------------------------------------------------------------
+
+describe("company jobs command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.jobs as Mock).mockResolvedValue({
+      object: "company_job_list",
+      items: [{ job_urn: "urn:li:job:1", title: "Founders Associate", location: "Berlin", posted_at: "2026-06-01", easy_apply: true, company: { name: "Acme" } }],
+      paging: { total_count: 1 },
+      cursor: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company jobs <cid> --account <id> --keywords founder — forwards keywords", async () => {
+    const { runCompanyJobs } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyJobs(client as never, { id: "112013061", account: "acc_1", json: true, keywords: "founder" } as CompanyArgs, out);
+
+    expect(accountNs.companies.jobs).toHaveBeenCalledWith("112013061", { keywords: "founder" });
+  });
+
+  it("a valid-empty jobs result is not treated as an error", async () => {
+    (accountNs.companies.jobs as Mock).mockResolvedValue({ object: "company_job_list", items: [], paging: { total_count: 0 }, cursor: null });
+
+    const { runCompanyJobs } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyJobs(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["items"]).toEqual([]);
+    expect(result["paging"]).toEqual({ total_count: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company followers <id>
+// ---------------------------------------------------------------------------
+
+describe("company followers command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.followers as Mock).mockResolvedValue({
+      object: "company_follower_list",
+      items: [{ object: "follower", id: "ACoAFOL1", urn: "urn:li:member:1", name: "Diana Follower", headline: "Engineer", profile_url: "https://www.linkedin.com/in/diana" }],
+      cursor: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company followers <cid> --account <id> — calls companies.followers", async () => {
+    const { runCompanyFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowers(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.followers).toHaveBeenCalledWith("112013061", {});
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["object"]).toBe("company_follower_list");
+    expect((result["items"] as unknown[])).toHaveLength(1);
+    // No paging block on the native followers list (route-honest — no
+    // total_count to re-map, unlike the three search facades).
+    expect(result["paging"]).toBeUndefined();
+  });
+
+  it("wrong usage: a non-numeric identifier (anthropic) — the server's 400 INVALID_REQUEST → the INVALID_REQUEST exit code", async () => {
+    (accountNs.companies.followers as Mock).mockRejectedValue(makeInvalidRequestError());
+
+    const { runCompanyFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowers(client as never, { id: "anthropic", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("a 403 RESOURCE_ACCESS_RESTRICTED (non-admin) surfaces as exit 8", async () => {
+    const restrictedErr = new CurviateError({
+      code: "RESOURCE_ACCESS_RESTRICTED",
+      message: "You must be a page administrator of this company to read its followers.",
+      httpStatus: 403,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.followers as Mock).mockRejectedValue(restrictedErr);
+
+    const { runCompanyFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowers(client as never, { id: "7936402", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(8)");
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });

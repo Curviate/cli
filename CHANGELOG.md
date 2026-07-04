@@ -8,6 +8,25 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+### Added
+
+- **`company employees <id>`** — list people who currently work at the company (facade over people search with the company filter). `--keywords` and `--location` narrow the result; pagination flags apply. `<id>` must be the company's numeric provider_id (the `id` field of `company <id>`).
+- **`company posts <id>`** — list the company's posts (facade over post search). Pagination flags apply; post `text` prints verbatim.
+- **`company jobs <id>`** — list the company's open job postings (facade over job search). `--keywords` narrows the result. An empty list is a valid result (the company currently has no open postings), not an error.
+- **`company followers <id>`** — list the company's followers (native — the same seam that backs `profile <id> --followers`). Requires the acting account to administer the target company page; a non-admin company returns the exit code for `RESOURCE_ACCESS_RESTRICTED` (new, see below).
+- All four new subcommands support `--all` (NDJSON page streaming) alongside the existing pagination flags, and reject `--preview` (exit `2`) like every other read command.
+- `--account` is now required on `company <id>` (retrieve) — the underlying endpoint always requires `account_id`; previously the command silently fell back to an unscoped call.
+
+### Changed (BREAKING)
+
+- **`company <id>` now routes to the SDK's `companies.get()`** instead of the retired `profiles.getCompany()` — an internal repoint (the hard-moved server endpoint), not a CLI UX change: flags, output shape, and slim projection are unchanged. `--account` becoming required (above) is the one user-visible behavior change.
+- SDK-parity manifest (`test/parity.test.ts`) repoints `company get` → `companies.get` and gains `company employees` / `company posts` / `company jobs` / `company followers`; the manifest and SDK method count both move from 84 to 88.
+- `@curviate/sdk` dependency bumped to `^0.11.0` (unreleased local build carrying the `companies` resource — see the SDK's own CHANGELOG).
+
+### Fixed
+
+- **`RESOURCE_ACCESS_RESTRICTED`** — a new SDK error code (the non-admin mapping for `company followers`) is now present in `EXIT_CODE_MAP` (exit `8`, grouped with `ACCOUNT_RESTRICTED`); the exhaustiveness test would otherwise have silently mapped it to the default `1`.
+
 ## [0.11.0] - 2026-07-04
 
 ### Added

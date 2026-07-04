@@ -1,6 +1,9 @@
 /**
  * SDK-parity test — asserts the CLI provides exactly one command for each of
- * the SDK's 84 public resource methods.
+ * the SDK's 88 public resource methods.
+ *
+ * (Was 84: `profiles.getCompany` was hard-moved and removed (profiles 9→8);
+ * the new `companies` namespace added 5 methods: 84 - 1 + 5 = 88.)
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -9,7 +12,7 @@
  *   3. The test asserts:
  *      (a) every manifest entry resolves to an existing SDK method,
  *      (b) every SDK method is covered by exactly one manifest entry,
- *      (c) the total mapped-method count is 84.
+ *      (c) the total mapped-method count is 88.
  *
  * A negative fixture at the bottom demonstrates that removing an SDK method
  * causes the bijection assertion to fail.
@@ -57,7 +60,7 @@ const PARITY_MANIFEST: Record<string, string> = {
   "message inmail":         "messaging.sendInMail",
   "message inmail-balance": "messaging.getInMailBalance",
 
-  // profiles (9)
+  // profiles (8) — getCompany removed (hard-moved to companies.get, below)
   "profile me":          "profiles.getMe",
   "profile get":         "profiles.get",
   "profile connections": "profiles.listConnections",
@@ -65,8 +68,14 @@ const PARITY_MANIFEST: Record<string, string> = {
   "profile posts":       "profiles.listPosts",
   "profile comments":    "profiles.listComments",
   "profile reactions":   "profiles.listReactions",
-  "company get":         "profiles.getCompany",
   "profile endorse":     "profiles.endorse",
+
+  // companies (5)
+  "company get":       "companies.get",
+  "company employees": "companies.employees",
+  "company posts":     "companies.posts",
+  "company jobs":      "companies.jobs",
+  "company followers": "companies.followers",
 
   // invites (5)
   "connect send":     "invites.send",
@@ -164,6 +173,7 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
     ["salesNavigator", scoped.salesNavigator],
     ["recruiter", scoped.recruiter],
     ["jobs", scoped.jobs],
+    ["companies", scoped.companies],
   ];
 
   const methods = new Set<string>();
@@ -182,9 +192,9 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — command manifest", () => {
-  it("manifest has exactly 84 entries", () => {
+  it("manifest has exactly 88 entries", () => {
     const count = Object.keys(PARITY_MANIFEST).length;
-    expect(count, `manifest length should be 84, got ${count}`).toBe(84);
+    expect(count, `manifest length should be 88, got ${count}`).toBe(88);
   });
 
   it("every manifest entry maps to a real SDK method (no phantom references)", async () => {
@@ -236,9 +246,9 @@ describe("SDK parity — command manifest", () => {
     ).toHaveLength(0);
   });
 
-  it("SDK has exactly 84 public resource methods", async () => {
+  it("SDK has exactly 88 public resource methods", async () => {
     const sdkMethods = await buildSdkMethodSet();
-    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 84`).toBe(84);
+    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 88`).toBe(88);
   });
 });
 

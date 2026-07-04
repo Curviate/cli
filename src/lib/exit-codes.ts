@@ -37,6 +37,12 @@ import type { ErrorCode } from "@curviate/sdk";
  * Note: `SUBSCRIPTION_BUSY` → 11 (billing). It is a billing-lock contention,
  * not a platform outage — even though it is retry-likely. The JSON error
  * envelope's `retryLikelyToSucceed` carries that signal.
+ *
+ * Note: `RESOURCE_ACCESS_RESTRICTED` → 8 (account / connection state), grouped
+ * with `ACCOUNT_RESTRICTED` rather than a new bucket. Both describe the
+ * acting account's own standing relative to a LinkedIn-side permission check
+ * (e.g. not a page administrator of the target company) — a resource-scoped
+ * variant of the same "this account can't do that" condition.
  */
 export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   // Make the shape explicit so TypeScript catches literal errors in the values
@@ -73,6 +79,7 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
 
   // Account / connection state (8)
   ACCOUNT_RESTRICTED: 8,
+  RESOURCE_ACCESS_RESTRICTED: 8,
   LINKEDIN_AUTH_FAILED: 8,
   LINKEDIN_COOKIE_INVALID: 8,
   CONNECTION_IN_PROGRESS: 8,

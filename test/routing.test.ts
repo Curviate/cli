@@ -116,6 +116,22 @@ describe("router — bare intent-shaped forms reach the handler (not 'Unknown co
     expect(r.stdout).toMatch(/"error"/);
   });
 
+  it("company <id> (bare get) reaches the companies.get SDK path — network error, not a routing error", () => {
+    // company mixes a bare positional (retrieve) with subCommands
+    // (employees/posts/jobs/followers) — the exact coexistence the
+    // pre-router (dispatch.ts) exists to make work. A non-subcommand token
+    // must resolve to the bare form, not "Unknown command t-systems".
+    const r = run([
+      "company", "t-systems",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
   it("message <chat_id> \"text\" --preview renders ONLY messaging.sendMessage, exits 0", () => {
     const r = run([
       "message", "chat_9", "hi",
@@ -199,6 +215,54 @@ describe("router — subcommands still route after the bare-form fix", () => {
   it("recruiter job applicants <job_id> still routes correctly (job get does not shadow other job verbs)", () => {
     const r = run([
       "recruiter", "job", "applicants", "job_99",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("company employees <id> reaches the companies.employees SDK path (subcommand, not the bare retrieve)", () => {
+    const r = run([
+      "company", "employees", "112013061",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("company posts <id> reaches the companies.posts SDK path (subcommand)", () => {
+    const r = run([
+      "company", "posts", "112013061",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("company jobs <id> reaches the companies.jobs SDK path (subcommand)", () => {
+    const r = run([
+      "company", "jobs", "112013061",
+      "--account", "acc_x",
+      "--base-url", UNROUTABLE,
+      "--json",
+    ]);
+    expect(isUnknownCommand(r)).toBe(false);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/"error"/);
+  });
+
+  it("company followers <id> reaches the companies.followers SDK path (subcommand does not shadow the bare retrieve)", () => {
+    const r = run([
+      "company", "followers", "112013061",
       "--account", "acc_x",
       "--base-url", UNROUTABLE,
       "--json",
