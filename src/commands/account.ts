@@ -42,6 +42,16 @@ import {
   checkCredentialConflicts,
   maskCredentialSecretsForPreview,
 } from "../lib/credential-resolve.js";
+import { AUTH_NEEDED } from "../lib/exit-codes.js";
+import {
+  printChallengeCopy,
+  printResendHintIfApplicable,
+  type ChallengeType,
+} from "../lib/checkpoint-copy.js";
+import {
+  CHECKPOINT_POLL_FIRST_DELAY_MS,
+  nextCheckpointPollDelayMs,
+} from "../lib/checkpoint-cadence.js";
 import type { CurviateError } from "@curviate/sdk";
 
 // ps/shell-history warning template (mirrors the --api-key warning in global-flags.ts).
@@ -66,6 +76,7 @@ type AccountFlags = {
   "li-at"?: string;
   "li-at-stdin"?: boolean;
   "li-a"?: string;
+  "no-interactive"?: boolean;
   country?: string;
   ip?: string;
   "proxy-protocol"?: string;
@@ -228,17 +239,34 @@ export async function runAccountGet(
 
 /**
  * Injectable seams for LinkedIn-credential resolution (masked prompt +
- * non-TTY fail-fast). All optional — real defaults (the actual TTY state,
- * the real masked readline, the real stdin reader) are substituted when
+ * non-TTY fail-fast) and for the guided checkpoint follow-through loop. All
+ * optional — real defaults (the actual TTY state, the real masked readline,
+ * the real stdin reader, the real clock/timer) are substituted when
  * omitted, so existing call sites need not pass this at all.
  */
 export interface CredentialIO {
   /** stdin.isTTY — injectable for tests. Defaults to the real process.stdin.isTTY. */
   isTTY?: boolean;
-  /** Injectable masked-prompt function. Defaults to lib/readline.ts's readlineSync. */
+  /**
+   * stdout.isTTY — injectable for tests. Defaults to the real
+   * process.stdout.isTTY. Combined with `isTTY` to decide the guided
+   * checkpoint loop's interactive/non-interactive branch — either stream
+   * being non-TTY forces the non-interactive path.
+   */
+  isOutputTTY?: boolean;
+  /**
+   * Injectable prompt function. Defaults to lib/readline.ts's readlineSync.
+   * Used masked ({mask:true}) for the credentials password prompt, and
+   * unmasked (no opts) for the checkpoint-code prompt — a checkpoint code
+   * is not persisted secret material, but it must never reach argv.
+   */
   readline?: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
   /** Injectable stdin reader for --password-stdin/--li-at-stdin. Defaults to lib/stdin.ts's defaultReadStdin. */
   readStdin?: () => Promise<string>;
+  /** Injectable sleep for the interactive mobile-app-approval poll sub-loop. Defaults to a real setTimeout. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable clock for the poll sub-loop's elapsed-time/timeout arithmetic. Defaults to Date.now. */
+  now?: () => number;
 }
 
 /**
@@ -336,12 +364,221 @@ async function buildAuthBody(
   return body;
 }
 
-function resolveCredentialIO(io: CredentialIO): { isTTY: boolean; readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>; readStdin: () => Promise<string> } {
+function resolveCredentialIO(io: CredentialIO): {
+  isTTY: boolean;
+  isOutputTTY: boolean;
+  readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
+  readStdin: () => Promise<string>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+} {
   return {
     isTTY: io.isTTY ?? (process.stdin.isTTY ?? false),
+    isOutputTTY: io.isOutputTTY ?? (process.stdout.isTTY ?? false),
     readline: io.readline ?? readlineSync,
     readStdin: io.readStdin ?? defaultReadStdin,
+    sleep: io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
+    now: io.now ?? (() => Date.now()),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Guided checkpoint follow-through (link/reconnect 202 → resolve in-process)
+// ---------------------------------------------------------------------------
+
+/** The 202 checkpoint-required envelope (also the shape of a chained submit response). */
+interface CheckpointEnvelope {
+  object?: string;
+  status?: string;
+  account_id?: string;
+  challenge_type?: string;
+  expires_at?: string;
+}
+
+type ResolvedCredentialIO = ReturnType<typeof resolveCredentialIO>;
+
+function printConnected(
+  result: unknown,
+  ctx: { out: OutputStreams; outOpts: ReturnType<typeof resolveOutputOpts>; successVerb: "linked" | "reconnected" },
+): void {
+  const r = result as { account_id?: string };
+  ctx.out.stderr.write(`Account ${ctx.successVerb}: ${r.account_id ?? ""}\n`);
+  renderSuccess(result, ctx.outOpts, ctx.out);
+}
+
+/** The wire body of a CHECKPOINT_INVALID_CODE error carries an extra (untyped-by-the-SDK) attempts_remaining field. */
+function printInvalidCodeRetryHint(err: unknown, out: OutputStreams): void {
+  const attemptsRemaining = (err as { attempts_remaining?: unknown }).attempts_remaining;
+  const message =
+    typeof attemptsRemaining === "number"
+      ? `That code was not accepted — ${attemptsRemaining} attempt(s) remaining.`
+      : "That code was not accepted — please try again.";
+  out.stderr.write(`${message}\n`);
+}
+
+type MobileApprovalOutcome =
+  | { kind: "active"; result: unknown }
+  | { kind: "terminal_failure"; status: "expired" | "failed" }
+  | { kind: "timeout" };
+
+/**
+ * Wait for mobile-app-approval by polling on the same adaptive cadence as
+ * the checkpoint poll wait loop, bounded by the checkpoint's expiry (or a
+ * 10-minute default when the response carries no expiry hint).
+ */
+async function waitForMobileApproval(
+  client: MinimalClient,
+  accountId: string,
+  expiresAt: string | undefined,
+  ctx: {
+    out: OutputStreams;
+    outOpts: ReturnType<typeof resolveOutputOpts>;
+    sleep: (ms: number) => Promise<void>;
+    now: () => number;
+  },
+): Promise<MobileApprovalOutcome> {
+  const startedAt = ctx.now();
+  const timeoutAt = expiresAt ? new Date(expiresAt).getTime() : startedAt + 10 * 60_000;
+
+  await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
+
+  for (;;) {
+    let result: unknown;
+    try {
+      result = await client.accounts.pollCheckpoint({ account_id: accountId });
+    } catch (err) {
+      return await handleError(err, ctx.outOpts, ctx.out);
+    }
+    const status = (result as { status?: string }).status;
+    if (status === "active") return { kind: "active", result };
+    if (status === "expired" || status === "failed") {
+      return { kind: "terminal_failure", status };
+    }
+    const n = ctx.now();
+    if (n >= timeoutAt) return { kind: "timeout" };
+    await ctx.sleep(nextCheckpointPollDelayMs(n - startedAt));
+  }
+}
+
+/**
+ * Resolve a 202 checkpoint_required response in-process: print the
+ * challenge copy and the resend hint, then either read/submit a code
+ * (looping through 422 retries and chained challenges) or wait out a
+ * codeless mobile-app-approval challenge.
+ */
+async function runInteractiveCheckpointLoop(
+  client: MinimalClient,
+  initial: CheckpointEnvelope,
+  ctx: {
+    out: OutputStreams;
+    outOpts: ReturnType<typeof resolveOutputOpts>;
+    readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
+    sleep: (ms: number) => Promise<void>;
+    now: () => number;
+    successVerb: "linked" | "reconnected";
+  },
+): Promise<void> {
+  const { CurviateError } = await import("@curviate/sdk");
+  let current: CheckpointEnvelope = initial;
+
+  for (;;) {
+    const challengeType = current.challenge_type as ChallengeType;
+    const accountId = current.account_id ?? "";
+
+    printChallengeCopy(challengeType, ctx.out);
+    printResendHintIfApplicable(challengeType, accountId, ctx.out);
+
+    if (challengeType === "mobile_app_approval") {
+      const outcome = await waitForMobileApproval(client, accountId, current.expires_at, {
+        out: ctx.out,
+        outOpts: ctx.outOpts,
+        sleep: ctx.sleep,
+        now: ctx.now,
+      });
+      if (outcome.kind === "active") {
+        printConnected(outcome.result, { out: ctx.out, outOpts: ctx.outOpts, successVerb: ctx.successVerb });
+        return;
+      }
+      if (outcome.kind === "terminal_failure") {
+        ctx.out.stderr.write(
+          `This checkpoint has ${outcome.status}. Run the connect command again to restart.\n`,
+        );
+        process.exit(9);
+        return;
+      }
+      // outcome.kind === "timeout"
+      ctx.out.stderr.write(
+        `Still waiting for approval. Finish out-of-band: curviate account checkpoint poll --checkpoint ${accountId}\n`,
+      );
+      process.exit(AUTH_NEEDED);
+      return;
+    }
+
+    // Code-based challenge: inner retry loop (422 re-prompts without
+    // re-printing the challenge copy; a chained 202 breaks out to the
+    // outer loop, which prints the new stage's copy).
+    for (;;) {
+      const code = await ctx.readline("Enter the code: ");
+      try {
+        const result = await client.accounts.submitCheckpoint({ account_id: accountId, code });
+        const r = result as CheckpointEnvelope;
+        if (r.status === "checkpoint_required") {
+          current = { ...r, account_id: r.account_id ?? accountId };
+          break;
+        }
+        printConnected(result, { out: ctx.out, outOpts: ctx.outOpts, successVerb: ctx.successVerb });
+        return;
+      } catch (err) {
+        if (err instanceof CurviateError && err.code === "CHECKPOINT_INVALID_CODE") {
+          printInvalidCodeRetryHint(err, ctx.out);
+          continue;
+        }
+        await handleError(err, ctx.outOpts, ctx.out);
+      }
+    }
+  }
+}
+
+/**
+ * Branch a link/reconnect response on the 202 checkpoint_required
+ * discriminator: a completed (200/201) result renders as before; a
+ * checkpoint resolves in-process on an interactive TTY session, or renders
+ * the envelope and exits AUTH_NEEDED (12) otherwise.
+ */
+async function handleAccountConnectResult(
+  client: MinimalClient,
+  result: unknown,
+  ctx: {
+    out: OutputStreams;
+    flags: AccountFlags;
+    outOpts: ReturnType<typeof resolveOutputOpts>;
+    io: ResolvedCredentialIO;
+    successVerb: "linked" | "reconnected";
+  },
+): Promise<void> {
+  const envelope = result as CheckpointEnvelope;
+
+  if (envelope.status !== "checkpoint_required") {
+    renderSuccess(result, ctx.outOpts, ctx.out);
+    return;
+  }
+
+  const isInteractive = ctx.io.isTTY && ctx.io.isOutputTTY && !(ctx.flags["no-interactive"] ?? false);
+
+  if (!isInteractive) {
+    renderSuccess(result, ctx.outOpts, ctx.out);
+    process.exit(AUTH_NEEDED);
+    return;
+  }
+
+  await runInteractiveCheckpointLoop(client, envelope, {
+    out: ctx.out,
+    outOpts: ctx.outOpts,
+    readline: ctx.io.readline,
+    sleep: ctx.io.sleep,
+    now: ctx.io.now,
+    successVerb: ctx.successVerb,
+  });
 }
 
 /**
@@ -366,9 +603,12 @@ export async function runAccountLink(
 
   checkCredentialConflicts(flags, out);
 
+  const resolvedIo = resolveCredentialIO(io);
   const authBody = await buildAuthBody(flags, {
     out,
-    ...resolveCredentialIO(io),
+    isTTY: resolvedIo.isTTY,
+    readline: resolvedIo.readline,
+    readStdin: resolvedIo.readStdin,
     previewMode: flags.preview ?? false,
   });
 
@@ -385,12 +625,21 @@ export async function runAccountLink(
     return;
   }
 
+  let result: unknown;
   try {
-    const result = await client.accounts.link(body);
-    renderSuccess(result, outOpts, out);
+    result = await client.accounts.link(body);
   } catch (err) {
     await handleError(err, outOpts, out);
+    return;
   }
+
+  await handleAccountConnectResult(client, result, {
+    out,
+    flags,
+    outOpts,
+    io: resolvedIo,
+    successVerb: "linked",
+  });
 }
 
 /**
@@ -443,9 +692,12 @@ export async function runAccountReconnect(
   checkCredentialConflicts(flags, out);
 
   const accountId = flags["account-id"] ?? "";
+  const resolvedIo = resolveCredentialIO(io);
   const body = await buildAuthBody(flags, {
     out,
-    ...resolveCredentialIO(io),
+    isTTY: resolvedIo.isTTY,
+    readline: resolvedIo.readline,
+    readStdin: resolvedIo.readStdin,
     previewMode: flags.preview ?? false,
   });
   const outOpts = resolveOutputOpts(flags);
@@ -460,12 +712,21 @@ export async function runAccountReconnect(
     return;
   }
 
+  let result: unknown;
   try {
-    const result = await client.accounts.reconnect(accountId, body);
-    renderSuccess(result, outOpts, out);
+    result = await client.accounts.reconnect(accountId, body);
   } catch (err) {
     await handleError(err, outOpts, out);
+    return;
   }
+
+  await handleAccountConnectResult(client, result, {
+    out,
+    flags,
+    outOpts,
+    io: resolvedIo,
+    successVerb: "reconnected",
+  });
 }
 
 /** Run `account refresh <account_id>`. */
@@ -731,6 +992,11 @@ const accountLinkCommand = defineCommand({
     "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
     "user-agent": { type: "string", description: "Browser User-Agent to pin for this account." },
     "recruiter-contract-id": { type: "string", description: "Recruiter contract to bind to (Recruiter tier only)." },
+    "no-interactive": {
+      type: "boolean",
+      description: "Never prompt for a checkpoint code — on a checkpoint, always render the envelope and exit 12, even on a TTY.",
+      default: false,
+    },
   },
   async run({ args }) {
     const flags = args as AccountFlags;
@@ -804,6 +1070,11 @@ const accountReconnectCommand = defineCommand({
     "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
     "user-agent": { type: "string", description: "Browser User-Agent to pin." },
     "recruiter-contract-id": { type: "string", description: "Recruiter contract id (Recruiter tier only)." },
+    "no-interactive": {
+      type: "boolean",
+      description: "Never prompt for a checkpoint code — on a checkpoint, always render the envelope and exit 12, even on a TTY.",
+      default: false,
+    },
   },
   async run({ args }) {
     const flags = args as AccountFlags;

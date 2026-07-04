@@ -19,6 +19,7 @@
  *   9  — checkpoint flow
  *  10  — messaging window / recipient
  *  11  — billing
+ *  12  — auth action needed (a pending checkpoint; not an error)
  */
 
 import type { ErrorCode } from "@curviate/sdk";
@@ -106,3 +107,15 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
 export function getExitCode(code: ErrorCode): number {
   return EXIT_CODE_MAP[code] ?? 1;
 }
+
+/**
+ * 12 — auth action needed: a checkpoint is pending and the command did its
+ * part; an out-of-band human step (submit a code, approve on the phone, or
+ * resend) is still needed to finish auth. This is NOT derived from an
+ * ErrorCode (a 202 checkpoint-required response is a success, not an error)
+ * — it is a named constant the checkpoint code paths call directly via
+ * `process.exit(AUTH_NEEDED)`, deliberately absent from `EXIT_CODE_MAP`.
+ * Distinct from 9 (checkpoint failure: expired / invalid / max-attempts —
+ * "this checkpoint is dead"); 12 means "still resolvable, needs a human step."
+ */
+export const AUTH_NEEDED = 12;
