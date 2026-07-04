@@ -41,7 +41,8 @@
   },
   "dependencies": {
     "@curviate/sdk": "^0.10.0",
-    "citty": "^0.1.6"
+    "citty": "^0.1.6",
+    "open": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

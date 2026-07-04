@@ -5,7 +5,8 @@
  *   account list                                      — list connected accounts
  *   account get <account_id>                          — get one account
  *   account link <body…>                              — link a new account (write)
- *   account connect-link <body…>                      — generate a hosted connect URL (write)
+ *   account connect-link <body…>                      — generate a hosted connect URL, then (TTY+interactive) open + wait (write)
+ *   account connect-session poll --session <id>       — poll a hosted connect-link session for completion (write)
  *   account reconnect <account_id> <body…>            — re-authorize a disconnected account (write)
  *   account refresh <account_id>                      — refresh account sources (write)
  *   account update <account_id> <body…>               — update proxy config (write)
@@ -18,6 +19,14 @@
  * account_id positionals pass verbatim (NOT resolveIdentifier — not a member/company id).
  * Checkpoint ops are body-addressed: the checkpoint id goes in the body as `account_id`
  * (the provisional account from the 202 response), passed via --checkpoint flag.
+ *
+ * connect-link / connect-session poll: `accounts.getConnectSession` is not yet
+ * on the published SDK (it ships with a coordinated SDK regen) — the CLI
+ * targets it through the same duck-typed MinimalClient interface used
+ * throughout this file, not the SDK's own generated types. Until that SDK
+ * ships, `account connect-session poll` is absent from the SDK-parity
+ * manifest (test/parity.test.ts) by the same convention `checkpoint resend`
+ * already established.
  *
  * Slim projection (default): account list and account get return a
  * compact field subset — six cached account-enrichment fields (username,
@@ -91,10 +100,13 @@ type AccountFlags = {
   purpose?: string;
   "expires-in-seconds"?: string;
   "redirect-url"?: string;
+  // connect-link / connect-session poll open+wait UX
+  open?: boolean;        // connect-link: auto-open the URL (TTY+interactive default: on)
+  session?: string;      // connect-session poll: the session_id to poll
   // checkpoint body fields
   checkpoint?: string;   // maps to body account_id
   code?: string;
-  wait?: boolean;        // checkpoint poll --wait: adaptive-cadence loop instead of a single poll
+  wait?: boolean;        // checkpoint poll / connect-link / connect-session poll --wait: adaptive-cadence loop instead of a single poll
   // global
   json?: boolean;
   fields?: string;
@@ -116,6 +128,13 @@ type OutputStreams = {
 };
 
 // Minimal root-level client shape (accounts namespace is root-scoped).
+//
+// `getConnectSession` is duck-typed the same way `resendCheckpoint` is: the
+// published SDK does not have this method yet (it ships alongside a
+// coordinated SDK regen), so the CLI is built and tested against this
+// interface rather than the SDK's own generated types. This is why the CLI
+// package deliberately excludes itself from the root workspace — it decouples
+// from SDK-internal types on purpose.
 type MinimalClient = {
   accounts: {
     list: (params?: Record<string, unknown>) => Promise<unknown>;
@@ -129,6 +148,7 @@ type MinimalClient = {
     submitCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
     pollCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
     resendCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
+    getConnectSession: (params: Record<string, unknown>) => Promise<unknown>;
   };
 };
 
@@ -270,6 +290,14 @@ export interface CredentialIO {
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the poll sub-loop's elapsed-time/timeout arithmetic. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Injectable browser opener for `account connect-link`'s auto-open.
+   * Defaults to the real `open` package (dynamically imported so it is never
+   * loaded — and never spawns a real browser — unless this default path is
+   * actually reached). Tests inject a stub here instead of mocking the ESM
+   * package directly.
+   */
+  open?: (url: string) => Promise<unknown>;
 }
 
 /**
@@ -367,6 +395,16 @@ async function buildAuthBody(
   return body;
 }
 
+/**
+ * The real browser opener, dynamically imported so the `open` package (and
+ * any browser it might spawn) is only ever touched on this exact code path —
+ * never during a test, which always injects its own `open` stub instead.
+ */
+async function defaultOpen(url: string): Promise<unknown> {
+  const open = (await import("open")).default;
+  return open(url);
+}
+
 function resolveCredentialIO(io: CredentialIO): {
   isTTY: boolean;
   isOutputTTY: boolean;
@@ -374,6 +412,7 @@ function resolveCredentialIO(io: CredentialIO): {
   readStdin: () => Promise<string>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  open: (url: string) => Promise<unknown>;
 } {
   return {
     isTTY: io.isTTY ?? (process.stdin.isTTY ?? false),
@@ -382,6 +421,7 @@ function resolveCredentialIO(io: CredentialIO): {
     readStdin: io.readStdin ?? defaultReadStdin,
     sleep: io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
     now: io.now ?? (() => Date.now()),
+    open: io.open ?? defaultOpen,
   };
 }
 
@@ -645,14 +685,110 @@ export async function runAccountLink(
   });
 }
 
+/** A connect session's poll response — `account_id` is null until `resolved`. */
+interface ConnectSessionEnvelope {
+  object?: string;
+  session_id?: string;
+  status?: string;
+  account_id?: string | null;
+  expires_at?: string;
+}
+
+/** Terminal outcome of the connect-session adaptive-cadence wait loop. */
+type ConnectSessionWaitOutcome =
+  | { kind: "resolved"; result: unknown }
+  | { kind: "terminal_failure"; status: "expired" | "failed"; result: unknown }
+  | { kind: "timeout"; result: unknown };
+
 /**
- * Run `account connect-link <body…>`.
+ * The connect-session `--wait` adaptive-cadence loop — structurally the same
+ * loop as the checkpoint poll wait loop above (same cadence constants, same
+ * lazily-derived timeout bound off the first response's `expires_at`), driven
+ * against `accounts.getConnectSession` instead of `accounts.pollCheckpoint`.
+ * Shared by `connect-link`'s post-open wait and the standalone
+ * `connect-session poll --wait` command — one loop, two callers.
+ */
+async function runConnectSessionWaitLoop(
+  client: MinimalClient,
+  params: Record<string, unknown>,
+  ctx: {
+    out: OutputStreams;
+    sleep: (ms: number) => Promise<void>;
+    now: () => number;
+    showTicker: boolean;
+    timeoutOverrideMs?: number;
+  },
+): Promise<ConnectSessionWaitOutcome> {
+  const startedAt = ctx.now();
+  let timeoutAt: number | undefined =
+    ctx.timeoutOverrideMs !== undefined ? startedAt + ctx.timeoutOverrideMs : undefined;
+
+  await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
+
+  for (;;) {
+    const result = await client.accounts.getConnectSession(params);
+    const r = result as ConnectSessionEnvelope;
+
+    if (r.status === "resolved") return { kind: "resolved", result };
+    if (r.status === "expired" || r.status === "failed") {
+      return { kind: "terminal_failure", status: r.status, result };
+    }
+
+    if (timeoutAt === undefined) {
+      const expiresAtMs = r.expires_at ? new Date(r.expires_at).getTime() : NaN;
+      timeoutAt = Number.isNaN(expiresAtMs) ? startedAt + 10 * 60_000 : expiresAtMs;
+    }
+
+    const n = ctx.now();
+    if (n >= timeoutAt) return { kind: "timeout", result };
+
+    if (ctx.showTicker) {
+      ctx.out.stderr.write(`\rWaiting for the account to connect… ${formatRemaining(timeoutAt - n)} remaining`);
+    }
+
+    await ctx.sleep(nextCheckpointPollDelayMs(n - startedAt));
+  }
+}
+
+function printConnectSessionResolved(
+  result: unknown,
+  ctx: { out: OutputStreams; outOpts: ReturnType<typeof resolveOutputOpts> },
+): void {
+  const r = result as ConnectSessionEnvelope;
+  ctx.out.stderr.write(`Account connected: ${r.account_id ?? ""}\n`);
+  renderSuccess(result, ctx.outOpts, ctx.out);
+}
+
+/** Parse `--timeout <ms>` (the wait-loop bound, not the SDK request timeout). Exits 2 on a non-numeric value. */
+function resolveWaitTimeoutOverrideMs(flags: AccountFlags, out: OutputStreams): number | undefined {
+  if (flags.timeout === undefined) return undefined;
+  const parsed = Number(flags.timeout);
+  if (Number.isNaN(parsed)) {
+    out.stderr.write("error: --timeout must be a number of milliseconds.\n");
+    process.exit(2);
+  }
+  return parsed;
+}
+
+/**
+ * Run `account connect-link <body…> [--wait/--no-wait] [--open/--no-open] [--timeout <ms>]`.
  * All body fields are optional (conditional on purpose).
+ *
+ * TTY + interactive (default): auto-opens the returned URL in the browser,
+ * then waits on the adaptive cadence for the session to resolve — printing a
+ * refreshing status line while pending (unless --json), then a terminal exit
+ * (0 resolved, 9 expired/failed, 12 AUTH_NEEDED on a wait-window timeout).
+ *
+ * Non-TTY / --no-interactive (the agent path): NEVER opens a browser and
+ * NEVER waits — prints the URL, a relay instruction, and the session_id, then
+ * returns immediately (exit 0). A headless caller must not block on a
+ * hand-off that requires a human; poll later with `connect-session poll`.
  */
 export async function runAccountConnectLink(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
+  io: CredentialIO = {},
 ): Promise<void> {
   const body: Record<string, unknown> = {};
   if (flags["seat-id"]) body["seat_id"] = flags["seat-id"];
@@ -669,12 +805,156 @@ export async function runAccountConnectLink(
     return;
   }
 
+  let result: unknown;
   try {
-    const result = await client.accounts.createConnectLink(body);
-    renderSuccess(result, outOpts, out);
+    result = await client.accounts.createConnectLink(body);
   } catch (err) {
     await handleError(err, outOpts, out);
+    return;
   }
+
+  const mint = result as { url?: string; session_id?: string };
+  const resolvedIo = resolveCredentialIO(io);
+  const isInteractive = resolvedIo.isTTY && resolvedIo.isOutputTTY && !(flags["no-interactive"] ?? false);
+
+  if (!isInteractive) {
+    if (mint.url) {
+      out.stderr.write(`Open this URL in a browser to connect the account: ${mint.url}\n`);
+    }
+    if (mint.session_id) {
+      out.stderr.write(
+        `Session: ${mint.session_id} — check it later with: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
+      );
+    }
+    renderSuccess(result, outOpts, out);
+    return;
+  }
+
+  if ((flags.open ?? true) && mint.url) {
+    await resolvedIo.open(mint.url);
+  }
+
+  if (!(flags.wait ?? true)) {
+    renderSuccess(result, outOpts, out);
+    return;
+  }
+
+  const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
+  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
+  const params: Record<string, unknown> = { session_id: mint.session_id };
+
+  let outcome: ConnectSessionWaitOutcome;
+  try {
+    outcome = await runConnectSessionWaitLoop(client, params, {
+      out,
+      sleep: resolvedIo.sleep,
+      now: resolvedIo.now,
+      showTicker,
+      timeoutOverrideMs,
+    });
+  } catch (err) {
+    await handleError(err, outOpts, out);
+    return;
+  }
+
+  if (outcome.kind === "resolved") {
+    printConnectSessionResolved(outcome.result, { out, outOpts });
+    return;
+  }
+  if (outcome.kind === "terminal_failure") {
+    renderSuccess(outcome.result, outOpts, out);
+    out.stderr.write(
+      `This connect session has ${outcome.status}. Generate a new link: curviate account connect-link.\n`,
+    );
+    process.exit(9);
+    return;
+  }
+  // outcome.kind === "timeout"
+  renderSuccess(outcome.result, outOpts, out);
+  out.stderr.write(
+    `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
+  );
+  process.exit(AUTH_NEEDED);
+}
+
+/**
+ * Run `account connect-session poll --session <session_id> [--wait] [--timeout <ms>]`.
+ *
+ * Without `--wait` (default): a single poll, prints the body, exits 0
+ * regardless of status — the JSON `status` field is for the caller to branch
+ * on, not an error signal.
+ * With `--wait`: the same adaptive-cadence loop and terminal exit codes as
+ * `connect-link`'s own wait (0 resolved, 9 expired/failed, 12 AUTH_NEEDED on
+ * a wait-window timeout) — the standalone counterpart for an agent that
+ * minted the link with `--no-wait`/non-interactively and is now checking on
+ * a session_id it already has.
+ */
+export async function runAccountConnectSessionPoll(
+  client: MinimalClient,
+  flags: AccountFlags,
+  out: OutputStreams,
+  io: CredentialIO = {},
+): Promise<void> {
+  if (!flags.session) {
+    out.stderr.write("error: --session is required (the session_id from `account connect-link`).\n");
+    process.exit(2);
+  }
+
+  const params: Record<string, unknown> = { session_id: flags.session };
+  const outOpts = resolveOutputOpts(flags);
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "accounts.getConnectSession", args: {}, body: params });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  if (!flags.wait) {
+    try {
+      const result = await client.accounts.getConnectSession(params);
+      renderSuccess(result, outOpts, out);
+    } catch (err) {
+      await handleError(err, outOpts, out);
+    }
+    return;
+  }
+
+  const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
+  const resolvedIo = resolveCredentialIO(io);
+  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
+
+  let outcome: ConnectSessionWaitOutcome;
+  try {
+    outcome = await runConnectSessionWaitLoop(client, params, {
+      out,
+      sleep: resolvedIo.sleep,
+      now: resolvedIo.now,
+      showTicker,
+      timeoutOverrideMs,
+    });
+  } catch (err) {
+    await handleError(err, outOpts, out);
+    return;
+  }
+
+  if (outcome.kind === "resolved") {
+    printConnectSessionResolved(outcome.result, { out, outOpts });
+    return;
+  }
+  if (outcome.kind === "terminal_failure") {
+    renderSuccess(outcome.result, outOpts, out);
+    out.stderr.write(
+      `This connect session has ${outcome.status}. Generate a new link: curviate account connect-link.\n`,
+    );
+    process.exit(9);
+    return;
+  }
+  // outcome.kind === "timeout"
+  renderSuccess(outcome.result, outOpts, out);
+  out.stderr.write(
+    `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${flags.session} --wait\n`,
+  );
+  process.exit(AUTH_NEEDED);
 }
 
 /**
@@ -1210,7 +1490,15 @@ const accountLinkCommand = defineCommand({
 });
 
 const accountConnectLinkCommand = defineCommand({
-  meta: { name: "connect-link", description: "Generate a one-time hosted account connection URL." },
+  meta: {
+    name: "connect-link",
+    description:
+      "Generate a one-time hosted account connection URL. On an interactive TTY the URL auto-opens in " +
+      "your browser and the command waits for the account to connect (exit 0 on success, 9 if the link " +
+      "expires or fails, 12 if the wait window elapses first). Non-interactively it never opens a browser " +
+      "and returns immediately with the url and session_id — poll completion later with " +
+      "`account connect-session poll`.",
+  },
   args: {
     ...WRITE_SINGLE_FLAGS,
     "seat-id": { type: "string", description: "Target seat (required when purpose=create)." },
@@ -1218,13 +1506,32 @@ const accountConnectLinkCommand = defineCommand({
     purpose: { type: "string", description: "create | reconnect (default: create)." },
     "expires-in-seconds": { type: "string", description: "Link expiry in seconds (60–3600, default 900)." },
     "redirect-url": { type: "string", description: "Browser return URL after the hosted flow." },
+    open: {
+      type: "boolean",
+      description: "Auto-open the URL in your default browser. Default: on for an interactive TTY, always off otherwise (ignored non-interactively).",
+    },
+    wait: {
+      type: "boolean",
+      description: "Poll for the account to connect on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) after opening the URL. Default: on for an interactive TTY, always off otherwise (the agent polls later via `account connect-session poll`).",
+    },
+    // Override WRITE_SINGLE_FLAGS.timeout: on this command --timeout is the
+    // TTY+interactive wait loop's own wall-clock bound in MILLISECONDS
+    // (meaningless outside that branch) — NOT the SDK request timeout.
+    // Default: the time remaining to the link's own expiry.
+    timeout: {
+      type: "string",
+      description: "Wait-loop timeout in milliseconds (only meaningful under the interactive TTY wait; default: time remaining to the link's expiry). Note the unit: this is milliseconds.",
+    },
   },
   async run({ args }) {
     const flags = args as AccountFlags;
+    // --timeout here means the wait-loop bound (ms), not the SDK request
+    // timeout — resolve config without it so the SDK client keeps its
+    // default request timeout (mirrors `account checkpoint poll`'s identical
+    // flag-name collision fix).
     const cfg = await resolveEffectiveConfig({
       apiKey: flags["api-key"],
       baseUrl: flags["base-url"],
-      timeout: flags.timeout,
       profile: flags.profile,
     });
     if (!cfg.apiKey) {
@@ -1234,6 +1541,65 @@ const accountConnectLinkCommand = defineCommand({
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
     await runAccountConnectLink(client as unknown as MinimalClient, flags, out);
+  },
+});
+
+const accountConnectSessionPollCommand = defineCommand({
+  meta: {
+    name: "poll",
+    description:
+      "Poll a hosted connect-link session for completion. Without --wait: a single poll — the JSON " +
+      "`status` field (pending | resolved | expired | failed) tells you what to do next. With --wait: " +
+      "block on the same adaptive cadence as `account connect-link` until a terminal state.",
+  },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    session: {
+      type: "string",
+      description: "The session_id returned by `account connect-link`.",
+      required: true,
+    },
+    wait: {
+      type: "boolean",
+      description: "Poll on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) until a terminal state, instead of a single poll.",
+      default: false,
+    },
+    // Override WRITE_SINGLE_FLAGS.timeout: on this command --timeout is the
+    // --wait loop's own wall-clock bound in MILLISECONDS (requires --wait) —
+    // NOT the SDK request timeout. Default: the time remaining to the
+    // session's own expiry.
+    timeout: {
+      type: "string",
+      description: "Wait-loop timeout in milliseconds (requires --wait; default: time remaining to the session's expiry). Note the unit: this is milliseconds.",
+    },
+  },
+  async run({ args }) {
+    const flags = args as AccountFlags;
+    // --timeout here means the --wait bound (ms), not the SDK request
+    // timeout — resolve config without it (same fix as `account checkpoint
+    // poll` / `account connect-link`).
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runAccountConnectSessionPoll(client as unknown as MinimalClient, flags, out);
+  },
+});
+
+const accountConnectSessionCommand = defineCommand({
+  meta: { name: "connect-session", description: "Hosted connect-link session operations (poll for completion)." },
+  subCommands: {
+    poll: accountConnectSessionPollCommand,
+  },
+  async run() {
+    process.stderr.write("Usage: curviate account connect-session poll --session <session_id>\n");
   },
 });
 
@@ -1505,6 +1871,7 @@ export const accountCommand = defineCommand({
     get: accountGetCommand,
     link: accountLinkCommand,
     "connect-link": accountConnectLinkCommand,
+    "connect-session": accountConnectSessionCommand,
     reconnect: accountReconnectCommand,
     refresh: accountRefreshCommand,
     update: accountUpdateCommand,
@@ -1514,7 +1881,7 @@ export const accountCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate account <subcommand>\n" +
-      "  list | get | link | connect-link | reconnect | refresh | update | disconnect | checkpoint\n",
+      "  list | get | link | connect-link | connect-session poll | reconnect | refresh | update | disconnect | checkpoint\n",
     );
   },
 });
