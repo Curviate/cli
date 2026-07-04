@@ -1,6 +1,6 @@
 /**
  * SDK-parity test — asserts the CLI provides exactly one command for each of
- * the SDK's 82 public resource methods.
+ * the SDK's 84 public resource methods.
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -9,7 +9,7 @@
  *   3. The test asserts:
  *      (a) every manifest entry resolves to an existing SDK method,
  *      (b) every SDK method is covered by exactly one manifest entry,
- *      (c) the total mapped-method count is 82.
+ *      (c) the total mapped-method count is 84.
  *
  * A negative fixture at the bottom demonstrates that removing an SDK method
  * causes the bijection assertion to fail.
@@ -27,17 +27,19 @@ import { describe, it, expect } from "vitest";
 // not an SDK resource method.
 
 const PARITY_MANIFEST: Record<string, string> = {
-  // accounts (10)
-  "account list":              "accounts.list",
-  "account get":               "accounts.get",
-  "account link":              "accounts.link",
-  "account connect-link":      "accounts.createConnectLink",
-  "account reconnect":         "accounts.reconnect",
-  "account refresh":           "accounts.refresh",
-  "account update":            "accounts.update",
-  "account disconnect":        "accounts.disconnect",
-  "account checkpoint submit": "accounts.submitCheckpoint",
-  "account checkpoint poll":   "accounts.pollCheckpoint",
+  // accounts (12)
+  "account list":                "accounts.list",
+  "account get":                 "accounts.get",
+  "account link":                "accounts.link",
+  "account connect-link":        "accounts.createConnectLink",
+  "account connect-session poll": "accounts.getConnectSession",
+  "account reconnect":           "accounts.reconnect",
+  "account refresh":             "accounts.refresh",
+  "account update":              "accounts.update",
+  "account disconnect":          "accounts.disconnect",
+  "account checkpoint submit":   "accounts.submitCheckpoint",
+  "account checkpoint poll":     "accounts.pollCheckpoint",
+  "account checkpoint resend":   "accounts.resendCheckpoint",
 
   // messaging (14)
   "inbox list":             "messaging.listChats",
@@ -180,9 +182,9 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — command manifest", () => {
-  it("manifest has exactly 82 entries", () => {
+  it("manifest has exactly 84 entries", () => {
     const count = Object.keys(PARITY_MANIFEST).length;
-    expect(count, `manifest length should be 82, got ${count}`).toBe(82);
+    expect(count, `manifest length should be 84, got ${count}`).toBe(84);
   });
 
   it("every manifest entry maps to a real SDK method (no phantom references)", async () => {
@@ -234,9 +236,9 @@ describe("SDK parity — command manifest", () => {
     ).toHaveLength(0);
   });
 
-  it("SDK has exactly 82 public resource methods", async () => {
+  it("SDK has exactly 84 public resource methods", async () => {
     const sdkMethods = await buildSdkMethodSet();
-    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 82`).toBe(82);
+    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 84`).toBe(84);
   });
 });
 

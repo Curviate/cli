@@ -8,6 +8,27 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-04
+
+### Added
+
+- **Safe credential entry** for `account link` / `account reconnect` / `account update` — env-var fallbacks (an explicit flag always wins over its env var), `--password-stdin` / `--li-at-stdin` flags to read a secret from stdin, and a masked TTY prompt with a non-TTY fail-fast when a credential is required but not supplied any other way. A 5-way conflict matrix rejects supplying the same credential through more than one channel. The four secret-bearing flags carry a shell-history/`ps`-visibility warning, and `--preview` masks credential values instead of ever rendering them in cleartext.
+- **Guided checkpoint follow-through** on `account link` / `account reconnect`. A `202 checkpoint_required` response now resolves in-process on an interactive TTY — code prompt, retry loop on a `422`, chained-challenge follow-through, a codeless mobile-app-approval poll sub-loop, and a resend hint — instead of just printing the envelope. A non-interactive session (either stream not a TTY, or `--no-interactive`) still prints the envelope and exits with the new `12` (`AUTH_NEEDED`) code — a pending checkpoint, not an error.
+- **`account checkpoint poll --wait`** — an adaptive-cadence loop (1000ms, then 1500ms for 30s, then 3000ms) that blocks until the checkpoint resolves (exit `0`), expires/fails (exit `9`), or the wait window elapses while still pending (exit `12`, still resolvable later). `--wait` is off by default (the single-poll behavior is unchanged). `--timeout <ms>` overrides the wall-clock bound (default: the checkpoint's own expiry) and fails fast at exit `2` on a non-numeric value, before any call. `checkpoint submit`'s one-shot path also now detects a chained `checkpoint_required` response and exits `12` instead of rendering it as a plain success.
+- **`account checkpoint resend --checkpoint <id>`** — re-sends the pending challenge notification, mirroring `checkpoint submit` / `poll` (body-addressed, `WRITE_SINGLE_FLAGS`, `--preview` supported, no `--code` since there's nothing to submit). Exits `0` on any `200` regardless of the response's `resent` boolean — `false` is an honest answer, not a command failure.
+- **`account connect-link` browser handoff.** The command now completes the hosted-link round trip instead of only minting a URL: on an interactive TTY it auto-opens the URL and waits on the same adaptive cadence as `checkpoint poll --wait` for the account to connect (resolved → prints the connected account and exits `0`; expired/failed → exit `9`; wait window elapses while still pending → exit `12`). A non-interactive session (non-TTY, or `--no-interactive`) never opens a browser and never blocks — it prints the URL, a relay instruction, and the `session_id`, then returns immediately.
+- **`account connect-session poll --session <id>`** — the standalone counterpart to the above: a single poll by default (prints the body, exits `0` regardless of status), or the same adaptive wait loop with `--wait`. `--open`/`--no-open` and `--wait`/`--no-wait` are TTY-adaptive; `--timeout <ms>` overrides the wait bound (default: time remaining to the session's own expiry).
+- Pagination flags (`--limit`/`--cursor`/`--all`/`--max-pages`) are now suppressed on the 8 `account` subcommands that mutate or resolve exactly one resource (`link`, `connect-link`, `reconnect`, `refresh`, `update`, `disconnect`, `checkpoint submit`, `checkpoint poll`) — they had no meaning on a one-row response. `account list` is unaffected. `link` / `reconnect` help text gains a one-line note about the checkpoint-required path.
+- SDK-parity manifest (`test/parity.test.ts`) gains `account checkpoint resend` → `accounts.resendCheckpoint` and `account connect-session poll` → `accounts.getConnectSession` — both were held back pending the SDK's own `0.11.0` regen; the manifest and the SDK method count both move from 82 to 84.
+
+### Fixed
+
+- **Flag-dispatch bug:** the unknown-flag check always stripped a leading `no-` prefix before matching against the declared-flag set, so a flag literally declared with that prefix (e.g. `--no-interactive`) was misread as negating an undeclared name and rejected as unknown on every invocation. The full declared name is now checked first; the `no-` strip is only a fallback for citty's own implicit negation of an undeclared `no-*` flag.
+
+### Changed
+
+- `@curviate/sdk` dependency bumped to `^0.11.0`.
+
 ## [0.10.0] - 2026-07-03
 
 ### Added

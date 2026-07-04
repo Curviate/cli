@@ -20,13 +20,13 @@
  * Checkpoint ops are body-addressed: the checkpoint id goes in the body as `account_id`
  * (the provisional account from the 202 response), passed via --checkpoint flag.
  *
- * connect-link / connect-session poll: `accounts.getConnectSession` is not yet
- * on the published SDK (it ships with a coordinated SDK regen) — the CLI
- * targets it through the same duck-typed MinimalClient interface used
- * throughout this file, not the SDK's own generated types. Until that SDK
- * ships, `account connect-session poll` is absent from the SDK-parity
- * manifest (test/parity.test.ts) by the same convention `checkpoint resend`
- * already established.
+ * connect-link / connect-session poll: `accounts.getConnectSession` — like
+ * `accounts.resendCheckpoint` — is targeted through the duck-typed
+ * MinimalClient interface below rather than the SDK's own generated types.
+ * Both are real methods on the published SDK (0.11.0+) and both are covered
+ * in the SDK-parity manifest (test/parity.test.ts); the duck-typing is a
+ * standing decoupling choice (see MinimalClient), not a placeholder for a
+ * method the SDK hasn't shipped yet.
  *
  * Slim projection (default): account list and account get return a
  * compact field subset — six cached account-enrichment fields (username,
@@ -129,12 +129,12 @@ type OutputStreams = {
 
 // Minimal root-level client shape (accounts namespace is root-scoped).
 //
-// `getConnectSession` is duck-typed the same way `resendCheckpoint` is: the
-// published SDK does not have this method yet (it ships alongside a
-// coordinated SDK regen), so the CLI is built and tested against this
-// interface rather than the SDK's own generated types. This is why the CLI
-// package deliberately excludes itself from the root workspace — it decouples
-// from SDK-internal types on purpose.
+// `getConnectSession` and `resendCheckpoint` are both duck-typed against this
+// interface rather than the SDK's own generated types, even though both are
+// real published SDK methods (0.11.0+). This is why the CLI package
+// deliberately excludes itself from the root workspace — it decouples from
+// SDK-internal types on purpose, so the CLI can ship ahead of an SDK regen
+// when it needs to.
 type MinimalClient = {
   accounts: {
     list: (params?: Record<string, unknown>) => Promise<unknown>;
