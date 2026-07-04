@@ -93,6 +93,7 @@ type AccountFlags = {
   // checkpoint body fields
   checkpoint?: string;   // maps to body account_id
   code?: string;
+  wait?: boolean;        // checkpoint poll --wait: adaptive-cadence loop instead of a single poll
   // global
   json?: boolean;
   fields?: string;
@@ -869,23 +870,108 @@ export async function runAccountCheckpointSubmit(
     return;
   }
 
+  let chained = false;
   try {
     const result = await client.accounts.submitCheckpoint(body);
+    const r = result as CheckpointEnvelope;
     renderSuccess(result, outOpts, out);
+    chained = r.status === "checkpoint_required";
   } catch (err) {
     await handleError(err, outOpts, out);
+    return;
+  }
+
+  // A chained 202 (another challenge required) is a success response, not a
+  // CurviateError — the exit call sits outside the try/catch above so it is
+  // never miscaught and misrouted through handleError. Short-circuits the
+  // one-shot command with AUTH_NEEDED (12): still resolvable, needs a further
+  // `checkpoint submit` call for the new challenge_type.
+  if (chained) {
+    process.exit(AUTH_NEEDED);
+  }
+}
+
+/** Terminal outcome of the `checkpoint poll --wait` adaptive-cadence loop. */
+type PollWaitOutcome =
+  | { kind: "active"; result: unknown }
+  | { kind: "terminal_failure"; status: "expired" | "failed"; result: unknown }
+  | { kind: "timeout"; result: unknown };
+
+/** "m:ss" countdown for the refreshing wait status line. */
+function formatRemaining(ms: number): string {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * The `checkpoint poll --wait` adaptive-cadence loop: the same cadence
+ * (`lib/checkpoint-cadence.ts`) as the interactive mobile-approval sub-loop,
+ * against the standalone poll body rather than a just-received 202 envelope.
+ * The wall-clock bound is `timeoutOverrideMs` (the `--timeout` flag) when
+ * given; otherwise it is read lazily off the first `pending` response's
+ * `expires_at` (falling back to a 10-minute default if that response somehow
+ * carries none), since a bare `checkpoint poll --wait` has no envelope of its
+ * own to read an expiry from before the first poll.
+ */
+async function runCheckpointPollWaitLoop(
+  client: MinimalClient,
+  body: Record<string, unknown>,
+  ctx: {
+    out: OutputStreams;
+    sleep: (ms: number) => Promise<void>;
+    now: () => number;
+    showTicker: boolean;
+    timeoutOverrideMs?: number;
+  },
+): Promise<PollWaitOutcome> {
+  const startedAt = ctx.now();
+  let timeoutAt: number | undefined =
+    ctx.timeoutOverrideMs !== undefined ? startedAt + ctx.timeoutOverrideMs : undefined;
+
+  await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
+
+  for (;;) {
+    const result = await client.accounts.pollCheckpoint(body);
+    const r = result as { status?: string; expires_at?: string };
+
+    if (r.status === "active") return { kind: "active", result };
+    if (r.status === "expired" || r.status === "failed") {
+      return { kind: "terminal_failure", status: r.status, result };
+    }
+
+    if (timeoutAt === undefined) {
+      const expiresAtMs = r.expires_at ? new Date(r.expires_at).getTime() : NaN;
+      timeoutAt = Number.isNaN(expiresAtMs) ? startedAt + 10 * 60_000 : expiresAtMs;
+    }
+
+    const n = ctx.now();
+    if (n >= timeoutAt) return { kind: "timeout", result };
+
+    if (ctx.showTicker) {
+      ctx.out.stderr.write(`\rWaiting for approval… ${formatRemaining(timeoutAt - n)} remaining`);
+    }
+
+    await ctx.sleep(nextCheckpointPollDelayMs(n - startedAt));
   }
 }
 
 /**
- * Run `account checkpoint poll <body…>`.
+ * Run `account checkpoint poll <body…> [--wait] [--timeout <ms>]`.
  * Body-addressed: checkpoint id in body as `account_id` (--checkpoint flag).
  * Required: --checkpoint.
+ *
+ * Without `--wait` (default): a single poll, unchanged (back-compat).
+ * With `--wait`: the adaptive-cadence loop above, until `active` (exit 0),
+ * `expired`/`failed` (exit 9), or the wait window elapses while still
+ * `pending` (exit AUTH_NEEDED/12 — still resolvable, not a failure).
  */
 export async function runAccountCheckpointPoll(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
+  io: CredentialIO = {},
 ): Promise<void> {
   if (!flags.checkpoint) {
     out.stderr.write("error: --checkpoint is required (the provisional account_id from the 202 response).\n");
@@ -908,12 +994,71 @@ export async function runAccountCheckpointPoll(
     return;
   }
 
+  if (!flags.wait) {
+    try {
+      const result = await client.accounts.pollCheckpoint(body);
+      renderSuccess(result, outOpts, out);
+    } catch (err) {
+      await handleError(err, outOpts, out);
+    }
+    return;
+  }
+
+  let timeoutOverrideMs: number | undefined;
+  if (flags.timeout !== undefined) {
+    const parsed = Number(flags.timeout);
+    if (Number.isNaN(parsed)) {
+      out.stderr.write("error: --timeout must be a number of milliseconds.\n");
+      process.exit(2);
+    }
+    timeoutOverrideMs = parsed;
+  }
+
+  const resolvedIo = resolveCredentialIO(io);
+  // "TTY + not --json" per the flag's own contract — the raw --json flag,
+  // not resolveOutputOpts's derived json (which also folds in the real
+  // process.stdout.isTTY and would make the ticker untestable: this
+  // function's own isOutputTTY seam is what tests control).
+  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
+
+  // Poll only ever addresses a mobile_app_approval checkpoint (a code-based
+  // checkpoint 422s here — use `checkpoint submit` instead), so the resend
+  // hint's per-type gating always resolves to "resendable" — printed once,
+  // up front, not per attempt. Stderr diagnostic, not the stdout data
+  // payload the "silent until terminal" discipline is about (mirrors
+  // renderError's own one-liner-to-stderr-regardless-of-json convention).
+  printResendHintIfApplicable("mobile_app_approval", flags.checkpoint, out);
+
+  let outcome: PollWaitOutcome;
   try {
-    const result = await client.accounts.pollCheckpoint(body);
-    renderSuccess(result, outOpts, out);
+    outcome = await runCheckpointPollWaitLoop(client, body, {
+      out,
+      sleep: resolvedIo.sleep,
+      now: resolvedIo.now,
+      showTicker,
+      timeoutOverrideMs,
+    });
   } catch (err) {
     await handleError(err, outOpts, out);
+    return;
   }
+
+  if (outcome.kind === "active") {
+    printConnected(outcome.result, { out, outOpts, successVerb: "linked" });
+    return;
+  }
+  if (outcome.kind === "terminal_failure") {
+    renderSuccess(outcome.result, outOpts, out);
+    out.stderr.write(`This checkpoint has ${outcome.status}. Start over: curviate account link or curviate account reconnect.\n`);
+    process.exit(9);
+    return;
+  }
+  // outcome.kind === "timeout"
+  renderSuccess(outcome.result, outOpts, out);
+  out.stderr.write(
+    `Still waiting for approval — the wait window elapsed. Check again: curviate account checkpoint poll --checkpoint ${flags.checkpoint} --wait\n`,
+  );
+  process.exit(AUTH_NEEDED);
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,7 +1329,7 @@ const accountCheckpointSubmitCommand = defineCommand({
     },
     code: {
       type: "string",
-      description: "The OTP / 2FA verification code (or TRY_ANOTHER_WAY to switch challenge type).",
+      description: "The OTP / 2FA verification code.",
       required: true,
     },
   },
@@ -1207,7 +1352,12 @@ const accountCheckpointSubmitCommand = defineCommand({
 });
 
 const accountCheckpointPollCommand = defineCommand({
-  meta: { name: "poll", description: "Poll for mobile-app approval of a pending checkpoint challenge." },
+  meta: {
+    name: "poll",
+    description:
+      "Poll for mobile-app approval of a pending checkpoint challenge. " +
+      "With --wait, blocks on an adaptive cadence until a terminal state (or --timeout elapses) instead of a single poll.",
+  },
   args: {
     ...WRITE_SINGLE_FLAGS,
     checkpoint: {
@@ -1215,13 +1365,29 @@ const accountCheckpointPollCommand = defineCommand({
       description: "The provisional account_id from the 202 checkpoint_required response.",
       required: true,
     },
+    wait: {
+      type: "boolean",
+      description: "Poll on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) until a terminal state, instead of a single poll.",
+      default: false,
+    },
+    // Override WRITE_SINGLE_FLAGS.timeout: on this command --timeout is the
+    // --wait loop's own wall-clock bound in MILLISECONDS (requires --wait) —
+    // NOT the SDK request timeout, and NOT seconds like `inbox sync-chat
+    // --timeout`. Default: the time remaining to the checkpoint's own expiry.
+    timeout: {
+      type: "string",
+      description: "Wait-loop timeout in milliseconds (requires --wait; default: time remaining to the checkpoint's expiry). Note the unit: this is milliseconds — `inbox sync-chat --timeout` is seconds.",
+    },
   },
   async run({ args }) {
     const flags = args as AccountFlags;
+    // --timeout here means the --wait bound (ms), not the SDK request
+    // timeout — resolve config without it so the SDK client keeps its
+    // default request timeout (mirrors `inbox sync-chat`'s own fix for the
+    // identical flag-name collision).
     const cfg = await resolveEffectiveConfig({
       apiKey: flags["api-key"],
       baseUrl: flags["base-url"],
-      timeout: flags.timeout,
       profile: flags.profile,
     });
     if (!cfg.apiKey) {

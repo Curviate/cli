@@ -114,3 +114,28 @@ describe("account link / reconnect — checkpoint-required hint in description",
     expect(description).not.toMatch(/exits? 12/i);
   });
 });
+
+describe("account checkpoint submit — --code description", () => {
+  it("does not mention the deferred switch-challenge-type escape hatch", async () => {
+    const subCmds = await loadAccountSubCommands();
+    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+    const args = (checkpointSub["submit"]?.args ?? {}) as Record<string, { description?: string }>;
+
+    expect(String(args["code"]?.description ?? "")).not.toMatch(/TRY_ANOTHER_WAY/);
+  });
+});
+
+describe("account checkpoint poll — --wait/--timeout flags", () => {
+  it("exposes --wait (default off) and a millisecond --timeout with an explicit unit note", async () => {
+    const subCmds = await loadAccountSubCommands();
+    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+    const args = (checkpointSub["poll"]?.args ?? {}) as Record<string, { default?: unknown; description?: string }>;
+
+    expect(args).toHaveProperty("wait");
+    expect(args["wait"]?.default).toBe(false);
+    expect(args).toHaveProperty("timeout");
+    expect(String(args["timeout"]?.description ?? ""), "--timeout help text must say milliseconds explicitly").toMatch(
+      /millisecond/i,
+    );
+  });
+});
