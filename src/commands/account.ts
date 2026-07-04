@@ -35,7 +35,20 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { slimAccountList, slimAccountListItem, slimAccountGet } from "../lib/slim.js";
+import { readlineSync } from "../lib/readline.js";
+import { defaultReadStdin } from "../lib/stdin.js";
+import {
+  resolveSecret,
+  checkCredentialConflicts,
+  maskCredentialSecretsForPreview,
+} from "../lib/credential-resolve.js";
 import type { CurviateError } from "@curviate/sdk";
+
+// ps/shell-history warning template (mirrors the --api-key warning in global-flags.ts).
+const PW_WARNING = (stdinFlag: string, envVar: string) =>
+  `Note: a value on the command line is visible to other processes via \`ps\` and saved in shell history; prefer \`${stdinFlag}\` or the ${envVar} env var.`;
+const OPTIONAL_SECRET_WARNING = (envVar: string) =>
+  `Note: a value on the command line is visible to other processes via \`ps\` and saved in shell history; prefer the ${envVar} env var.`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +62,9 @@ type AccountFlags = {
   "auth-method"?: string;
   email?: string;
   password?: string;
+  "password-stdin"?: boolean;
   "li-at"?: string;
+  "li-at-stdin"?: boolean;
   "li-a"?: string;
   country?: string;
   ip?: string;
@@ -211,46 +226,122 @@ export async function runAccountGet(
   }
 }
 
-/** Build auth body for link/reconnect. */
-function buildAuthBody(flags: AccountFlags): Record<string, unknown> {
+/**
+ * Injectable seams for LinkedIn-credential resolution (masked prompt +
+ * non-TTY fail-fast). All optional — real defaults (the actual TTY state,
+ * the real masked readline, the real stdin reader) are substituted when
+ * omitted, so existing call sites need not pass this at all.
+ */
+export interface CredentialIO {
+  /** stdin.isTTY — injectable for tests. Defaults to the real process.stdin.isTTY. */
+  isTTY?: boolean;
+  /** Injectable masked-prompt function. Defaults to lib/readline.ts's readlineSync. */
+  readline?: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
+  /** Injectable stdin reader for --password-stdin/--li-at-stdin. Defaults to lib/stdin.ts's defaultReadStdin. */
+  readStdin?: () => Promise<string>;
+}
+
+/**
+ * Build the auth body for link/reconnect. Resolves the LinkedIn-account
+ * secrets (password, li_at, li_a, proxy password) through the flag > stdin >
+ * env > prompt > fail-fast tiers before assembling the body — the secret
+ * reaches only this returned object, never a log or preview render.
+ *
+ * Under `--preview` (ctx.previewMode), interactive fallbacks (prompt,
+ * fail-fast) are skipped entirely — a client-side render must never prompt
+ * or exit — so a missing required secret simply resolves to `undefined` and
+ * is omitted from the body.
+ */
+async function buildAuthBody(
+  flags: AccountFlags,
+  ctx: { out: OutputStreams; isTTY: boolean; readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>; readStdin: () => Promise<string>; previewMode: boolean },
+): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = {};
 
   if (flags["auth-method"]) body["auth_method"] = flags["auth-method"];
   if (flags["user-agent"]) body["user_agent"] = flags["user-agent"];
   if (flags["recruiter-contract-id"]) body["recruiter_contract_id"] = flags["recruiter-contract-id"];
 
-  // credentials object
-  if (flags["auth-method"] === "credentials" && (flags.email || flags.password)) {
-    body["credentials"] = {
-      ...(flags.email ? { email: flags.email } : {}),
-      ...(flags.password ? { password: flags.password } : {}),
-    };
+  // credentials object (auth-method === "credentials")
+  if (flags["auth-method"] === "credentials") {
+    const password = await resolveSecret({
+      flagValue: flags.password,
+      stdinRequested: flags["password-stdin"],
+      envVar: "CURVIATE_LINKEDIN_PASSWORD",
+      readStdin: ctx.readStdin,
+      required: true,
+      // The interactive prompt/fail-fast only engages once --email is present
+      // (nothing meaningful to prompt toward yet otherwise) — and never
+      // under --preview (a client-side render must not prompt or exit).
+      allowInteractive: !ctx.previewMode && Boolean(flags.email),
+      failMessage: "no password — pass --password, --password-stdin, or set CURVIATE_LINKEDIN_PASSWORD",
+      prompt: { isTTY: ctx.isTTY, readline: ctx.readline, promptText: "LinkedIn password: " },
+      out: ctx.out,
+    });
+
+    if (flags.email || password !== undefined) {
+      body["credentials"] = {
+        ...(flags.email ? { email: flags.email } : {}),
+        ...(password !== undefined ? { password } : {}),
+      };
+    }
   }
 
-  // cookie object
-  if (flags["auth-method"] === "cookie" && (flags["li-at"] || flags["li-a"])) {
-    body["cookie"] = {
-      ...(flags["li-at"] ? { li_at: flags["li-at"] } : {}),
-      ...(flags["li-a"] ? { li_a: flags["li-a"] } : {}),
-    };
+  // cookie object (auth-method === "cookie") — no interactive prompt, by design.
+  if (flags["auth-method"] === "cookie") {
+    const liAt = await resolveSecret({
+      flagValue: flags["li-at"],
+      stdinRequested: flags["li-at-stdin"],
+      envVar: "CURVIATE_LINKEDIN_LI_AT",
+      readStdin: ctx.readStdin,
+      required: true,
+      allowInteractive: !ctx.previewMode,
+      failMessage: "no li_at — pass --li-at, --li-at-stdin, or set CURVIATE_LINKEDIN_LI_AT",
+      out: ctx.out,
+    });
+    const liA = await resolveSecret({
+      flagValue: flags["li-a"],
+      envVar: "CURVIATE_LINKEDIN_LI_A",
+      out: ctx.out,
+    });
+
+    if (liAt !== undefined || liA !== undefined) {
+      body["cookie"] = {
+        ...(liAt !== undefined ? { li_at: liAt } : {}),
+        ...(liA !== undefined ? { li_a: liA } : {}),
+      };
+    }
   }
 
   // location hints
   if (flags.country) body["country"] = flags.country;
   if (flags.ip) body["ip"] = flags.ip;
 
-  // proxy
+  // proxy (optional secret: flag > env > omitted, no prompt, no fail-fast)
   if (flags["proxy-host"]) {
+    const proxyPassword = await resolveSecret({
+      flagValue: flags["proxy-password"],
+      envVar: "CURVIATE_PROXY_PASSWORD",
+      out: ctx.out,
+    });
     body["proxy"] = {
       protocol: flags["proxy-protocol"] ?? "http",
       host: flags["proxy-host"],
       port: flags["proxy-port"] ? parseInt(flags["proxy-port"], 10) : 80,
       ...(flags["proxy-username"] ? { username: flags["proxy-username"] } : {}),
-      ...(flags["proxy-password"] ? { password: flags["proxy-password"] } : {}),
+      ...(proxyPassword !== undefined ? { password: proxyPassword } : {}),
     };
   }
 
   return body;
+}
+
+function resolveCredentialIO(io: CredentialIO): { isTTY: boolean; readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>; readStdin: () => Promise<string> } {
+  return {
+    isTTY: io.isTTY ?? (process.stdin.isTTY ?? false),
+    readline: io.readline ?? readlineSync,
+    readStdin: io.readStdin ?? defaultReadStdin,
+  };
 }
 
 /**
@@ -261,6 +352,7 @@ export async function runAccountLink(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
+  io: CredentialIO = {},
 ): Promise<void> {
   // Validate required fields
   if (!flags["seat-id"]) {
@@ -272,15 +364,23 @@ export async function runAccountLink(
     process.exit(2);
   }
 
+  checkCredentialConflicts(flags, out);
+
+  const authBody = await buildAuthBody(flags, {
+    out,
+    ...resolveCredentialIO(io),
+    previewMode: flags.preview ?? false,
+  });
+
   const body: Record<string, unknown> = {
     seat_id: flags["seat-id"],
-    ...buildAuthBody(flags),
+    ...authBody,
   };
 
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.link", args: {}, body });
+    const preview = buildPreviewOutput({ method: "accounts.link", args: {}, body: maskCredentialSecretsForPreview(body) });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
@@ -333,21 +433,28 @@ export async function runAccountReconnect(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
+  io: CredentialIO = {},
 ): Promise<void> {
   if (!flags["auth-method"]) {
     out.stderr.write("error: --auth-method is required for account reconnect (credentials | cookie).\n");
     process.exit(2);
   }
 
+  checkCredentialConflicts(flags, out);
+
   const accountId = flags["account-id"] ?? "";
-  const body = buildAuthBody(flags);
+  const body = await buildAuthBody(flags, {
+    out,
+    ...resolveCredentialIO(io),
+    previewMode: flags.preview ?? false,
+  });
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "accounts.reconnect",
       args: { accountId },
-      body,
+      body: maskCredentialSecretsForPreview(body),
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
@@ -403,12 +510,18 @@ export async function runAccountUpdate(
   if (flags.country) body["country"] = flags.country;
   if (flags.ip) body["ip"] = flags.ip;
   if (flags["proxy-host"]) {
+    // Proxy password is optional: flag > env > omitted — no prompt, no fail-fast.
+    const proxyPassword = await resolveSecret({
+      flagValue: flags["proxy-password"],
+      envVar: "CURVIATE_PROXY_PASSWORD",
+      out,
+    });
     body["proxy"] = {
       protocol: flags["proxy-protocol"] ?? "http",
       host: flags["proxy-host"],
       port: flags["proxy-port"] ? parseInt(flags["proxy-port"], 10) : 80,
       ...(flags["proxy-username"] ? { username: flags["proxy-username"] } : {}),
-      ...(flags["proxy-password"] ? { password: flags["proxy-password"] } : {}),
+      ...(proxyPassword !== undefined ? { password: proxyPassword } : {}),
     };
   }
 
@@ -418,7 +531,7 @@ export async function runAccountUpdate(
     const preview = buildPreviewOutput({
       method: "accounts.update",
       args: { accountId },
-      body,
+      body: maskCredentialSecretsForPreview(body),
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
@@ -604,16 +717,18 @@ const accountLinkCommand = defineCommand({
     "seat-id": { type: "string", description: "Empty seat to bind the account to.", required: true },
     "auth-method": { type: "string", description: "Authentication method: credentials | cookie.", required: true },
     email: { type: "string", description: "LinkedIn email (credentials method)." },
-    password: { type: "string", description: "LinkedIn password (credentials method)." },
-    "li-at": { type: "string", description: "LinkedIn session cookie li_at (cookie method)." },
-    "li-a": { type: "string", description: "Optional premium session cookie li_a (cookie method)." },
+    password: { type: "string", description: `LinkedIn password (credentials method). ${PW_WARNING("--password-stdin", "CURVIATE_LINKEDIN_PASSWORD")}` },
+    "password-stdin": { type: "boolean", description: "Read the LinkedIn password from stdin (one line, trimmed).", default: false },
+    "li-at": { type: "string", description: `LinkedIn session cookie li_at (cookie method). ${PW_WARNING("--li-at-stdin", "CURVIATE_LINKEDIN_LI_AT")}` },
+    "li-at-stdin": { type: "boolean", description: "Read the li_at session cookie from stdin (one line, trimmed).", default: false },
+    "li-a": { type: "string", description: `Optional premium session cookie li_a (cookie method). ${OPTIONAL_SECRET_WARNING("CURVIATE_LINKEDIN_LI_A")}` },
     country: { type: "string", description: "Proxy location hint (ISO 3166-1 alpha-2)." },
     ip: { type: "string", description: "IP to infer the managed proxy location." },
     "proxy-protocol": { type: "string", description: "Proxy protocol: http | https | socks5." },
     "proxy-host": { type: "string", description: "Proxy host or IP." },
     "proxy-port": { type: "string", description: "Proxy port." },
     "proxy-username": { type: "string", description: "Proxy auth username." },
-    "proxy-password": { type: "string", description: "Proxy auth password." },
+    "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
     "user-agent": { type: "string", description: "Browser User-Agent to pin for this account." },
     "recruiter-contract-id": { type: "string", description: "Recruiter contract to bind to (Recruiter tier only)." },
   },
@@ -675,16 +790,18 @@ const accountReconnectCommand = defineCommand({
     "account-id": { type: "positional", description: "Account id (acc_…)." },
     "auth-method": { type: "string", description: "Authentication method: credentials | cookie.", required: true },
     email: { type: "string", description: "LinkedIn email (credentials method)." },
-    password: { type: "string", description: "LinkedIn password (credentials method)." },
-    "li-at": { type: "string", description: "LinkedIn session cookie li_at (cookie method)." },
-    "li-a": { type: "string", description: "Optional premium session cookie li_a (cookie method)." },
+    password: { type: "string", description: `LinkedIn password (credentials method). ${PW_WARNING("--password-stdin", "CURVIATE_LINKEDIN_PASSWORD")}` },
+    "password-stdin": { type: "boolean", description: "Read the LinkedIn password from stdin (one line, trimmed).", default: false },
+    "li-at": { type: "string", description: `LinkedIn session cookie li_at (cookie method). ${PW_WARNING("--li-at-stdin", "CURVIATE_LINKEDIN_LI_AT")}` },
+    "li-at-stdin": { type: "boolean", description: "Read the li_at session cookie from stdin (one line, trimmed).", default: false },
+    "li-a": { type: "string", description: `Optional premium session cookie li_a (cookie method). ${OPTIONAL_SECRET_WARNING("CURVIATE_LINKEDIN_LI_A")}` },
     country: { type: "string", description: "Proxy location hint (ISO 3166-1 alpha-2)." },
     ip: { type: "string", description: "IP to infer the managed proxy location." },
     "proxy-protocol": { type: "string", description: "Proxy protocol: http | https | socks5." },
     "proxy-host": { type: "string", description: "Proxy host or IP." },
     "proxy-port": { type: "string", description: "Proxy port." },
     "proxy-username": { type: "string", description: "Proxy auth username." },
-    "proxy-password": { type: "string", description: "Proxy auth password." },
+    "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
     "user-agent": { type: "string", description: "Browser User-Agent to pin." },
     "recruiter-contract-id": { type: "string", description: "Recruiter contract id (Recruiter tier only)." },
   },
@@ -741,7 +858,7 @@ const accountUpdateCommand = defineCommand({
     "proxy-host": { type: "string", description: "Proxy host or IP." },
     "proxy-port": { type: "string", description: "Proxy port." },
     "proxy-username": { type: "string", description: "Proxy auth username." },
-    "proxy-password": { type: "string", description: "Proxy auth password." },
+    "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
   },
   async run({ args }) {
     const flags = args as AccountFlags;
