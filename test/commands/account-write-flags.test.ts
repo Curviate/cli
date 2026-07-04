@@ -73,6 +73,44 @@ describe("account checkpoint submit/poll — pagination flags suppressed, --fiel
     }
     expect(args, "account checkpoint poll must keep --fields").toHaveProperty("fields");
   });
+
+  it("account checkpoint resend — args definition has no pagination-only flags, keeps --fields", async () => {
+    const subCmds = await loadAccountSubCommands();
+    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+    const args = checkpointSub["resend"]?.args ?? {};
+
+    for (const flag of PAGINATION_ONLY_FLAGS) {
+      expect(args, `account checkpoint resend args must NOT include --${flag}`).not.toHaveProperty(flag);
+    }
+    expect(args, "account checkpoint resend must keep --fields").toHaveProperty("fields");
+  });
+});
+
+describe("account checkpoint resend — flag shape (no --code, requires --checkpoint)", () => {
+  it("has --checkpoint (required) and no --code — resend has nothing to submit", async () => {
+    const subCmds = await loadAccountSubCommands();
+    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+    const args = (checkpointSub["resend"]?.args ?? {}) as Record<string, { required?: boolean }>;
+
+    expect(args, "account checkpoint resend must have --checkpoint").toHaveProperty("checkpoint");
+    expect(args["checkpoint"]?.required).toBe(true);
+    expect(args, "account checkpoint resend must NOT have --code").not.toHaveProperty("code");
+  });
+
+  it("description is honest about per-challenge-type availability (no universal-resend overclaim, no vendor name)", async () => {
+    const subCmds = await loadAccountSubCommands();
+    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+    const description = checkpointSub["resend"]?.meta?.description ?? "";
+
+    expect(description, "resend description should mention not every challenge type is resendable").toMatch(
+      /not every|nothing to re-?send|does not support/i,
+    );
+    // Substrate vendor name assembled from fragments so the literal never
+    // appears in this public-repo source file (mirrors the same technique
+    // scripts/check-clean.mjs itself uses for the identical reason).
+    const vendorName = ["uni", "pi", "le"].join("");
+    expect(description).not.toMatch(new RegExp(vendorName, "i"));
+  });
 });
 
 describe("account list — negative control (list reads keep all pagination flags)", () => {

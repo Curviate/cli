@@ -12,6 +12,7 @@
  *   account disconnect <account_id>                   — hard-disconnect an account (write)
  *   account checkpoint submit <body…>                 — submit OTP/2FA code (body-addressed, write)
  *   account checkpoint poll <body…>                   — poll mobile-app approval (body-addressed, write)
+ *   account checkpoint resend <body…>                 — resend challenge notification (body-addressed, write)
  *
  * Root-scoped: all methods live on `curviate.accounts.*` (NOT account-scoped).
  * account_id positionals pass verbatim (NOT resolveIdentifier — not a member/company id).
@@ -127,6 +128,7 @@ type MinimalClient = {
     disconnect: (accountId: string) => Promise<unknown>;
     submitCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
     pollCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
+    resendCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
   };
 };
 
@@ -891,6 +893,52 @@ export async function runAccountCheckpointSubmit(
   }
 }
 
+/**
+ * Run `account checkpoint resend <body…>`.
+ * Body-addressed: checkpoint id in body as `account_id` (--checkpoint flag).
+ * Required: --checkpoint. No --code — resend has nothing to submit.
+ *
+ * Exit 0 on any 200 regardless of the `resent` boolean: a `false` value is an
+ * honest answer ("this challenge type has nothing to re-send, or the
+ * platform declined"), not a command failure — the caller reads `resent`
+ * from the response to branch. Errors (404 no pending checkpoint, 409
+ * expired, 501 unsupported) route through the standard exit-code table via
+ * `handleError`, unchanged from `submit`/`poll`.
+ */
+export async function runAccountCheckpointResend(
+  client: MinimalClient,
+  flags: AccountFlags,
+  out: OutputStreams,
+): Promise<void> {
+  if (!flags.checkpoint) {
+    out.stderr.write("error: --checkpoint is required (the provisional account_id from the 202 response).\n");
+    process.exit(2);
+  }
+
+  const body: Record<string, unknown> = {
+    account_id: flags.checkpoint,
+  };
+
+  const outOpts = resolveOutputOpts(flags);
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({
+      method: "accounts.resendCheckpoint",
+      args: {},
+      body,
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  try {
+    const result = await client.accounts.resendCheckpoint(body);
+    renderSuccess(result, outOpts, out);
+  } catch (err) {
+    await handleError(err, outOpts, out);
+  }
+}
+
 /** Terminal outcome of the `checkpoint poll --wait` adaptive-cadence loop. */
 type PollWaitOutcome =
   | { kind: "active"; result: unknown }
@@ -1400,14 +1448,53 @@ const accountCheckpointPollCommand = defineCommand({
   },
 });
 
+const accountCheckpointResendCommand = defineCommand({
+  meta: {
+    name: "resend",
+    description:
+      "Re-send the challenge notification for a pending checkpoint (e.g. re-send an OTP email, SMS " +
+      "code, or mobile-app approval push). Not every challenge type supports resend — an authenticator- " +
+      "app code has nothing to re-send. The response's `resent` boolean tells you honestly whether a new " +
+      "notification actually went out; the command still exits 0 either way.",
+  },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    checkpoint: {
+      type: "string",
+      description: "The provisional account_id from the 202 checkpoint_required response.",
+      required: true,
+    },
+  },
+  async run({ args }) {
+    const flags = args as AccountFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runAccountCheckpointResend(client as unknown as MinimalClient, flags, out);
+  },
+});
+
 const accountCheckpointCommand = defineCommand({
-  meta: { name: "checkpoint", description: "Checkpoint challenge operations (submit OTP or poll mobile-app approval)." },
+  meta: {
+    name: "checkpoint",
+    description: "Checkpoint challenge operations (submit OTP, poll mobile-app approval, or resend the challenge notification).",
+  },
   subCommands: {
     submit: accountCheckpointSubmitCommand,
     poll: accountCheckpointPollCommand,
+    resend: accountCheckpointResendCommand,
   },
   async run() {
-    process.stderr.write("Usage: curviate account checkpoint submit | poll\n");
+    process.stderr.write("Usage: curviate account checkpoint submit | poll | resend\n");
   },
 });
 
