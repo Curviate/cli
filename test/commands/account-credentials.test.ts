@@ -43,7 +43,7 @@ function clearSecretEnv() {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001 / TS-001 — env-var precedence (flag > env), optional flag>env>omitted
+// env-var precedence (flag > env), optional flag>env>omitted
 // ---------------------------------------------------------------------------
 
 describe("account credentials — env-var precedence", () => {
@@ -195,7 +195,7 @@ describe("account credentials — env-var precedence", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC-002 / TS-002 — stdin secrets, off argv, CRLF trimmed
+// stdin secrets, off argv, CRLF trimmed
 // ---------------------------------------------------------------------------
 
 describe("account credentials — --password-stdin / --li-at-stdin", () => {
@@ -245,7 +245,7 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC-003 / TS-003 — conflict matrix -> exit 2, no SDK call
+// conflict matrix -> exit 2, no SDK call
 // ---------------------------------------------------------------------------
 
 describe("account credentials — conflict matrix (exit 2, zero SDK calls)", () => {
@@ -276,7 +276,7 @@ describe("account credentials — conflict matrix (exit 2, zero SDK calls)", () 
 });
 
 // ---------------------------------------------------------------------------
-// AC-004 / TS-004 — masked TTY prompt, non-TTY fail-fast, cookie has no prompt
+// masked TTY prompt, non-TTY fail-fast, cookie has no prompt
 // ---------------------------------------------------------------------------
 
 describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => {
@@ -413,7 +413,7 @@ describe("account credentials — --preview skips prompt/fail-fast entirely", ()
 });
 
 // ---------------------------------------------------------------------------
-// AC-005 / TS-005 — ps/shell-history warnings
+// ps/shell-history warnings
 // ---------------------------------------------------------------------------
 
 describe("account credentials — ps/shell-history warnings on secret value flags", () => {
@@ -461,7 +461,7 @@ describe("account credentials — ps/shell-history warnings on secret value flag
 });
 
 // ---------------------------------------------------------------------------
-// AC-006 / TS-006 — sentinel never leaks; --preview masks per-secret; masking
+// sentinel never leaks; --preview masks per-secret; masking
 // runs on a copy (a later non-preview call still sends the real secret).
 // ---------------------------------------------------------------------------
 
