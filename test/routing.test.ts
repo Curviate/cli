@@ -270,3 +270,41 @@ describe("router — projection arg validated before any SDK call", () => {
     expect(r.status).toBe(2);
   });
 });
+
+describe("router — unknown-flag detection vs. citty negation", () => {
+  it("a literally-declared no-prefixed flag (--no-interactive) is accepted, not rejected as unknown", () => {
+    // `account link` declares "no-interactive" (not "interactive") as its own
+    // flag name. The unknown-flag check must match the full declared name
+    // FIRST, before falling back to stripping a "no-" prefix for citty's
+    // built-in negation — otherwise a literally-declared no-prefixed flag is
+    // always misread as negating an undeclared "interactive" flag and
+    // rejected as unknown on every invocation.
+    const r = run([
+      "account", "link",
+      "--seat-id", "seat_1",
+      "--auth-method", "credentials",
+      "--email", "otp@example.com",
+      "--password", "test-password",
+      "--no-interactive",
+      "--preview",
+    ]);
+    expect(combined(r)).not.toMatch(/unknown flag/i);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("accounts.link");
+  });
+
+  it("citty's negation fallback still works for a flag not literally declared with a no- prefix", () => {
+    // `connect` declares "json" (not "no-json"). The full-name check misses,
+    // so the no--stripped fallback must still fire and match "json".
+    const r = run([
+      "connect", "jdoe",
+      "--note", "hi",
+      "--preview",
+      "--account", "acc_x",
+      "--no-json",
+    ]);
+    expect(combined(r)).not.toMatch(/unknown flag/i);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("invites.send");
+  });
+});

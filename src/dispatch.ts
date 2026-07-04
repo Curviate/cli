@@ -95,13 +95,19 @@ function findUnknownFlag(rawArgs: string[], declared: Set<string>): string | nul
       continue;
     }
     if (!arg.startsWith("-")) continue;
-    // Strip leading dashes and any "=value" / "no-" prefix to get the flag name.
+    // Strip leading dashes and any "=value" suffix to get the flag name.
     let name = arg.replace(/^-+/, "");
     const eq = name.indexOf("=");
     if (eq !== -1) name = name.slice(0, eq);
-    if (name.startsWith("no-")) name = name.slice(3);
     if (name === "") continue; // bare "--" already handled
-    if (!declared.has(name)) return arg;
+    // Match the full declared name FIRST — a flag may be literally declared
+    // with a "no-" prefix (e.g. "no-interactive"), and that declaration must
+    // win. Only fall back to stripping "no-" for citty's implicit negation
+    // (e.g. "--no-json" negating a declared "json") when the full name isn't
+    // itself declared.
+    if (declared.has(name)) continue;
+    if (name.startsWith("no-") && declared.has(name.slice(3))) continue;
+    return arg;
   }
   return null;
 }
