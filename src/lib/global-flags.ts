@@ -132,3 +132,20 @@ export const READ_SINGLE_FLAGS = {
 };
 
 export type ReadSingleFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages">;
+
+/**
+ * WRITE_SINGLE_FLAGS: the single-object write convention.
+ *
+ * For write (mutating) commands that operate on exactly one resource
+ * (connect/reconnect/update/disconnect an account, submit or poll a
+ * checkpoint) rather than a list. Pagination flags (`--limit`, `--cursor`,
+ * `--all`, `--max-pages`) are meaningless on a one-row response, but
+ * `--fields` is still useful to project it — unlike `WRITE_FLAGS`, which
+ * drops `--fields` too because it targets commands with no response shape
+ * worth projecting. Identical to `READ_SINGLE_FLAGS` today (same flag set
+ * serves both single-object reads and single-object writes); kept as its
+ * own export so the two call sites can diverge later without a rename.
+ */
+export const WRITE_SINGLE_FLAGS = READ_SINGLE_FLAGS;
+
+export type WriteSingleFlags = ReadSingleFlags;

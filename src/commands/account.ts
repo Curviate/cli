@@ -28,7 +28,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -593,9 +593,14 @@ const accountGetCommand = defineCommand({
 });
 
 const accountLinkCommand = defineCommand({
-  meta: { name: "link", description: "Connect a LinkedIn account to an empty seat." },
+  meta: {
+    name: "link",
+    description:
+      "Connect a LinkedIn account to an empty seat. " +
+      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint submit`.",
+  },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "seat-id": { type: "string", description: "Empty seat to bind the account to.", required: true },
     "auth-method": { type: "string", description: "Authentication method: credentials | cookie.", required: true },
     email: { type: "string", description: "LinkedIn email (credentials method)." },
@@ -633,7 +638,7 @@ const accountLinkCommand = defineCommand({
 const accountConnectLinkCommand = defineCommand({
   meta: { name: "connect-link", description: "Generate a one-time hosted account connection URL." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "seat-id": { type: "string", description: "Target seat (required when purpose=create)." },
     "account-id": { type: "string", description: "Account to reconnect (required when purpose=reconnect)." },
     purpose: { type: "string", description: "create | reconnect (default: create)." },
@@ -659,9 +664,14 @@ const accountConnectLinkCommand = defineCommand({
 });
 
 const accountReconnectCommand = defineCommand({
-  meta: { name: "reconnect", description: "Re-authorize a disconnected account in place." },
+  meta: {
+    name: "reconnect",
+    description:
+      "Re-authorize a disconnected account in place. " +
+      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint submit`.",
+  },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
     "auth-method": { type: "string", description: "Authentication method: credentials | cookie.", required: true },
     email: { type: "string", description: "LinkedIn email (credentials method)." },
@@ -699,7 +709,7 @@ const accountReconnectCommand = defineCommand({
 const accountRefreshCommand = defineCommand({
   meta: { name: "refresh", description: "Refresh an account's synced data sources." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
   },
   async run({ args }) {
@@ -723,7 +733,7 @@ const accountRefreshCommand = defineCommand({
 const accountUpdateCommand = defineCommand({
   meta: { name: "update", description: "Update managed-proxy configuration for an account." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
     country: { type: "string", description: "Proxy location hint (ISO 3166-1 alpha-2)." },
     ip: { type: "string", description: "IP to infer the managed proxy location." },
@@ -754,7 +764,7 @@ const accountUpdateCommand = defineCommand({
 const accountDisconnectCommand = defineCommand({
   meta: { name: "disconnect", description: "Hard-disconnect a LinkedIn account and release its seat." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
   },
   async run({ args }) {
@@ -778,7 +788,7 @@ const accountDisconnectCommand = defineCommand({
 const accountCheckpointSubmitCommand = defineCommand({
   meta: { name: "submit", description: "Submit an OTP / 2FA code to resolve a checkpoint challenge." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     checkpoint: {
       type: "string",
       description: "The provisional account_id from the 202 checkpoint_required response.",
@@ -811,7 +821,7 @@ const accountCheckpointSubmitCommand = defineCommand({
 const accountCheckpointPollCommand = defineCommand({
   meta: { name: "poll", description: "Poll for mobile-app approval of a pending checkpoint challenge." },
   args: {
-    ...GLOBAL_FLAGS,
+    ...WRITE_SINGLE_FLAGS,
     checkpoint: {
       type: "string",
       description: "The provisional account_id from the 202 checkpoint_required response.",
