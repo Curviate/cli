@@ -172,6 +172,37 @@ curviate search jobs --keywords "founding engineer" --location "Berlin" --accoun
 curviate job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1
 ```
 
+## Company
+
+Company commands (`curviate company ...`) are Core-tier reads. `company <id>` accepts a public
+handle (the slug in `linkedin.com/company/<handle>`) or a numeric id; the four sub-resource
+commands require the company's **numeric provider id** — the `id` field `company <id>` returns.
+`--account` (or a configured default account) is required on all of them.
+
+### 1. Retrieve a company, then list its employees
+
+```bash
+curviate company t-systems --account acc_1 --json | jq -r '.id' \
+  | xargs -I{} curviate company employees {} --keywords "engineer" --limit 10 --account acc_1 --json
+```
+
+### 2. Page through a company's posts and jobs
+
+```bash
+curviate company posts 112013061 --limit 5 --account acc_1 --json
+curviate company jobs 112013061 --all --account acc_1 --json   # streams every page
+```
+
+### 3. List a company's followers (page admins only)
+
+Followers are only retrievable for a company page the acting account **administers** — a
+non-administered company returns a `RESOURCE_NOT_FOUND` error (exit code `4`), the same shape as
+an unknown company.
+
+```bash
+curviate company followers 112013061 --limit 25 --account acc_1 --json
+```
+
 ## Sales Navigator
 
 Sales Navigator commands (`curviate sales-nav ...`) require an account with the Sales Navigator

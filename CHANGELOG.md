@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
-## [0.12.0] — 2026-07-05
+## [0.12.0] - 2026-07-05
 
 ### Added
 
@@ -22,10 +22,9 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 - **`company <id>` now routes to the SDK's `companies.get()`** instead of the retired `profiles.getCompany()` — an internal repoint (the hard-moved server endpoint), not a CLI UX change: flags, output shape, and slim projection are unchanged. `--account` becoming required (above) is the one user-visible behavior change.
 - SDK-parity manifest (`test/parity.test.ts`) repoints `company get` → `companies.get` and gains `company employees` / `company posts` / `company jobs` / `company followers`; the manifest and SDK method count both move from 84 to 88.
-- `@curviate/sdk` dependency bumped to `^0.11.0` (unreleased local build carrying the `companies` resource — see the SDK's own CHANGELOG).
+- `@curviate/sdk` dependency bumped to `^0.12.0` — the released build carrying the `companies` resource and the v2 `salesNavigator` list-surface cascade (see the SDK's own CHANGELOG).
 - **`sales-nav save-lead` re-signed for the v2 save-lead surface.** The old `save-lead <user_id> [--list-id <id>]` (list optional) is **retired, no alias** — the v2 op always saves into a specific list. The replacement is `save-lead <user_id> --list <id>`: `--list` is now **required** and the flag is renamed from `--list-id`. Update scripts: `save-lead <id> --list-id <l>` → `save-lead <id> --list <l>`.
 - SDK-parity manifest gains the 5 new `sales-nav` v2 subcommands; the manifest and SDK method count both move from 88 to 93 (`salesNavigator` 7→12 methods).
-- `@curviate/sdk` dependency bumped to carry the v2 `salesNavigator` list-surface cascade (see the SDK's own CHANGELOG).
 
 ### Fixed
 
