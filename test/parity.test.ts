@@ -1,9 +1,10 @@
 /**
  * SDK-parity test — asserts the CLI provides exactly one command for each of
- * the SDK's 88 public resource methods.
+ * the SDK's 93 public resource methods.
  *
- * (Was 84: `profiles.getCompany` was hard-moved and removed (profiles 9→8);
- * the new `companies` namespace added 5 methods: 84 - 1 + 5 = 88.)
+ * (Was 88: `salesNavigator` gained the 5-method v2 list-surface cascade,
+ * 7→12: 88 + 5 = 93. `saveLead`'s breaking re-signature does not change the
+ * method count.)
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -12,7 +13,7 @@
  *   3. The test asserts:
  *      (a) every manifest entry resolves to an existing SDK method,
  *      (b) every SDK method is covered by exactly one manifest entry,
- *      (c) the total mapped-method count is 88.
+ *      (c) the total mapped-method count is 93.
  *
  * A negative fixture at the bottom demonstrates that removing an SDK method
  * causes the bijection assertion to fail.
@@ -100,14 +101,19 @@ const PARITY_MANIFEST: Record<string, string> = {
   "post reactions": "posts.listReactions",
   "post react":     "posts.react",
 
-  // salesNavigator (7)
-  "sales-nav search-people":    "salesNavigator.searchPeople",
-  "sales-nav search-companies": "salesNavigator.searchCompanies",
-  "sales-nav parameters":       "salesNavigator.getParameters",
-  "sales-nav message":          "salesNavigator.startChat",
-  "sales-nav profile":          "salesNavigator.getProfile",
-  "sales-nav save-lead":        "salesNavigator.saveLead",
-  "sales-nav sync":             "salesNavigator.syncMessages",
+  // salesNavigator (12) — 7 v1 + 5 v2 list-surface cascade
+  "sales-nav search-people":       "salesNavigator.searchPeople",
+  "sales-nav search-companies":    "salesNavigator.searchCompanies",
+  "sales-nav parameters":          "salesNavigator.getParameters",
+  "sales-nav message":             "salesNavigator.startChat",
+  "sales-nav profile":             "salesNavigator.getProfile",
+  "sales-nav save-lead":           "salesNavigator.saveLead",
+  "sales-nav sync":                "salesNavigator.syncMessages",
+  "sales-nav account-lists":       "salesNavigator.accountLists",
+  "sales-nav lead-lists":          "salesNavigator.leadLists",
+  "sales-nav browse-account-list": "salesNavigator.browseAccountList",
+  "sales-nav browse-lead-list":    "salesNavigator.browseLeadList",
+  "sales-nav save-account":        "salesNavigator.saveAccount",
 
   // recruiter (17)
   "recruiter sync":               "recruiter.syncMessages",
@@ -192,9 +198,9 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — command manifest", () => {
-  it("manifest has exactly 88 entries", () => {
+  it("manifest has exactly 93 entries", () => {
     const count = Object.keys(PARITY_MANIFEST).length;
-    expect(count, `manifest length should be 88, got ${count}`).toBe(88);
+    expect(count, `manifest length should be 93, got ${count}`).toBe(93);
   });
 
   it("every manifest entry maps to a real SDK method (no phantom references)", async () => {
@@ -246,9 +252,9 @@ describe("SDK parity — command manifest", () => {
     ).toHaveLength(0);
   });
 
-  it("SDK has exactly 88 public resource methods", async () => {
+  it("SDK has exactly 93 public resource methods", async () => {
     const sdkMethods = await buildSdkMethodSet();
-    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 88`).toBe(88);
+    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 93`).toBe(93);
   });
 });
 

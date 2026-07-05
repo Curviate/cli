@@ -89,6 +89,7 @@ describe("sales-nav write commands — no pagination flags in help", () => {
   it.each([
     ["message.new (start-chat)", ["message", "new"]],
     ["save-lead", ["save-lead"]],
+    ["save-account", ["save-account"]],
   ])("sales-nav %s — args definition has no pagination flags", async (_label, path) => {
     const { salesNavCommand } = await import("../../src/commands/sales-nav.js");
     let cmd = salesNavCommand as unknown as CommandLike;
@@ -120,6 +121,10 @@ describe("sales-nav list commands — DOES have pagination flags (negative contr
   it.each([
     ["search.people", ["search", "people"]],
     ["search.companies", ["search", "companies"]],
+    ["account-lists", ["account-lists"]],
+    ["lead-lists", ["lead-lists"]],
+    ["browse-account-list", ["browse-account-list"]],
+    ["browse-lead-list", ["browse-lead-list"]],
   ])("sales-nav %s — args definition retains pagination flags", async (_label, path) => {
     const { salesNavCommand } = await import("../../src/commands/sales-nav.js");
     let cmd = salesNavCommand as unknown as CommandLike;

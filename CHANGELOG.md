@@ -16,12 +16,16 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 - **`company followers <id>`** — list the company's followers (native — the same seam that backs `profile <id> --followers`). Requires the acting account to administer the target company page; a non-admin company returns the exit code for `RESOURCE_ACCESS_RESTRICTED` (new, see below).
 - All four new subcommands support `--all` (NDJSON page streaming) alongside the existing pagination flags, and reject `--preview` (exit `2`) like every other read command.
 - `--account` is now required on `company <id>` (retrieve) — the underlying endpoint always requires `account_id`; previously the command silently fell back to an unscoped call.
+- **Sales Navigator v2 list surface — 5 new subcommands.** `sales-nav account-lists --account <id>` and `sales-nav lead-lists --account <id>` list the operator's saved-account/saved-lead lists (`--limit`/`--cursor`/`--all` paginate). `sales-nav browse-account-list <list_id> --account <id> [--filter --sort-by --sort-order]` and `sales-nav browse-lead-list <list_id> --account <id> [--spotlight --sort-by --sort-order]` browse the saved items in one list — genuine paginated reads, so they keep all pagination flags. `sales-nav save-account <company_id> --list <id> --account <id>` saves a company into an account list (write, `--preview` supported, no pagination flags in `--help`). All five call the SDK's new `salesNavigator` methods (`accountLists`/`leadLists`/`browseAccountList`/`browseLeadList`/`saveAccount`) — no re-implementation of the HTTP call.
 
 ### Changed (BREAKING)
 
 - **`company <id>` now routes to the SDK's `companies.get()`** instead of the retired `profiles.getCompany()` — an internal repoint (the hard-moved server endpoint), not a CLI UX change: flags, output shape, and slim projection are unchanged. `--account` becoming required (above) is the one user-visible behavior change.
 - SDK-parity manifest (`test/parity.test.ts`) repoints `company get` → `companies.get` and gains `company employees` / `company posts` / `company jobs` / `company followers`; the manifest and SDK method count both move from 84 to 88.
 - `@curviate/sdk` dependency bumped to `^0.11.0` (unreleased local build carrying the `companies` resource — see the SDK's own CHANGELOG).
+- **`sales-nav save-lead` re-signed for the v2 save-lead surface.** The old `save-lead <user_id> [--list-id <id>]` (list optional) is **retired, no alias** — the v2 op always saves into a specific list. The replacement is `save-lead <user_id> --list <id>`: `--list` is now **required** and the flag is renamed from `--list-id`. Update scripts: `save-lead <id> --list-id <l>` → `save-lead <id> --list <l>`.
+- SDK-parity manifest gains the 5 new `sales-nav` v2 subcommands; the manifest and SDK method count both move from 88 to 93 (`salesNavigator` 7→12 methods).
+- `@curviate/sdk` dependency bumped to carry the v2 `salesNavigator` list-surface cascade (see the SDK's own CHANGELOG).
 
 ### Fixed
 

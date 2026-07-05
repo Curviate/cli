@@ -177,8 +177,8 @@ curviate job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1
 Sales Navigator commands (`curviate sales-nav ...`) require an account with the Sales Navigator
 add-on tier attached. A call against an account without it fails with **exit code `5`** and a
 `TIER_NOT_ACTIVE` error body naming the required tier (`sales_nav`) — branch on the exit code the
-same way as example 4 above. Write commands (`save-lead`, `message new`) accept `--preview` to
-render the request without sending it.
+same way as example 4 above. Write commands (`save-lead`, `save-account`, `message new`) accept
+`--preview` to render the request without sending it.
 
 ### 1. Search Sales Navigator profiles, then get one full profile
 
@@ -193,15 +193,15 @@ curviate sales-nav search people \
 
 ### 2. Save a lead to a specific lead list
 
-Preview first, then send:
+Preview first, then send. `--list` is required — the save always targets a specific list.
 
 ```bash
 curviate sales-nav save-lead ACwAAA1234567 \
   --account acc_1 \
-  --list-id 987654 \
+  --list 987654 \
   --preview
 
-curviate sales-nav save-lead ACwAAA1234567 --account acc_1 --list-id 987654
+curviate sales-nav save-lead ACwAAA1234567 --account acc_1 --list 987654
 ```
 
 ### 3. Start a new Sales Navigator chat
@@ -221,6 +221,45 @@ curviate sales-nav search companies \
   --account acc_1 \
   --limit 5 --json \
   | jq -r '.items[] | "\(.id)\t\(.name)"'
+```
+
+### 5. List saved-account and saved-lead lists
+
+```bash
+curviate sales-nav account-lists --account acc_1
+curviate sales-nav lead-lists --account acc_1
+```
+
+### 6. Browse a saved-account list, filtered to starred accounts
+
+```bash
+curviate sales-nav browse-account-list 987654 \
+  --account acc_1 \
+  --filter STARRED \
+  --sort-by NAME \
+  --json \
+  | jq -r '.items[] | "\(.id)\t\(.display_name)"'
+```
+
+### 7. Browse a saved-lead list, spotlighting recent job changes
+
+```bash
+curviate sales-nav browse-lead-list 456789 \
+  --account acc_1 \
+  --spotlight RECENT_POSITION_CHANGE \
+  --json \
+  | jq -r '.items[] | "\(.id)\t\(.display_name)"'
+```
+
+### 8. Save a company into an account list
+
+```bash
+curviate sales-nav save-account 112013061 \
+  --account acc_1 \
+  --list 987654 \
+  --preview
+
+curviate sales-nav save-account 112013061 --account acc_1 --list 987654
 ```
 
 ## Recruiter

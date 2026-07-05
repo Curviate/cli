@@ -8,11 +8,23 @@
  *   sales-nav search parameters --type <t>                                        — get filter parameters (read)
  *   sales-nav message new --to <id> "<text>" [--attach <f>…] [--voice <f>] [--video <f>] — start chat (write, multipart)
  *   sales-nav profile <identifier>                                                — get profile (read, resolveIdentifier)
- *   sales-nav save-lead <user_id> [--list-id <id>]                               — save lead (write)
+ *   sales-nav save-lead --list <id> <user_id>                                     — save lead into a list (write, v2)
+ *
+ * v2 list surface:
+ *   sales-nav account-lists --account <id> [--all] [--limit] [--cursor]                              — list account lists (read)
+ *   sales-nav lead-lists --account <id> [--all] [--limit] [--cursor]                                  — list lead lists (read)
+ *   sales-nav browse-account-list <list_id> --account <id> [--filter --sort-by --sort-order]          — browse an account list (read)
+ *   sales-nav browse-lead-list <list_id> --account <id> [--spotlight --sort-by --sort-order]          — browse a lead list (read)
+ *   sales-nav save-account --list <id> <company_id> --account <id>                                    — save a company into a list (write)
  *
  * All subcommands are account-scoped.
  * Tier-gate: CLI never pre-checks — SDK call goes out; TIER_NOT_ACTIVE / LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5.
- * Identifier resolution: applied to `profile <identifier>` only; user_id in save-lead passes verbatim.
+ * Identifier resolution: applied to `profile <identifier>` only; user_id/company_id/list_id pass verbatim.
+ *
+ * BREAKING (2026-07-04): `save-lead` re-signed for the v2 save-lead surface —
+ * the old `save-lead <user_id> [--list-id <id>]` (optional list) is retired,
+ * no alias. The v2 op always saves into a specific list, so `--list` is now
+ * required and the flag is renamed from `--list-id`.
  */
 
 import { defineCommand } from "citty";
@@ -70,7 +82,14 @@ type SalesNavFlags = {
   "network-distance"?: string;
   identifier?: string;
   userId?: string;
-  "list-id"?: string;
+  // v2 list surface
+  listId?: string;
+  companyId?: string;
+  list?: string;
+  filter?: string;
+  spotlight?: string;
+  "sort-by"?: string;
+  "sort-order"?: string;
 };
 
 type OutputStreams = {
@@ -87,7 +106,14 @@ type MinimalClient = {
       getParameters: (params: Record<string, unknown>) => Promise<unknown>;
       startChat: (body: Record<string, unknown>) => Promise<unknown>;
       getProfile: (identifier: string, params?: Record<string, unknown>) => Promise<unknown>;
-      saveLead: (userId: string, body: Record<string, unknown>) => Promise<unknown>;
+      // v2 save-lead — BREAKING (2026-07-04): re-signed to a single input object.
+      saveLead: (input: Record<string, unknown>) => Promise<unknown>;
+      // v2 list surface
+      accountLists: (query?: Record<string, unknown>) => Promise<unknown>;
+      leadLists: (query?: Record<string, unknown>) => Promise<unknown>;
+      browseAccountList: (listId: string, body?: Record<string, unknown>, query?: Record<string, unknown>) => Promise<unknown>;
+      browseLeadList: (listId: string, body?: Record<string, unknown>, query?: Record<string, unknown>) => Promise<unknown>;
+      saveAccount: (input: Record<string, unknown>) => Promise<unknown>;
     };
   };
 };
@@ -428,8 +454,12 @@ export async function runSalesNavProfile(
 }
 
 /**
- * Run `sales-nav save-lead <user_id> [--list-id <id>]`.
+ * Run `sales-nav save-lead --list <id> <user_id>`.
  * Write command — supports --preview. user_id passes verbatim (NOT URL-resolved).
+ *
+ * BREAKING (2026-07-04): re-signed for the v2 save-lead surface — `--list` is
+ * now required (v2 always saves into a specific list; the v1 optional
+ * `--list-id` semantics do not exist in v2).
  */
 export async function runSalesNavSaveLead(
   client: MinimalClient,
@@ -438,15 +468,15 @@ export async function runSalesNavSaveLead(
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const userId = flags.userId ?? "";
+  const listId = flags.list ?? "";
   const outOpts = resolveOutputOpts(flags);
 
-  const body: Record<string, unknown> = {};
-  if (flags["list-id"]) body["list_id"] = flags["list-id"];
+  const body: Record<string, unknown> = { user_id: userId };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "salesNavigator.saveLead",
-      args: { user_id: userId },
+      args: { list_id: listId, user_id: userId },
       body,
       account: accountId,
     });
@@ -457,7 +487,220 @@ export async function runSalesNavSaveLead(
   const ns = client.account(accountId);
 
   try {
-    const result = await ns.salesNavigator.saveLead(userId, body);
+    const result = await ns.salesNavigator.saveLead({ list_id: listId, user_id: userId });
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// v2 list surface — exported run functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `sales-nav account-lists --account <id> [--limit] [--cursor] [--all]`.
+ * Read command — rejects --preview. Lists the operator's saved-account lists.
+ */
+export async function runSalesNavAccountLists(
+  client: MinimalClient,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.salesNavigator.accountLists(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.salesNavigator.accountLists(Object.keys(params).length > 0 ? params : undefined);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `sales-nav lead-lists --account <id> [--limit] [--cursor] [--all]`.
+ * Read command — rejects --preview. Lists the operator's saved-lead lists.
+ */
+export async function runSalesNavLeadLists(
+  client: MinimalClient,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.salesNavigator.leadLists(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.salesNavigator.leadLists(Object.keys(params).length > 0 ? params : undefined);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `sales-nav browse-account-list <list_id> --account <id> [--filter --sort-by --sort-order] [--limit] [--cursor] [--all]`.
+ * Read command (POST-with-body-filters) — rejects --preview.
+ */
+export async function runSalesNavBrowseAccountList(
+  client: MinimalClient,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const listId = flags.listId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const body: Record<string, unknown> = {};
+  if (flags.filter) body["filter"] = flags.filter;
+  if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+  if (flags["sort-order"]) body["sort_order"] = flags["sort-order"];
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.salesNavigator.browseAccountList(listId, body, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.salesNavigator.browseAccountList(listId, body, Object.keys(params).length > 0 ? params : undefined);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `sales-nav browse-lead-list <list_id> --account <id> [--spotlight --sort-by --sort-order] [--limit] [--cursor] [--all]`.
+ * Read command (POST-with-body-filters) — rejects --preview.
+ */
+export async function runSalesNavBrowseLeadList(
+  client: MinimalClient,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const listId = flags.listId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const body: Record<string, unknown> = {};
+  if (flags.spotlight) body["spotlight"] = flags.spotlight;
+  if (flags["sort-by"]) body["sort_by"] = flags["sort-by"];
+  if (flags["sort-order"]) body["sort_order"] = flags["sort-order"];
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.salesNavigator.browseLeadList(listId, body, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.salesNavigator.browseLeadList(listId, body, Object.keys(params).length > 0 ? params : undefined);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `sales-nav save-account --list <id> <company_id> --account <id>`.
+ * Write command — supports --preview. company_id passes verbatim.
+ */
+export async function runSalesNavSaveAccount(
+  client: MinimalClient,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const listId = flags.list ?? "";
+  const companyId = flags.companyId ?? "";
+  const outOpts = resolveOutputOpts(flags);
+
+  const body: Record<string, unknown> = { company_id: companyId };
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({
+      method: "salesNavigator.saveAccount",
+      args: { list_id: listId, company_id: companyId },
+      body,
+      account: accountId,
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+
+  try {
+    const result = await ns.salesNavigator.saveAccount({ list_id: listId, company_id: companyId });
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -672,12 +915,12 @@ const salesNavProfileCommand = defineCommand({
 });
 
 const salesNavSaveLeadCommand = defineCommand({
-  meta: { name: "save-lead", description: "Save a Sales Navigator member as a lead." },
+  meta: { name: "save-lead", description: "Save a Sales Navigator member into a lead list." },
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
     userId: { type: "positional", description: "Sales Navigator member ID (ACw… format)." },
-    "list-id": { type: "string", description: "Lead list ID to save the lead into." },
+    list: { type: "string", description: "Lead list ID to save the member into (required — the v2 save always targets a specific list).", required: true },
   },
   async run({ args }) {
     const flags = args as SalesNavFlags;
@@ -698,6 +941,137 @@ const salesNavSaveLeadCommand = defineCommand({
   },
 });
 
+// ---------------------------------------------------------------------------
+// v2 list surface — citty command definitions
+// ---------------------------------------------------------------------------
+
+const salesNavAccountListsCommand = defineCommand({
+  meta: { name: "account-lists", description: "List the saved-account (company) lists on the operator's Sales Navigator seat." },
+  args: { ...GLOBAL_FLAGS },
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavAccountLists(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const salesNavLeadListsCommand = defineCommand({
+  meta: { name: "lead-lists", description: "List the saved-lead (member) lists on the operator's Sales Navigator seat." },
+  args: { ...GLOBAL_FLAGS },
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavLeadLists(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const salesNavBrowseAccountListCommand = defineCommand({
+  meta: { name: "browse-account-list", description: "Browse the saved accounts (companies) in one account list." },
+  args: {
+    ...GLOBAL_FLAGS,
+    listId: { type: "positional", description: "The account-list id (from `sales-nav account-lists`)." },
+    filter: { type: "string", description: "Restrict to a saved-account subset: STARRED, GROWTH_ALERTS, or RISK_ALERTS." },
+    "sort-by": { type: "string", description: "Sort field: DATE_ADDED or NAME. Defaults to NAME." },
+    "sort-order": { type: "string", description: "Sort direction: ASCENDING or DESCENDING. Defaults to ASCENDING." },
+  },
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavBrowseAccountList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const salesNavBrowseLeadListCommand = defineCommand({
+  meta: { name: "browse-lead-list", description: "Browse the saved leads (members) in one lead list." },
+  args: {
+    ...GLOBAL_FLAGS,
+    listId: { type: "positional", description: "The lead-list id (from `sales-nav lead-lists`)." },
+    spotlight: { type: "string", description: "Restrict to a spotlighted lead subset: RECENT_POSITION_CHANGE, RECENTLY_POSTED_ON_LINKEDIN, FOLLOW_YOUR_COMPANY, or SHARE_EXPERIENCE." },
+    "sort-by": { type: "string", description: "Sort field: DATE_ADDED, ACCOUNT, NAME, or OUTREACH_ACTIVITY. Defaults to DATE_ADDED." },
+    "sort-order": { type: "string", description: "Sort direction: ASCENDING or DESCENDING. Defaults to DESCENDING." },
+  },
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavBrowseLeadList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const salesNavSaveAccountCommand = defineCommand({
+  meta: { name: "save-account", description: "Save a LinkedIn company into an account list." },
+  args: {
+    // Write command: WRITE_FLAGS omits pagination/projection flags
+    ...WRITE_FLAGS,
+    companyId: { type: "positional", description: "The LinkedIn company id to save into the account list." },
+    list: { type: "string", description: "The target account-list id to save the company into (required).", required: true },
+  },
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavSaveAccount(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 export const salesNavCommand = defineCommand({
   meta: { name: "sales-nav", description: "Sales Navigator operations (requires the Sales Navigator add-on)." },
   args: { ...GLOBAL_FLAGS },
@@ -707,6 +1081,11 @@ export const salesNavCommand = defineCommand({
     search: salesNavSearchCommand,
     profile: salesNavProfileCommand,
     "save-lead": salesNavSaveLeadCommand,
+    "account-lists": salesNavAccountListsCommand,
+    "lead-lists": salesNavLeadListsCommand,
+    "browse-account-list": salesNavBrowseAccountListCommand,
+    "browse-lead-list": salesNavBrowseLeadListCommand,
+    "save-account": salesNavSaveAccountCommand,
   },
   async run() {
     process.stderr.write(
@@ -716,7 +1095,12 @@ export const salesNavCommand = defineCommand({
       "       curviate sales-nav search parameters --type <t>\n" +
       "       curviate sales-nav message new --to <id> \"<text>\"\n" +
       "       curviate sales-nav profile <identifier>\n" +
-      "       curviate sales-nav save-lead <user_id> [--list-id <id>]\n",
+      "       curviate sales-nav save-lead --list <id> <user_id>\n" +
+      "       curviate sales-nav account-lists --account <id>\n" +
+      "       curviate sales-nav lead-lists --account <id>\n" +
+      "       curviate sales-nav browse-account-list <list_id> --account <id>\n" +
+      "       curviate sales-nav browse-lead-list <list_id> --account <id>\n" +
+      "       curviate sales-nav save-account --list <id> <company_id> --account <id>\n",
     );
   },
 });

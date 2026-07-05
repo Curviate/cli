@@ -698,7 +698,10 @@ describe("sales-nav profile", () => {
   });
 });
 
-// ─── sales-nav save-lead ───────────────────────────────────────────────────
+// ─── sales-nav save-lead (v2, breaking replace) ────────────────────────────
+// BREAKING (2026-07-04): `--list-id` (optional) is retired; `--list` (required)
+// replaces it — the v2 save always targets a specific list. saveLead is called
+// with a single input object `{ list_id, user_id }`, not `(userId, body)`.
 
 describe("sales-nav save-lead", () => {
   let ns: ReturnType<typeof makeSalesNavNs>;
@@ -707,7 +710,7 @@ describe("sales-nav save-lead", () => {
   beforeEach(() => {
     ns = makeSalesNavNs();
     client = makeClient(ns);
-    (ns.salesNavigator.saveLead as Mock).mockResolvedValue({ saved: true, user_id: "ACw123" });
+    (ns.salesNavigator.saveLead as Mock).mockResolvedValue({ object: "sn_lead_saved", list_id: "list_456", user_id: "ACw123" });
     vi.resetModules();
   });
 
@@ -715,7 +718,7 @@ describe("sales-nav save-lead", () => {
     vi.restoreAllMocks();
   });
 
-  it("calls salesNavigator.saveLead with userId verbatim (no resolveIdentifier)", async () => {
+  it("calls salesNavigator.saveLead with { list_id, user_id } — user_id verbatim (no resolveIdentifier)", async () => {
     const { runSalesNavSaveLead } = await import("../../src/commands/sales-nav.js");
     const out = makeOut();
 
@@ -723,30 +726,14 @@ describe("sales-nav save-lead", () => {
     await runSalesNavSaveLead(client as never, {
       account: "acc_1",
       userId: "ACw_full_url_if_given_should_pass_verbatim",
+      list: "list_456",
       json: true,
     }, out);
 
-    expect(ns.salesNavigator.saveLead).toHaveBeenCalledWith(
-      "ACw_full_url_if_given_should_pass_verbatim",
-      expect.anything(),
-    );
-  });
-
-  it("passes list-id in body when provided", async () => {
-    const { runSalesNavSaveLead } = await import("../../src/commands/sales-nav.js");
-    const out = makeOut();
-
-    await runSalesNavSaveLead(client as never, {
-      account: "acc_1",
-      userId: "ACw123",
-      "list-id": "list_456",
-      json: true,
-    }, out);
-
-    expect(ns.salesNavigator.saveLead).toHaveBeenCalledWith(
-      "ACw123",
-      expect.objectContaining({ list_id: "list_456" }),
-    );
+    expect(ns.salesNavigator.saveLead).toHaveBeenCalledWith({
+      list_id: "list_456",
+      user_id: "ACw_full_url_if_given_should_pass_verbatim",
+    });
   });
 
   it("--preview renders request, does not call saveLead", async () => {
@@ -756,6 +743,7 @@ describe("sales-nav save-lead", () => {
     await runSalesNavSaveLead(client as never, {
       account: "acc_1",
       userId: "ACw123",
+      list: "list_456",
       preview: true,
     }, out);
 
