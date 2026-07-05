@@ -60,7 +60,7 @@ describe("printResendHintIfApplicable", () => {
       const out = makeOut();
       printResendHintIfApplicable(type, "acc_pending_9", out);
       const written = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
-      expect(written).toContain("checkpoint resend --checkpoint acc_pending_9");
+      expect(written).toContain("checkpoint request acc_pending_9");
     },
   );
 

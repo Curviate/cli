@@ -36,14 +36,14 @@ const PARITY_MANIFEST: Record<string, string> = {
   "account get":                 "accounts.get",
   "account link":                "accounts.link",
   "account connect-link":        "accounts.createConnectLink",
+  "account reconnect-link":      "accounts.createReconnectLink",
   "account connect-session poll": "accounts.getConnectSession",
   "account reconnect":           "accounts.reconnect",
-  "account refresh":             "accounts.refresh",
   "account update":              "accounts.update",
   "account disconnect":          "accounts.disconnect",
-  "account checkpoint submit":   "accounts.submitCheckpoint",
+  "account checkpoint solve":    "accounts.solveCheckpoint",
   "account checkpoint poll":     "accounts.pollCheckpoint",
-  "account checkpoint resend":   "accounts.resendCheckpoint",
+  "account checkpoint request":  "accounts.requestCheckpoint",
 
   // messaging (14)
   "inbox list":             "messaging.listChats",

@@ -137,9 +137,9 @@ describe("account connect-link — TTY + interactive open+wait", () => {
 
     expect(open).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith(MINT_RESULT.url);
-    expect(client.accounts.getConnectSession).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: "cs_1" }),
-    );
+    // The session_id must be passed as a STRING (it interpolates into the SDK
+    // path); an object here would stringify to `[object Object]`.
+    expect(client.accounts.getConnectSession).toHaveBeenCalledWith("cs_1");
     expect(clock.sleep).toHaveBeenNthCalledWith(1, 1000);
 
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
@@ -498,7 +498,14 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
     );
 
     expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
-    expect(client.accounts.getConnectSession).toHaveBeenCalledWith({ session_id: "cs_1" });
+    // Regression guard: the CLI passes the session_id as a bare STRING, not an
+    // object. Passing `{ session_id }` would interpolate to
+    // `/v1/accounts/connect-sessions/[object Object]` (the fixed bug).
+    expect(client.accounts.getConnectSession).toHaveBeenCalledWith("cs_1");
+    const [seenArg] = (client.accounts.getConnectSession as Mock).mock.calls[0] as [unknown];
+    expect(typeof seenArg).toBe("string");
+    expect(`/v1/accounts/connect-sessions/${seenArg}`).toBe("/v1/accounts/connect-sessions/cs_1");
+    expect(`/v1/accounts/connect-sessions/${seenArg}`).not.toContain("[object Object]");
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(JSON.parse(written)).toMatchObject({ status: "pending" });
   });
@@ -532,7 +539,8 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("accounts.getConnectSession");
-    expect(parsed.body).toMatchObject({ session_id: "cs_1" });
+    // session_id is a positional arg, not a body field.
+    expect(parsed.args).toMatchObject({ session_id: "cs_1" });
   });
 });
 

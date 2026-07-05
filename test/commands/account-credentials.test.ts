@@ -105,7 +105,7 @@ describe("account credentials — env-var precedence", () => {
     const out = makeOut();
     await runAccountReconnect(
       client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "li-at": "FLAG_LIAT", json: true } as never,
+      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "FLAG_LIAT", json: true } as never,
       out,
     );
     expect(client.accounts.reconnect).toHaveBeenCalledWith(
@@ -122,7 +122,7 @@ describe("account credentials — env-var precedence", () => {
     const out = makeOut();
     await runAccountReconnect(
       client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", json: true } as never,
+      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", json: true } as never,
       out,
     );
     expect(client.accounts.reconnect).toHaveBeenCalledWith(
@@ -139,7 +139,7 @@ describe("account credentials — env-var precedence", () => {
     const out = makeOut();
     await runAccountLink(
       client as never,
-      { "seat-id": "seat_1", "auth-method": "cookie", "li-at": "AT", "li-a": "FLAG_LIA", json: true } as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "AT", "li-a": "FLAG_LIA", json: true } as never,
       out,
     );
     expect(client.accounts.link).toHaveBeenCalledWith(
@@ -154,7 +154,7 @@ describe("account credentials — env-var precedence", () => {
     const out = makeOut();
     await runAccountLink(
       client as never,
-      { "seat-id": "seat_1", "auth-method": "cookie", "li-at": "AT", json: true } as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "AT", json: true } as never,
       out,
     );
     const body = (client.accounts.link as Mock).mock.calls[0]?.[0] as { cookie: Record<string, unknown> };
@@ -236,7 +236,7 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
     const out = makeOut();
     await runAccountReconnect(
       client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "li-at-stdin": true, json: true } as never,
+      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, json: true } as never,
       out,
       { readStdin: async () => "LIAT_S\n" },
     );
@@ -331,7 +331,7 @@ describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => 
       await expect(
         runAccountLink(
           client as never,
-          { "seat-id": "seat_1", "auth-method": "cookie", json: true } as never,
+          { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", json: true } as never,
           out,
           { isTTY: true },
         ),
@@ -352,7 +352,7 @@ describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => 
       await expect(
         runAccountLink(
           client as never,
-          { "seat-id": "seat_1", "auth-method": "cookie", json: true } as never,
+          { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", json: true } as never,
           out,
           { isTTY: false },
         ),

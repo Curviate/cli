@@ -6,27 +6,27 @@
  *   account get <account_id>                          — get one account
  *   account link <body…>                              — link a new account (write)
  *   account connect-link <body…>                      — generate a hosted connect URL, then (TTY+interactive) open + wait (write)
+ *   account reconnect-link <account_id> <body…>       — generate a hosted re-auth URL for an existing account, then open + wait (write)
  *   account connect-session poll --session <id>       — poll a hosted connect-link session for completion (write)
  *   account reconnect <account_id> <body…>            — re-authorize a disconnected account (write)
- *   account refresh <account_id>                      — refresh account sources (write)
- *   account update <account_id> <body…>               — update proxy config (write)
+ *   account update <account_id> <body…>               — update metadata / proxy config (write)
  *   account disconnect <account_id>                   — hard-disconnect an account (write)
- *   account checkpoint submit <body…>                 — submit OTP/2FA code (body-addressed, write)
- *   account checkpoint poll <body…>                   — poll mobile-app approval (body-addressed, write)
- *   account checkpoint resend <body…>                 — resend challenge notification (body-addressed, write)
+ *   account checkpoint solve <account_id> --code      — solve a checkpoint with an OTP/2FA code (path-addressed, write)
+ *   account checkpoint poll <account_id>              — poll mobile-app approval (path-addressed, write)
+ *   account checkpoint request <account_id>           — re-request the challenge notification (path-addressed, write)
  *
  * Root-scoped: all methods live on `curviate.accounts.*` (NOT account-scoped).
  * account_id positionals pass verbatim (NOT resolveIdentifier — not a member/company id).
- * Checkpoint ops are body-addressed: the checkpoint id goes in the body as `account_id`
- * (the provisional account from the 202 response), passed via --checkpoint flag.
+ * Checkpoint ops are path-addressed: the account_id (the provisional account from
+ * the 202 response) is a positional argument that the SDK interpolates into the
+ * request path, not a body field.
  *
- * connect-link / connect-session poll: `accounts.getConnectSession` — like
- * `accounts.resendCheckpoint` — is targeted through the duck-typed
- * MinimalClient interface below rather than the SDK's own generated types.
- * Both are real methods on the published SDK (0.11.0+) and both are covered
- * in the SDK-parity manifest (test/parity.test.ts); the duck-typing is a
- * standing decoupling choice (see MinimalClient), not a placeholder for a
- * method the SDK hasn't shipped yet.
+ * connect-link / reconnect-link / connect-session poll: `accounts.getConnectSession`,
+ * `accounts.createReconnectLink`, and the renamed checkpoint methods are targeted
+ * through the duck-typed MinimalClient interface below rather than the SDK's own
+ * generated types. All are covered in the SDK-parity manifest (test/parity.test.ts);
+ * the duck-typing is a standing decoupling choice (see MinimalClient) that lets the
+ * CLI ship in lockstep with the coupled SDK release.
  *
  * Slim projection (default): account list and account get return a
  * compact field subset — six cached account-enrichment fields (username,
@@ -96,15 +96,16 @@ type AccountFlags = {
   "proxy-password"?: string;
   "user-agent"?: string;
   "recruiter-contract-id"?: string;
-  // connect-link body fields
-  purpose?: string;
+  // update body fields
+  metadata?: string;     // JSON object string → flat string→string metadata map
+  "clear-proxy"?: boolean; // update: send proxy:null to clear the custom proxy
+  // connect-link / reconnect-link body fields
   "expires-in-seconds"?: string;
   "redirect-url"?: string;
-  // connect-link / connect-session poll open+wait UX
-  open?: boolean;        // connect-link: auto-open the URL (TTY+interactive default: on)
+  // connect-link / reconnect-link / connect-session poll open+wait UX
+  open?: boolean;        // connect-link / reconnect-link: auto-open the URL (TTY+interactive default: on)
   session?: string;      // connect-session poll: the session_id to poll
-  // checkpoint body fields
-  checkpoint?: string;   // maps to body account_id
+  // checkpoint body fields (account_id is the positional/path arg, not a body field)
   code?: string;
   wait?: boolean;        // checkpoint poll / connect-link / connect-session poll --wait: adaptive-cadence loop instead of a single poll
   // global
@@ -129,26 +130,27 @@ type OutputStreams = {
 
 // Minimal root-level client shape (accounts namespace is root-scoped).
 //
-// `getConnectSession` and `resendCheckpoint` are both duck-typed against this
-// interface rather than the SDK's own generated types, even though both are
-// real published SDK methods (0.11.0+). This is why the CLI package
-// deliberately excludes itself from the root workspace — it decouples from
-// SDK-internal types on purpose, so the CLI can ship ahead of an SDK regen
-// when it needs to.
+// The account-connection methods are duck-typed against this interface rather
+// than the SDK's own generated types. This is why the CLI package deliberately
+// excludes itself from the root workspace — it decouples from SDK-internal
+// types on purpose, so the CLI can ship in lockstep with the coupled SDK
+// release. The checkpoint methods and createReconnectLink take the account_id
+// as their first STRING argument (the SDK interpolates it into the request
+// path); getConnectSession likewise takes the session_id as a STRING.
 type MinimalClient = {
   accounts: {
     list: (params?: Record<string, unknown>) => Promise<unknown>;
     get: (accountId: string) => Promise<unknown>;
     link: (body: Record<string, unknown>) => Promise<unknown>;
     createConnectLink: (body: Record<string, unknown>) => Promise<unknown>;
+    createReconnectLink: (accountId: string, body?: Record<string, unknown>) => Promise<unknown>;
     reconnect: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
-    refresh: (accountId: string) => Promise<unknown>;
     update: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
     disconnect: (accountId: string) => Promise<unknown>;
-    submitCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
-    pollCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
-    resendCheckpoint: (body: Record<string, unknown>) => Promise<unknown>;
-    getConnectSession: (params: Record<string, unknown>) => Promise<unknown>;
+    solveCheckpoint: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
+    pollCheckpoint: (accountId: string) => Promise<unknown>;
+    requestCheckpoint: (accountId: string) => Promise<unknown>;
+    getConnectSession: (sessionId: string) => Promise<unknown>;
   };
 };
 
@@ -488,7 +490,7 @@ async function waitForMobileApproval(
   for (;;) {
     let result: unknown;
     try {
-      result = await client.accounts.pollCheckpoint({ account_id: accountId });
+      result = await client.accounts.pollCheckpoint(accountId);
     } catch (err) {
       return await handleError(err, ctx.outOpts, ctx.out);
     }
@@ -551,7 +553,7 @@ async function runInteractiveCheckpointLoop(
       }
       // outcome.kind === "timeout"
       ctx.out.stderr.write(
-        `Still waiting for approval. Finish out-of-band: curviate account checkpoint poll --checkpoint ${accountId}\n`,
+        `Still waiting for approval. Finish out-of-band: curviate account checkpoint poll ${accountId}\n`,
       );
       process.exit(AUTH_NEEDED);
       return;
@@ -563,7 +565,7 @@ async function runInteractiveCheckpointLoop(
     for (;;) {
       const code = await ctx.readline("Enter the code: ");
       try {
-        const result = await client.accounts.submitCheckpoint({ account_id: accountId, code });
+        const result = await client.accounts.solveCheckpoint(accountId, { code });
         const r = result as CheckpointEnvelope;
         if (r.status === "checkpoint_required") {
           current = { ...r, account_id: r.account_id ?? accountId };
@@ -646,6 +648,15 @@ export async function runAccountLink(
 
   checkCredentialConflicts(flags, out);
 
+  // Cookie auth requires a User-Agent (the session cookie must be paired with
+  // the browser UA it was minted under). Optional for credentials auth. Skipped
+  // under --preview — a client-side render must never exit (mirrors the
+  // credential-resolution fail-fast's own preview carve-out).
+  if (!flags.preview && flags["auth-method"] === "cookie" && !flags["user-agent"]) {
+    out.stderr.write("error: --user-agent is required when --auth-method=cookie.\n");
+    process.exit(2);
+  }
+
   const resolvedIo = resolveCredentialIO(io);
   const authBody = await buildAuthBody(flags, {
     out,
@@ -710,7 +721,7 @@ type ConnectSessionWaitOutcome =
  */
 async function runConnectSessionWaitLoop(
   client: MinimalClient,
-  params: Record<string, unknown>,
+  sessionId: string,
   ctx: {
     out: OutputStreams;
     sleep: (ms: number) => Promise<void>;
@@ -726,7 +737,10 @@ async function runConnectSessionWaitLoop(
   await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
 
   for (;;) {
-    const result = await client.accounts.getConnectSession(params);
+    // The session_id is a STRING path arg — the SDK interpolates it into
+    // /v1/accounts/connect-sessions/{session_id}. Passing an object here would
+    // stringify to `[object Object]` and hit a bogus path.
+    const result = await client.accounts.getConnectSession(sessionId);
     const r = result as ConnectSessionEnvelope;
 
     if (r.status === "resolved") return { kind: "resolved", result };
@@ -790,10 +804,10 @@ export async function runAccountConnectLink(
   out: OutputStreams,
   io: CredentialIO = {},
 ): Promise<void> {
+  // Create-only: connect-link mints a link to connect a NEW account. Hosted
+  // re-auth of an existing account is `account reconnect-link <account_id>`.
   const body: Record<string, unknown> = {};
   if (flags["seat-id"]) body["seat_id"] = flags["seat-id"];
-  if (flags["account-id"]) body["account_id"] = flags["account-id"];
-  if (flags.purpose) body["purpose"] = flags.purpose;
   if (flags["expires-in-seconds"]) body["expires_in_seconds"] = parseInt(flags["expires-in-seconds"], 10);
   if (flags["redirect-url"]) body["redirect_url"] = flags["redirect-url"];
 
@@ -841,11 +855,11 @@ export async function runAccountConnectLink(
 
   const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
   const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
-  const params: Record<string, unknown> = { session_id: mint.session_id };
+  const sessionId = mint.session_id ?? "";
 
   let outcome: ConnectSessionWaitOutcome;
   try {
-    outcome = await runConnectSessionWaitLoop(client, params, {
+    outcome = await runConnectSessionWaitLoop(client, sessionId, {
       out,
       sleep: resolvedIo.sleep,
       now: resolvedIo.now,
@@ -872,7 +886,7 @@ export async function runAccountConnectLink(
   // outcome.kind === "timeout"
   renderSuccess(outcome.result, outOpts, out);
   out.stderr.write(
-    `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
+    `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${sessionId} --wait\n`,
   );
   process.exit(AUTH_NEEDED);
 }
@@ -900,18 +914,18 @@ export async function runAccountConnectSessionPoll(
     process.exit(2);
   }
 
-  const params: Record<string, unknown> = { session_id: flags.session };
+  const sessionId = flags.session;
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.getConnectSession", args: {}, body: params });
+    const preview = buildPreviewOutput({ method: "accounts.getConnectSession", args: { session_id: sessionId }, body: {} });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
   if (!flags.wait) {
     try {
-      const result = await client.accounts.getConnectSession(params);
+      const result = await client.accounts.getConnectSession(sessionId);
       renderSuccess(result, outOpts, out);
     } catch (err) {
       await handleError(err, outOpts, out);
@@ -925,7 +939,7 @@ export async function runAccountConnectSessionPoll(
 
   let outcome: ConnectSessionWaitOutcome;
   try {
-    outcome = await runConnectSessionWaitLoop(client, params, {
+    outcome = await runConnectSessionWaitLoop(client, sessionId, {
       out,
       sleep: resolvedIo.sleep,
       now: resolvedIo.now,
@@ -958,6 +972,109 @@ export async function runAccountConnectSessionPoll(
 }
 
 /**
+ * Run `account reconnect-link <account_id> <body…> [--wait/--no-wait] [--open/--no-open] [--timeout <ms>]`.
+ * Required: --account-id (positional). Body fields optional.
+ *
+ * The hosted counterpart of `account reconnect`: mints a one-time hosted
+ * re-authorization link for an EXISTING disconnected account, then (on a TTY,
+ * interactively) auto-opens it and waits for the account to reconnect. Same
+ * open+wait UX and terminal exit codes as `account connect-link` (0 resolved,
+ * 9 expired/failed, 12 on a wait-window timeout); non-interactively it prints
+ * the url + session_id and returns immediately (exit 0) for later polling with
+ * `account connect-session poll`.
+ */
+export async function runAccountReconnectLink(
+  client: MinimalClient,
+  flags: AccountFlags,
+  out: OutputStreams,
+  io: CredentialIO = {},
+): Promise<void> {
+  const accountId = flags["account-id"] ?? "";
+  const body: Record<string, unknown> = {};
+  if (flags["expires-in-seconds"]) body["expires_in_seconds"] = parseInt(flags["expires-in-seconds"], 10);
+  if (flags["redirect-url"]) body["redirect_url"] = flags["redirect-url"];
+
+  const outOpts = resolveOutputOpts(flags);
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "accounts.createReconnectLink", args: { accountId }, body });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  let result: unknown;
+  try {
+    result = await client.accounts.createReconnectLink(accountId, body);
+  } catch (err) {
+    await handleError(err, outOpts, out);
+    return;
+  }
+
+  const mint = result as { url?: string; session_id?: string };
+  const resolvedIo = resolveCredentialIO(io);
+  const isInteractive = resolvedIo.isTTY && resolvedIo.isOutputTTY && !(flags["no-interactive"] ?? false);
+
+  if (!isInteractive) {
+    if (mint.url) {
+      out.stderr.write(`Open this URL in a browser to reconnect the account: ${mint.url}\n`);
+    }
+    if (mint.session_id) {
+      out.stderr.write(
+        `Session: ${mint.session_id} — check it later with: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
+      );
+    }
+    renderSuccess(result, outOpts, out);
+    return;
+  }
+
+  if ((flags.open ?? true) && mint.url) {
+    await resolvedIo.open(mint.url);
+  }
+
+  if (!(flags.wait ?? true)) {
+    renderSuccess(result, outOpts, out);
+    return;
+  }
+
+  const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
+  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
+  const sessionId = mint.session_id ?? "";
+
+  let outcome: ConnectSessionWaitOutcome;
+  try {
+    outcome = await runConnectSessionWaitLoop(client, sessionId, {
+      out,
+      sleep: resolvedIo.sleep,
+      now: resolvedIo.now,
+      showTicker,
+      timeoutOverrideMs,
+    });
+  } catch (err) {
+    await handleError(err, outOpts, out);
+    return;
+  }
+
+  if (outcome.kind === "resolved") {
+    printConnectSessionResolved(outcome.result, { out, outOpts });
+    return;
+  }
+  if (outcome.kind === "terminal_failure") {
+    renderSuccess(outcome.result, outOpts, out);
+    out.stderr.write(
+      `This reconnect session has ${outcome.status}. Generate a new link: curviate account reconnect-link ${accountId}.\n`,
+    );
+    process.exit(9);
+    return;
+  }
+  // outcome.kind === "timeout"
+  renderSuccess(outcome.result, outOpts, out);
+  out.stderr.write(
+    `Still waiting for the account to reconnect — the wait window elapsed. Check again: curviate account connect-session poll --session ${sessionId} --wait\n`,
+  );
+  process.exit(AUTH_NEEDED);
+}
+
+/**
  * Run `account reconnect <account_id> <body…>`.
  * Required: --account-id (positional), --auth-method.
  */
@@ -973,6 +1090,13 @@ export async function runAccountReconnect(
   }
 
   checkCredentialConflicts(flags, out);
+
+  // Cookie auth requires a User-Agent (as on link). Optional for credentials.
+  // Skipped under --preview (a client-side render must never exit).
+  if (!flags.preview && flags["auth-method"] === "cookie" && !flags["user-agent"]) {
+    out.stderr.write("error: --user-agent is required when --auth-method=cookie.\n");
+    process.exit(2);
+  }
 
   const accountId = flags["account-id"] ?? "";
   const resolvedIo = resolveCredentialIO(io);
@@ -1012,36 +1136,12 @@ export async function runAccountReconnect(
   });
 }
 
-/** Run `account refresh <account_id>`. */
-export async function runAccountRefresh(
-  client: MinimalClient,
-  flags: AccountFlags,
-  out: OutputStreams,
-): Promise<void> {
-  const accountId = flags["account-id"] ?? "";
-  const outOpts = resolveOutputOpts(flags);
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "accounts.refresh",
-      args: { accountId },
-      body: {},
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  try {
-    const result = await client.accounts.refresh(accountId);
-    renderSuccess(result, outOpts, out);
-  } catch (err) {
-    await handleError(err, outOpts, out);
-  }
-}
-
 /**
  * Run `account update <account_id> <body…>`.
- * Body: optional proxy / country / ip.
+ * Body: optional metadata (a flat string map that replaces the store
+ * wholesale) and/or a custom proxy — set one with --proxy-*, or clear it with
+ * --clear-proxy (sends proxy:null). The managed country/ip knobs are gone
+ * (a managed location is chosen at connect time instead).
  */
 export async function runAccountUpdate(
   client: MinimalClient,
@@ -1051,8 +1151,30 @@ export async function runAccountUpdate(
   const accountId = flags["account-id"] ?? "";
   const body: Record<string, unknown> = {};
 
-  if (flags.country) body["country"] = flags.country;
-  if (flags.ip) body["ip"] = flags.ip;
+  if (flags.metadata !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(flags.metadata);
+    } catch {
+      out.stderr.write('error: --metadata must be a JSON object, e.g. --metadata \'{"team":"growth"}\'.\n');
+      process.exit(2);
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      out.stderr.write('error: --metadata must be a JSON object, e.g. --metadata \'{"team":"growth"}\'.\n');
+      process.exit(2);
+    }
+    body["metadata"] = parsed;
+  }
+
+  // --clear-proxy (proxy:null) is mutually exclusive with setting a proxy.
+  if (flags["clear-proxy"]) {
+    if (flags["proxy-host"]) {
+      out.stderr.write("error: --clear-proxy cannot be combined with --proxy-host (choose one).\n");
+      process.exit(2);
+    }
+    body["proxy"] = null;
+  }
+
   if (flags["proxy-host"]) {
     // Proxy password is optional: flag > env > omitted — no prompt, no fail-fast.
     const proxyPassword = await resolveSecret({
@@ -1117,17 +1239,18 @@ export async function runAccountDisconnect(
 }
 
 /**
- * Run `account checkpoint submit <body…>`.
- * Body-addressed: checkpoint id in body as `account_id` (--checkpoint flag).
- * Required: --checkpoint (maps to body.account_id), --code.
+ * Run `account checkpoint solve <account_id> --code <code>`.
+ * Path-addressed: account_id is the positional argument (interpolated into the
+ * request path); the body is `{ code }`.
+ * Required: --account-id (positional), --code.
  */
-export async function runAccountCheckpointSubmit(
+export async function runAccountCheckpointSolve(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
-  if (!flags.checkpoint) {
-    out.stderr.write("error: --checkpoint is required (the provisional account_id from the 202 response).\n");
+  if (!flags["account-id"]) {
+    out.stderr.write("error: account_id is required (the provisional account_id from the 202 response).\n");
     process.exit(2);
   }
   if (!flags.code) {
@@ -1135,8 +1258,8 @@ export async function runAccountCheckpointSubmit(
     process.exit(2);
   }
 
+  const accountId = flags["account-id"] ?? "";
   const body: Record<string, unknown> = {
-    account_id: flags.checkpoint,
     code: flags.code,
   };
 
@@ -1144,8 +1267,8 @@ export async function runAccountCheckpointSubmit(
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "accounts.submitCheckpoint",
-      args: {},
+      method: "accounts.solveCheckpoint",
+      args: { accountId },
       body,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
@@ -1154,7 +1277,7 @@ export async function runAccountCheckpointSubmit(
 
   let chained = false;
   try {
-    const result = await client.accounts.submitCheckpoint(body);
+    const result = await client.accounts.solveCheckpoint(accountId, body);
     const r = result as CheckpointEnvelope;
     renderSuccess(result, outOpts, out);
     chained = r.status === "checkpoint_required";
@@ -1167,52 +1290,49 @@ export async function runAccountCheckpointSubmit(
   // CurviateError — the exit call sits outside the try/catch above so it is
   // never miscaught and misrouted through handleError. Short-circuits the
   // one-shot command with AUTH_NEEDED (12): still resolvable, needs a further
-  // `checkpoint submit` call for the new challenge_type.
+  // `checkpoint solve` call for the new challenge_type.
   if (chained) {
     process.exit(AUTH_NEEDED);
   }
 }
 
 /**
- * Run `account checkpoint resend <body…>`.
- * Body-addressed: checkpoint id in body as `account_id` (--checkpoint flag).
- * Required: --checkpoint. No --code — resend has nothing to submit.
+ * Run `account checkpoint request <account_id>`.
+ * Path-addressed: account_id is the positional argument. No --code — a
+ * re-request has nothing to submit.
  *
  * Exit 0 on any 200 regardless of the `resent` boolean: a `false` value is an
  * honest answer ("this challenge type has nothing to re-send, or the
  * platform declined"), not a command failure — the caller reads `resent`
  * from the response to branch. Errors (404 no pending checkpoint, 409
  * expired, 501 unsupported) route through the standard exit-code table via
- * `handleError`, unchanged from `submit`/`poll`.
+ * `handleError`, unchanged from `solve`/`poll`.
  */
-export async function runAccountCheckpointResend(
+export async function runAccountCheckpointRequest(
   client: MinimalClient,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
-  if (!flags.checkpoint) {
-    out.stderr.write("error: --checkpoint is required (the provisional account_id from the 202 response).\n");
+  if (!flags["account-id"]) {
+    out.stderr.write("error: account_id is required (the provisional account_id from the 202 response).\n");
     process.exit(2);
   }
 
-  const body: Record<string, unknown> = {
-    account_id: flags.checkpoint,
-  };
-
+  const accountId = flags["account-id"] ?? "";
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "accounts.resendCheckpoint",
-      args: {},
-      body,
+      method: "accounts.requestCheckpoint",
+      args: { accountId },
+      body: {},
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
   try {
-    const result = await client.accounts.resendCheckpoint(body);
+    const result = await client.accounts.requestCheckpoint(accountId);
     renderSuccess(result, outOpts, out);
   } catch (err) {
     await handleError(err, outOpts, out);
@@ -1245,7 +1365,7 @@ function formatRemaining(ms: number): string {
  */
 async function runCheckpointPollWaitLoop(
   client: MinimalClient,
-  body: Record<string, unknown>,
+  accountId: string,
   ctx: {
     out: OutputStreams;
     sleep: (ms: number) => Promise<void>;
@@ -1261,7 +1381,7 @@ async function runCheckpointPollWaitLoop(
   await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
 
   for (;;) {
-    const result = await client.accounts.pollCheckpoint(body);
+    const result = await client.accounts.pollCheckpoint(accountId);
     const r = result as { status?: string; expires_at?: string };
 
     if (r.status === "active") return { kind: "active", result };
@@ -1286,9 +1406,8 @@ async function runCheckpointPollWaitLoop(
 }
 
 /**
- * Run `account checkpoint poll <body…> [--wait] [--timeout <ms>]`.
- * Body-addressed: checkpoint id in body as `account_id` (--checkpoint flag).
- * Required: --checkpoint.
+ * Run `account checkpoint poll <account_id> [--wait] [--timeout <ms>]`.
+ * Path-addressed: account_id is the positional argument.
  *
  * Without `--wait` (default): a single poll, unchanged (back-compat).
  * With `--wait`: the adaptive-cadence loop above, until `active` (exit 0),
@@ -1301,22 +1420,19 @@ export async function runAccountCheckpointPoll(
   out: OutputStreams,
   io: CredentialIO = {},
 ): Promise<void> {
-  if (!flags.checkpoint) {
-    out.stderr.write("error: --checkpoint is required (the provisional account_id from the 202 response).\n");
+  if (!flags["account-id"]) {
+    out.stderr.write("error: account_id is required (the provisional account_id from the 202 response).\n");
     process.exit(2);
   }
 
-  const body: Record<string, unknown> = {
-    account_id: flags.checkpoint,
-  };
-
+  const accountId = flags["account-id"] ?? "";
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "accounts.pollCheckpoint",
-      args: {},
-      body,
+      args: { accountId },
+      body: {},
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
@@ -1324,7 +1440,7 @@ export async function runAccountCheckpointPoll(
 
   if (!flags.wait) {
     try {
-      const result = await client.accounts.pollCheckpoint(body);
+      const result = await client.accounts.pollCheckpoint(accountId);
       renderSuccess(result, outOpts, out);
     } catch (err) {
       await handleError(err, outOpts, out);
@@ -1350,16 +1466,16 @@ export async function runAccountCheckpointPoll(
   const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
 
   // Poll only ever addresses a mobile_app_approval checkpoint (a code-based
-  // checkpoint 422s here — use `checkpoint submit` instead), so the resend
+  // checkpoint 422s here — use `checkpoint solve` instead), so the resend
   // hint's per-type gating always resolves to "resendable" — printed once,
   // up front, not per attempt. Stderr diagnostic, not the stdout data
   // payload the "silent until terminal" discipline is about (mirrors
   // renderError's own one-liner-to-stderr-regardless-of-json convention).
-  printResendHintIfApplicable("mobile_app_approval", flags.checkpoint, out);
+  printResendHintIfApplicable("mobile_app_approval", accountId, out);
 
   let outcome: PollWaitOutcome;
   try {
-    outcome = await runCheckpointPollWaitLoop(client, body, {
+    outcome = await runCheckpointPollWaitLoop(client, accountId, {
       out,
       sleep: resolvedIo.sleep,
       now: resolvedIo.now,
@@ -1384,7 +1500,7 @@ export async function runAccountCheckpointPoll(
   // outcome.kind === "timeout"
   renderSuccess(outcome.result, outOpts, out);
   out.stderr.write(
-    `Still waiting for approval — the wait window elapsed. Check again: curviate account checkpoint poll --checkpoint ${flags.checkpoint} --wait\n`,
+    `Still waiting for approval — the wait window elapsed. Check again: curviate account checkpoint poll ${accountId} --wait\n`,
   );
   process.exit(AUTH_NEEDED);
 }
@@ -1444,7 +1560,7 @@ const accountLinkCommand = defineCommand({
     name: "link",
     description:
       "Connect a LinkedIn account to an empty seat. " +
-      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint submit`.",
+      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint solve <account_id> --code`.",
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
@@ -1493,17 +1609,15 @@ const accountConnectLinkCommand = defineCommand({
   meta: {
     name: "connect-link",
     description:
-      "Generate a one-time hosted account connection URL. On an interactive TTY the URL auto-opens in " +
-      "your browser and the command waits for the account to connect (exit 0 on success, 9 if the link " +
-      "expires or fails, 12 if the wait window elapses first). Non-interactively it never opens a browser " +
-      "and returns immediately with the url and session_id — poll completion later with " +
-      "`account connect-session poll`.",
+      "Generate a one-time hosted URL to connect a NEW LinkedIn account. On an interactive TTY the URL " +
+      "auto-opens in your browser and the command waits for the account to connect (exit 0 on success, 9 " +
+      "if the link expires or fails, 12 if the wait window elapses first). Non-interactively it never opens " +
+      "a browser and returns immediately with the url and session_id — poll completion later with " +
+      "`account connect-session poll`. To re-authorize an EXISTING account, use `account reconnect-link`.",
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
-    "seat-id": { type: "string", description: "Target seat (required when purpose=create)." },
-    "account-id": { type: "string", description: "Account to reconnect (required when purpose=reconnect)." },
-    purpose: { type: "string", description: "create | reconnect (default: create)." },
+    "seat-id": { type: "string", description: "Empty seat to bind the new account to.", required: true },
     "expires-in-seconds": { type: "string", description: "Link expiry in seconds (60–3600, default 900)." },
     "redirect-url": { type: "string", description: "Browser return URL after the hosted flow." },
     open: {
@@ -1541,6 +1655,53 @@ const accountConnectLinkCommand = defineCommand({
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
     await runAccountConnectLink(client as unknown as MinimalClient, flags, out);
+  },
+});
+
+const accountReconnectLinkCommand = defineCommand({
+  meta: {
+    name: "reconnect-link",
+    description:
+      "Generate a one-time hosted URL to re-authorize an EXISTING disconnected account (the hosted " +
+      "counterpart of `account reconnect`). On an interactive TTY the URL auto-opens and the command waits " +
+      "for the account to reconnect (exit 0 on success, 9 if the link expires or fails, 12 if the wait " +
+      "window elapses first). Non-interactively it prints the url + session_id and returns immediately — " +
+      "poll completion later with `account connect-session poll`.",
+  },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    "account-id": { type: "positional", description: "Account id (acc_…) to re-authorize." },
+    "expires-in-seconds": { type: "string", description: "Link expiry in seconds (60–3600, default 900)." },
+    "redirect-url": { type: "string", description: "Browser return URL after the hosted flow." },
+    open: {
+      type: "boolean",
+      description: "Auto-open the URL in your default browser. Default: on for an interactive TTY, always off otherwise (ignored non-interactively).",
+    },
+    wait: {
+      type: "boolean",
+      description: "Poll for the account to reconnect on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) after opening the URL. Default: on for an interactive TTY, always off otherwise.",
+    },
+    // Override WRITE_SINGLE_FLAGS.timeout: --timeout is the interactive wait
+    // loop's own wall-clock bound in MILLISECONDS, not the SDK request timeout.
+    timeout: {
+      type: "string",
+      description: "Wait-loop timeout in milliseconds (only meaningful under the interactive TTY wait; default: time remaining to the link's expiry). Note the unit: this is milliseconds.",
+    },
+  },
+  async run({ args }) {
+    const flags = args as AccountFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runAccountReconnectLink(client as unknown as MinimalClient, flags, out);
   },
 });
 
@@ -1608,7 +1769,7 @@ const accountReconnectCommand = defineCommand({
     name: "reconnect",
     description:
       "Re-authorize a disconnected account in place. " +
-      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint submit`.",
+      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint solve <account_id> --code`.",
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
@@ -1653,37 +1814,13 @@ const accountReconnectCommand = defineCommand({
   },
 });
 
-const accountRefreshCommand = defineCommand({
-  meta: { name: "refresh", description: "Refresh an account's synced data sources." },
-  args: {
-    ...WRITE_SINGLE_FLAGS,
-    "account-id": { type: "positional", description: "Account id (acc_…)." },
-  },
-  async run({ args }) {
-    const flags = args as AccountFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runAccountRefresh(client as unknown as MinimalClient, flags, out);
-  },
-});
-
 const accountUpdateCommand = defineCommand({
-  meta: { name: "update", description: "Update managed-proxy configuration for an account." },
+  meta: { name: "update", description: "Update an account's metadata and/or custom-proxy configuration." },
   args: {
     ...WRITE_SINGLE_FLAGS,
     "account-id": { type: "positional", description: "Account id (acc_…)." },
-    country: { type: "string", description: "Proxy location hint (ISO 3166-1 alpha-2)." },
-    ip: { type: "string", description: "IP to infer the managed proxy location." },
+    metadata: { type: "string", description: `Custom metadata as a JSON object (flat string→string map) — replaces the store wholesale. Example: '{"team":"growth"}'.` },
+    "clear-proxy": { type: "boolean", description: "Clear the custom proxy (revert to automatic proxy protection). Mutually exclusive with --proxy-host.", default: false },
     "proxy-protocol": { type: "string", description: "Proxy protocol: http | https | socks5." },
     "proxy-host": { type: "string", description: "Proxy host or IP." },
     "proxy-port": { type: "string", description: "Proxy port." },
@@ -1732,14 +1869,13 @@ const accountDisconnectCommand = defineCommand({
   },
 });
 
-const accountCheckpointSubmitCommand = defineCommand({
-  meta: { name: "submit", description: "Submit an OTP / 2FA code to resolve a checkpoint challenge." },
+const accountCheckpointSolveCommand = defineCommand({
+  meta: { name: "solve", description: "Solve a checkpoint challenge with an OTP / 2FA code." },
   args: {
     ...WRITE_SINGLE_FLAGS,
-    checkpoint: {
-      type: "string",
-      description: "The provisional account_id from the 202 checkpoint_required response.",
-      required: true,
+    "account-id": {
+      type: "positional",
+      description: "The provisional account_id (acc_…) from the 202 checkpoint_required response.",
     },
     code: {
       type: "string",
@@ -1761,7 +1897,7 @@ const accountCheckpointSubmitCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountCheckpointSubmit(client as unknown as MinimalClient, flags, out);
+    await runAccountCheckpointSolve(client as unknown as MinimalClient, flags, out);
   },
 });
 
@@ -1774,10 +1910,9 @@ const accountCheckpointPollCommand = defineCommand({
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
-    checkpoint: {
-      type: "string",
-      description: "The provisional account_id from the 202 checkpoint_required response.",
-      required: true,
+    "account-id": {
+      type: "positional",
+      description: "The provisional account_id (acc_…) from the 202 checkpoint_required response.",
     },
     wait: {
       type: "boolean",
@@ -1814,21 +1949,20 @@ const accountCheckpointPollCommand = defineCommand({
   },
 });
 
-const accountCheckpointResendCommand = defineCommand({
+const accountCheckpointRequestCommand = defineCommand({
   meta: {
-    name: "resend",
+    name: "request",
     description:
-      "Re-send the challenge notification for a pending checkpoint (e.g. re-send an OTP email, SMS " +
-      "code, or mobile-app approval push). Not every challenge type supports resend — an authenticator- " +
+      "Re-request the challenge notification for a pending checkpoint (e.g. re-send an OTP email, SMS " +
+      "code, or mobile-app approval push). Not every challenge type supports it — an authenticator- " +
       "app code has nothing to re-send. The response's `resent` boolean tells you honestly whether a new " +
       "notification actually went out; the command still exits 0 either way.",
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
-    checkpoint: {
-      type: "string",
-      description: "The provisional account_id from the 202 checkpoint_required response.",
-      required: true,
+    "account-id": {
+      type: "positional",
+      description: "The provisional account_id (acc_…) from the 202 checkpoint_required response.",
     },
   },
   async run({ args }) {
@@ -1845,22 +1979,22 @@ const accountCheckpointResendCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountCheckpointResend(client as unknown as MinimalClient, flags, out);
+    await runAccountCheckpointRequest(client as unknown as MinimalClient, flags, out);
   },
 });
 
 const accountCheckpointCommand = defineCommand({
   meta: {
     name: "checkpoint",
-    description: "Checkpoint challenge operations (submit OTP, poll mobile-app approval, or resend the challenge notification).",
+    description: "Checkpoint challenge operations (solve with an OTP, poll mobile-app approval, or re-request the challenge notification).",
   },
   subCommands: {
-    submit: accountCheckpointSubmitCommand,
+    solve: accountCheckpointSolveCommand,
     poll: accountCheckpointPollCommand,
-    resend: accountCheckpointResendCommand,
+    request: accountCheckpointRequestCommand,
   },
   async run() {
-    process.stderr.write("Usage: curviate account checkpoint submit | poll | resend\n");
+    process.stderr.write("Usage: curviate account checkpoint solve <account_id> --code <code> | poll <account_id> | request <account_id>\n");
   },
 });
 
@@ -1871,9 +2005,9 @@ export const accountCommand = defineCommand({
     get: accountGetCommand,
     link: accountLinkCommand,
     "connect-link": accountConnectLinkCommand,
+    "reconnect-link": accountReconnectLinkCommand,
     "connect-session": accountConnectSessionCommand,
     reconnect: accountReconnectCommand,
-    refresh: accountRefreshCommand,
     update: accountUpdateCommand,
     disconnect: accountDisconnectCommand,
     checkpoint: accountCheckpointCommand,
@@ -1881,7 +2015,7 @@ export const accountCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate account <subcommand>\n" +
-      "  list | get | link | connect-link | connect-session poll | reconnect | refresh | update | disconnect | checkpoint\n",
+      "  list | get | link | connect-link | reconnect-link | connect-session poll | reconnect | update | disconnect | checkpoint\n",
     );
   },
 });

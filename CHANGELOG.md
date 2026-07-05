@@ -6,6 +6,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.13.0] - 2026-07-05
+
+Accounts/Auth surface migration — the coupled release with `@curviate/sdk` 0.13.0. This is a
+**breaking** minor (pre-1.0): the account connection and checkpoint commands were reshaped to
+match the new account-in-path grammar.
+
+### Added
+
+- **`account reconnect-link <account_id>`** — mint a one-time hosted **re-authorization** link for an existing disconnected account (the hosted counterpart of `account reconnect`). Same open+wait UX as `account connect-link`: on an interactive TTY the URL auto-opens and the command waits for the account to reconnect (exit `0` resolved, `9` expired/failed, `12` on a wait-window timeout); non-interactively it prints the url + session_id and returns immediately. Optional `--expires-in-seconds` / `--redirect-url`.
+- **`account update --metadata '<json>'`** — set the account's custom metadata (a flat JSON object that replaces the store wholesale). **`account update --clear-proxy`** — clear the custom proxy (revert to automatic proxy protection).
+
+### Changed (BREAKING)
+
+- **Checkpoint commands are now account-in-path (positional), not `--checkpoint`.**
+  - `account checkpoint submit --checkpoint <id> --code <c>` → **`account checkpoint solve <account_id> --code <c>`**.
+  - `account checkpoint resend --checkpoint <id>` → **`account checkpoint request <account_id>`**.
+  - `account checkpoint poll --checkpoint <id>` → **`account checkpoint poll <account_id>`** (the `--checkpoint` flag becomes the account_id positional; `--wait`/`--timeout` unchanged).
+  - Update scripts: replace `checkpoint submit --checkpoint X --code Y` with `checkpoint solve X --code Y`, `checkpoint resend --checkpoint X` with `checkpoint request X`, and `checkpoint poll --checkpoint X` with `checkpoint poll X`.
+- **`account refresh <account_id>` removed** — accounts restart and re-sync automatically now; there is no replacement command. Status freshness comes from the account-status webhook, the nightly reconcile, and `account get`.
+- **`account connect-link` is create-only** — the `--purpose` and `--account-id` flags are removed; it only mints a link to connect a **new** account. Use `account reconnect-link <account_id>` for hosted re-auth of an existing account.
+- **`account update` reshaped** — the managed `--country` / `--ip` flags are removed (a managed location is now chosen at connect time). The command now takes `--metadata` and/or a custom proxy (`--proxy-*` / `--clear-proxy`).
+- **`account link` / `account reconnect` require `--user-agent` for cookie auth** — connecting by session cookie (`--auth-method cookie`) without a `--user-agent` fails fast at exit `2` (it stays optional for `--auth-method credentials`). Under `--preview` the check is skipped (a render never exits).
+- SDK-parity manifest (`test/parity.test.ts`) repoints the checkpoint entries (`solve`/`request`/`poll`) and swaps `account refresh` → `account reconnect-link`; the manifest and SDK method count stay at 93 (`accounts` stays 12 methods).
+
+### Fixed
+
+- **`account connect-session poll` now interpolates the session id correctly.** It previously passed the session id as an object to the SDK, producing a request path of `/v1/accounts/connect-sessions/[object Object]` (broken `--wait` loops). It now passes the id as a string. A regression test asserts the interpolated path is `/v1/accounts/connect-sessions/<session_id>`, never `[object Object]`.
+
+### Changed
+
+- `@curviate/sdk` dependency bumped to `^0.13.0` — the coupled release carrying the reshaped `accounts` surface (see the SDK's own CHANGELOG). The CLI duck-types the SDK, so its commands are covered by the parity manifest against that release.
+
 ## [0.12.0] - 2026-07-05
 
 ### Added

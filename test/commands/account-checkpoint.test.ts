@@ -26,12 +26,12 @@ function makeClient() {
       link: vi.fn(),
       createConnectLink: vi.fn(),
       reconnect: vi.fn(),
-      refresh: vi.fn(),
+      createReconnectLink: vi.fn(),
       update: vi.fn(),
       disconnect: vi.fn(),
-      submitCheckpoint: vi.fn(),
+      solveCheckpoint: vi.fn(),
       pollCheckpoint: vi.fn(),
-      resendCheckpoint: vi.fn(),
+      requestCheckpoint: vi.fn(),
     },
   };
 }
@@ -180,7 +180,7 @@ describe("account link — checkpoint_required, non-interactive", () => {
       exitSpy.mockRestore();
     }
     expect(readline).not.toHaveBeenCalled();
-    expect(client.accounts.submitCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed).toMatchObject({ status: "checkpoint_required", challenge_type: "otp" });
@@ -224,7 +224,7 @@ describe("account link — checkpoint_required, non-interactive", () => {
       exitSpy.mockRestore();
     }
     expect(readline).not.toHaveBeenCalled();
-    expect(client.accounts.submitCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("a completed (non-checkpoint) link response is unaffected — no exit, renders as before", async () => {
@@ -253,7 +253,7 @@ describe("account link — checkpoint_required, interactive OTP", () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValue("999999");
-    (client.accounts.submitCheckpoint as Mock).mockResolvedValue({ object: "account", account_id: "acc_final", status: "active" });
+    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({ object: "account", account_id: "acc_final", status: "active" });
 
     await runAccountLink(client as never, makeLinkArgs(), out, {
       isTTY: true,
@@ -267,17 +267,17 @@ describe("account link — checkpoint_required, interactive OTP", () => {
     expect(stderrText).toContain("Check your email");
     expect(stderrText).toContain("Account linked: acc_final");
     // Resend hint is present for otp
-    expect(stderrText).toContain("checkpoint resend --checkpoint acc_pending_1");
+    expect(stderrText).toContain("checkpoint request acc_pending_1");
 
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledTimes(1);
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledWith({ account_id: "acc_pending_1", code: "999999" });
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledTimes(1);
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledWith("acc_pending_1", { code: "999999" });
   });
 
   it("422 loop: re-prompts with retry copy (no re-printed challenge copy) and resolves on the second entry", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValueOnce("000000").mockResolvedValueOnce("999999");
-    (client.accounts.submitCheckpoint as Mock)
+    (client.accounts.solveCheckpoint as Mock)
       .mockRejectedValueOnce(invalidCodeError(4))
       .mockResolvedValueOnce({ object: "account", account_id: "acc_final", status: "active" });
 
@@ -289,11 +289,11 @@ describe("account link — checkpoint_required, interactive OTP", () => {
       now: constantNow,
     });
 
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledTimes(2);
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledTimes(2);
     // Both attempts submit against the SAME provisional account_id (only the code differs) —
     // a 422 retries the same stage, it does not re-address a new checkpoint.
-    expect(client.accounts.submitCheckpoint).toHaveBeenNthCalledWith(1, { account_id: "acc_pending_1", code: "000000" });
-    expect(client.accounts.submitCheckpoint).toHaveBeenNthCalledWith(2, { account_id: "acc_pending_1", code: "999999" });
+    expect(client.accounts.solveCheckpoint).toHaveBeenNthCalledWith(1, "acc_pending_1", { code: "000000" });
+    expect(client.accounts.solveCheckpoint).toHaveBeenNthCalledWith(2, "acc_pending_1", { code: "999999" });
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("4 attempt(s) remaining");
     // Challenge copy ("Check your email") is printed exactly once — not re-printed on retry
@@ -304,7 +304,7 @@ describe("account link — checkpoint_required, interactive OTP", () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValue("000000");
-    (client.accounts.submitCheckpoint as Mock)
+    (client.accounts.solveCheckpoint as Mock)
       .mockRejectedValueOnce(invalidCodeError(4))
       .mockRejectedValueOnce(invalidCodeError(3))
       .mockRejectedValueOnce(invalidCodeError(2))
@@ -327,14 +327,14 @@ describe("account link — checkpoint_required, interactive OTP", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledTimes(6);
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledTimes(6);
   });
 
   it("CHECKPOINT_EXPIRED (409) exits 9", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValue("999999");
-    (client.accounts.submitCheckpoint as Mock).mockRejectedValue(expiredError());
+    (client.accounts.solveCheckpoint as Mock).mockRejectedValue(expiredError());
 
     const exitSpy = makeExitSpy();
     try {
@@ -357,7 +357,7 @@ describe("account link — checkpoint_required, interactive OTP", () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValueOnce("999999").mockResolvedValueOnce("999999");
-    (client.accounts.submitCheckpoint as Mock)
+    (client.accounts.solveCheckpoint as Mock)
       .mockResolvedValueOnce({
         object: "checkpoint",
         status: "checkpoint_required",
@@ -375,16 +375,16 @@ describe("account link — checkpoint_required, interactive OTP", () => {
       now: constantNow,
     });
 
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledTimes(2);
-    expect(client.accounts.submitCheckpoint).toHaveBeenNthCalledWith(1, { account_id: "acc_pending_1", code: "999999" });
-    expect(client.accounts.submitCheckpoint).toHaveBeenNthCalledWith(2, { account_id: "acc_pending_2", code: "999999" });
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledTimes(2);
+    expect(client.accounts.solveCheckpoint).toHaveBeenNthCalledWith(1, "acc_pending_1", { code: "999999" });
+    expect(client.accounts.solveCheckpoint).toHaveBeenNthCalledWith(2, "acc_pending_2", { code: "999999" });
 
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("Check your email");
     expect(stderrText).toContain("Enter authenticator code");
     // two_factor_app has no resend hint
     const afterChain = stderrText.slice(stderrText.indexOf("Enter authenticator code"));
-    expect(afterChain).not.toContain("checkpoint resend");
+    expect(afterChain).not.toContain("checkpoint request");
   });
 });
 
@@ -426,10 +426,10 @@ describe("account link — checkpoint_required, interactive mobile_app_approval"
 
     expect(readline).not.toHaveBeenCalled();
     expect(client.accounts.pollCheckpoint).toHaveBeenCalledTimes(2);
-    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith({ account_id: "acc_pending_mobile" });
+    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith("acc_pending_mobile");
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("Approve in LinkedIn app");
-    expect(stderrText).toContain("checkpoint resend --checkpoint acc_pending_mobile");
+    expect(stderrText).toContain("checkpoint request acc_pending_mobile");
     expect(stderrText).toContain("Account linked: acc_final");
   });
 
@@ -480,7 +480,7 @@ describe("account link — checkpoint_required, interactive mobile_app_approval"
     }
     expect(client.accounts.pollCheckpoint).toHaveBeenCalledTimes(1);
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("checkpoint poll --checkpoint acc_pending_mobile");
+    expect(stderrText).toContain("checkpoint poll acc_pending_mobile");
   });
 });
 
@@ -500,7 +500,7 @@ describe("account reconnect — checkpoint_required, interactive OTP", () => {
     const { runAccountReconnect } = await import("../../src/commands/account.js");
     const out = makeOut();
     const readline = vi.fn().mockResolvedValue("999999");
-    (client.accounts.submitCheckpoint as Mock).mockResolvedValue({ object: "account", account_id: "acc_final", status: "active" });
+    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({ object: "account", account_id: "acc_final", status: "active" });
 
     await runAccountReconnect(
       client as never,
@@ -550,10 +550,10 @@ describe("lib/exit-codes — AUTH_NEEDED", () => {
 });
 
 // ---------------------------------------------------------------------------
-// checkpoint submit — one-shot, chained checkpoint_required response
+// checkpoint solve — one-shot, chained checkpoint_required response
 // ---------------------------------------------------------------------------
 
-describe("account checkpoint submit — chained checkpoint_required response", () => {
+describe("account checkpoint solve — chained checkpoint_required response", () => {
   let client: Client;
   beforeEach(() => {
     client = makeClient();
@@ -561,17 +561,17 @@ describe("account checkpoint submit — chained checkpoint_required response", (
   afterEach(() => vi.restoreAllMocks());
 
   it("a completed (200/201) result is unaffected — still renders and exits 0", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.submitCheckpoint as Mock).mockResolvedValue({
+    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({
       object: "account",
       status: "active",
       account_id: "acc_final",
     });
 
-    await runAccountCheckpointSubmit(
+    await runAccountCheckpointSolve(
       client as never,
-      { checkpoint: "acc_pending_1", code: "999999", json: true } as AccountFlags,
+      { "account-id": "acc_pending_1", code: "999999", json: true } as AccountFlags,
       out,
     );
 
@@ -580,9 +580,9 @@ describe("account checkpoint submit — chained checkpoint_required response", (
   });
 
   it("a chained checkpoint_required response prints the new envelope and exits 12", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.submitCheckpoint as Mock).mockResolvedValue({
+    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({
       object: "checkpoint",
       status: "checkpoint_required",
       account_id: "acc_pending_2",
@@ -592,9 +592,9 @@ describe("account checkpoint submit — chained checkpoint_required response", (
 
     const exitSpy = makeExitSpy();
     try {
-      await runAccountCheckpointSubmit(
+      await runAccountCheckpointSolve(
         client as never,
-        { checkpoint: "acc_pending_1", code: "999999", json: true } as AccountFlags,
+        { "account-id": "acc_pending_1", code: "999999", json: true } as AccountFlags,
         out,
       );
       expect.fail("should have exited");
@@ -646,7 +646,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true } as AccountFlags,
       out,
     );
 
@@ -665,13 +665,13 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
       out,
       { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
     );
 
     expect(client.accounts.pollCheckpoint).toHaveBeenCalledTimes(1);
-    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith({ account_id: "acc_pending_1" });
+    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith("acc_pending_1");
     expect(clock.sleep).toHaveBeenNthCalledWith(1, 1000);
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("Account linked: acc_final");
@@ -689,7 +689,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
     try {
       await runAccountCheckpointPoll(
         client as never,
-        { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
         out,
         { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
       );
@@ -718,7 +718,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
     try {
       await runAccountCheckpointPoll(
         client as never,
-        { checkpoint: "acc_pending_1", json: true, wait: true, timeout: "500" } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true, wait: true, timeout: "500" } as AccountFlags,
         out,
         { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
       );
@@ -750,7 +750,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
     try {
       await runAccountCheckpointPoll(
         client as never,
-        { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
         out,
         { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
       );
@@ -771,7 +771,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
     try {
       await runAccountCheckpointPoll(
         client as never,
-        { checkpoint: "acc_pending_1", json: true, wait: true, timeout: "not-a-number" } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true, wait: true, timeout: "not-a-number" } as AccountFlags,
         out,
       );
       expect.fail("should have exited");
@@ -796,7 +796,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
       out,
       { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
     );
@@ -831,7 +831,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", wait: true } as AccountFlags, // no json:true — human/TTY path
+      { "account-id": "acc_pending_1", wait: true } as AccountFlags, // no json:true — human/TTY path
       out,
       { isOutputTTY: true, sleep: clock.sleep, now: clock.now },
     );
@@ -851,7 +851,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
       out,
       { isOutputTTY: true, sleep: clock.sleep, now: clock.now }, // TTY true, but --json forces silence
     );
@@ -872,7 +872,7 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
     try {
       await runAccountCheckpointPoll(
         client as never,
-        { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
         out,
         { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
       );
@@ -899,61 +899,61 @@ describe("account checkpoint poll --wait — adaptive-cadence loop", () => {
 
     await runAccountCheckpointPoll(
       client as never,
-      { checkpoint: "acc_pending_1", json: true, wait: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true, wait: true } as AccountFlags,
       out,
       { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
     );
 
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("checkpoint resend --checkpoint acc_pending_1");
-    expect(stderrText.match(/checkpoint resend/g)?.length).toBe(1);
+    expect(stderrText).toContain("checkpoint request acc_pending_1");
+    expect(stderrText.match(/checkpoint request/g)?.length).toBe(1);
   });
 });
 
 // ---------------------------------------------------------------------------
-// checkpoint resend — one-shot, body-addressed, honest resent boolean
+// checkpoint request — one-shot, path-addressed, honest resent boolean
 // ---------------------------------------------------------------------------
 
-describe("account checkpoint resend", () => {
+describe("account checkpoint request", () => {
   let client: Client;
   beforeEach(() => {
     client = makeClient();
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("happy path (resent:true): calls resendCheckpoint with the body-addressed account_id, prints the result, no exit call", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+  it("happy path (resent:true): calls requestCheckpoint with the path account_id, prints the result, no exit call", async () => {
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.resendCheckpoint as Mock).mockResolvedValue({
+    (client.accounts.requestCheckpoint as Mock).mockResolvedValue({
       object: "checkpoint",
       account_id: "acc_pending_1",
       resent: true,
     });
 
-    await runAccountCheckpointResend(
+    await runAccountCheckpointRequest(
       client as never,
-      { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true } as AccountFlags,
       out,
     );
 
-    expect(client.accounts.resendCheckpoint).toHaveBeenCalledTimes(1);
-    expect(client.accounts.resendCheckpoint).toHaveBeenCalledWith({ account_id: "acc_pending_1" });
+    expect(client.accounts.requestCheckpoint).toHaveBeenCalledTimes(1);
+    expect(client.accounts.requestCheckpoint).toHaveBeenCalledWith("acc_pending_1");
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(JSON.parse(written)).toMatchObject({ resent: true });
   });
 
   it("honest false leg (resent:false): still a 200, still exits 0 (no exit call) — NOT rendered as an error", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.resendCheckpoint as Mock).mockResolvedValue({
+    (client.accounts.requestCheckpoint as Mock).mockResolvedValue({
       object: "checkpoint",
       account_id: "acc_pending_1",
       resent: false,
     });
 
-    await runAccountCheckpointResend(
+    await runAccountCheckpointRequest(
       client as never,
-      { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true } as AccountFlags,
       out,
     );
 
@@ -986,48 +986,49 @@ describe("account checkpoint resend", () => {
     expect(written).not.toContain("resent: true");
   });
 
-  it("--checkpoint is required: missing it exits 2 before any resendCheckpoint call", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+  it("account_id is required: missing it exits 2 before any requestCheckpoint call", async () => {
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
     const exitSpy = makeExitSpy();
     try {
-      await runAccountCheckpointResend(client as never, { json: true } as AccountFlags, out);
+      await runAccountCheckpointRequest(client as never, { json: true } as AccountFlags, out);
       expect.fail("should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.resendCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.requestCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("--preview renders the request without calling resendCheckpoint", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+  it("--preview renders the request without calling requestCheckpoint", async () => {
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
 
-    await runAccountCheckpointResend(
+    await runAccountCheckpointRequest(
       client as never,
-      { checkpoint: "acc_pending_1", json: true, preview: true } as AccountFlags,
+      { "account-id": "acc_pending_1", json: true, preview: true } as AccountFlags,
       out,
     );
 
-    expect(client.accounts.resendCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.requestCheckpoint).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.resendCheckpoint");
-    expect(parsed.body).toMatchObject({ account_id: "acc_pending_1" });
+    expect(parsed.method).toBe("accounts.requestCheckpoint");
+    // account_id is a path/positional arg now, not a body field.
+    expect(parsed.args).toMatchObject({ accountId: "acc_pending_1" });
   });
 
   it("404 CHECKPOINT_NOT_FOUND (no pending checkpoint for this account) exits 9", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.resendCheckpoint as Mock).mockRejectedValue(notFoundError());
+    (client.accounts.requestCheckpoint as Mock).mockRejectedValue(notFoundError());
 
     const exitSpy = makeExitSpy();
     try {
-      await runAccountCheckpointResend(
+      await runAccountCheckpointRequest(
         client as never,
-        { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true } as AccountFlags,
         out,
       );
       expect.fail("should have exited");
@@ -1039,15 +1040,15 @@ describe("account checkpoint resend", () => {
   });
 
   it("409 CHECKPOINT_EXPIRED exits 9", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.resendCheckpoint as Mock).mockRejectedValue(expiredError());
+    (client.accounts.requestCheckpoint as Mock).mockRejectedValue(expiredError());
 
     const exitSpy = makeExitSpy();
     try {
-      await runAccountCheckpointResend(
+      await runAccountCheckpointRequest(
         client as never,
-        { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true } as AccountFlags,
         out,
       );
       expect.fail("should have exited");
@@ -1059,15 +1060,15 @@ describe("account checkpoint resend", () => {
   });
 
   it("501 PLATFORM_NOT_IMPLEMENTED exits 1 (not 9, not a checkpoint-flow failure)", async () => {
-    const { runAccountCheckpointResend } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointRequest } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.resendCheckpoint as Mock).mockRejectedValue(notImplementedError());
+    (client.accounts.requestCheckpoint as Mock).mockRejectedValue(notImplementedError());
 
     const exitSpy = makeExitSpy();
     try {
-      await runAccountCheckpointResend(
+      await runAccountCheckpointRequest(
         client as never,
-        { checkpoint: "acc_pending_1", json: true } as AccountFlags,
+        { "account-id": "acc_pending_1", json: true } as AccountFlags,
         out,
       );
       expect.fail("should have exited");
@@ -1080,17 +1081,17 @@ describe("account checkpoint resend", () => {
 });
 
 // ---------------------------------------------------------------------------
-// checkpoint command registration — resend is the third subcommand
+// checkpoint command registration — solve, poll, request
 // ---------------------------------------------------------------------------
 
 describe("account checkpoint — subcommand registration", () => {
-  it("registers submit, poll, and resend", async () => {
+  it("registers solve, poll, and request", async () => {
     const { accountCommand } = await import("../../src/commands/account.js");
     const checkpoint = (
       accountCommand as unknown as {
         subCommands: { checkpoint: { subCommands: Record<string, unknown> } };
       }
     ).subCommands.checkpoint;
-    expect(Object.keys(checkpoint.subCommands).sort()).toEqual(["poll", "resend", "submit"]);
+    expect(Object.keys(checkpoint.subCommands).sort()).toEqual(["poll", "request", "solve"]);
   });
 });

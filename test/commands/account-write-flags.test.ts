@@ -2,8 +2,8 @@
  * `account` single-resource write/checkpoint command flag suppression, and
  * the checkpoint-hint note in `link`/`reconnect` help.
  *
- * `link`, `connect-link`, `reconnect`, `refresh`, `update`, `disconnect`, and
- * `checkpoint submit`/`checkpoint poll` are all single-resource mutations —
+ * `link`, `connect-link`, `reconnect-link`, `reconnect`, `update`, `disconnect`, and
+ * `checkpoint solve`/`checkpoint poll` are all single-resource mutations —
  * pagination flags (`--limit`, `--cursor`, `--all`, `--max-pages`) have no
  * meaning on a one-row response, but `--fields` is still useful to project
  * it. They use the single-object write flag set (pagination suppressed,
@@ -35,7 +35,7 @@ async function loadAccountSubCommands(): Promise<SubCommandMap> {
   return (accountCommand as unknown as { subCommands: SubCommandMap }).subCommands;
 }
 
-const SINGLE_WRITE_COMMANDS = ["link", "connect-link", "reconnect", "refresh", "update", "disconnect"] as const;
+const SINGLE_WRITE_COMMANDS = ["link", "connect-link", "reconnect-link", "reconnect", "update", "disconnect"] as const;
 
 describe("account single-resource write commands — pagination flags suppressed, --fields kept", () => {
   for (const name of SINGLE_WRITE_COMMANDS) {
@@ -51,58 +51,38 @@ describe("account single-resource write commands — pagination flags suppressed
   }
 });
 
-describe("account checkpoint submit/poll — pagination flags suppressed, --fields kept", () => {
-  it("account checkpoint submit — args definition has no pagination-only flags, keeps --fields", async () => {
-    const subCmds = await loadAccountSubCommands();
-    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const args = checkpointSub["submit"]?.args ?? {};
+describe("account checkpoint solve/poll/request — pagination flags suppressed, --fields kept", () => {
+  for (const name of ["solve", "poll", "request"] as const) {
+    it(`account checkpoint ${name} — args definition has no pagination-only flags, keeps --fields`, async () => {
+      const subCmds = await loadAccountSubCommands();
+      const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
+      const args = checkpointSub[name]?.args ?? {};
 
-    for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `account checkpoint submit args must NOT include --${flag}`).not.toHaveProperty(flag);
-    }
-    expect(args, "account checkpoint submit must keep --fields").toHaveProperty("fields");
-  });
-
-  it("account checkpoint poll — args definition has no pagination-only flags, keeps --fields", async () => {
-    const subCmds = await loadAccountSubCommands();
-    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const args = checkpointSub["poll"]?.args ?? {};
-
-    for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `account checkpoint poll args must NOT include --${flag}`).not.toHaveProperty(flag);
-    }
-    expect(args, "account checkpoint poll must keep --fields").toHaveProperty("fields");
-  });
-
-  it("account checkpoint resend — args definition has no pagination-only flags, keeps --fields", async () => {
-    const subCmds = await loadAccountSubCommands();
-    const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const args = checkpointSub["resend"]?.args ?? {};
-
-    for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `account checkpoint resend args must NOT include --${flag}`).not.toHaveProperty(flag);
-    }
-    expect(args, "account checkpoint resend must keep --fields").toHaveProperty("fields");
-  });
+      for (const flag of PAGINATION_ONLY_FLAGS) {
+        expect(args, `account checkpoint ${name} args must NOT include --${flag}`).not.toHaveProperty(flag);
+      }
+      expect(args, `account checkpoint ${name} must keep --fields`).toHaveProperty("fields");
+    });
+  }
 });
 
-describe("account checkpoint resend — flag shape (no --code, requires --checkpoint)", () => {
-  it("has --checkpoint (required) and no --code — resend has nothing to submit", async () => {
+describe("account checkpoint request — flag shape (no --code, account_id positional)", () => {
+  it("has the account-id positional and no --code — a re-request has nothing to submit", async () => {
     const subCmds = await loadAccountSubCommands();
     const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const args = (checkpointSub["resend"]?.args ?? {}) as Record<string, { required?: boolean }>;
+    const args = (checkpointSub["request"]?.args ?? {}) as Record<string, { type?: string }>;
 
-    expect(args, "account checkpoint resend must have --checkpoint").toHaveProperty("checkpoint");
-    expect(args["checkpoint"]?.required).toBe(true);
-    expect(args, "account checkpoint resend must NOT have --code").not.toHaveProperty("code");
+    expect(args, "account checkpoint request must have the account-id positional").toHaveProperty("account-id");
+    expect(args["account-id"]?.type).toBe("positional");
+    expect(args, "account checkpoint request must NOT have --code").not.toHaveProperty("code");
   });
 
   it("description is honest about per-challenge-type availability (no universal-resend overclaim, no vendor name)", async () => {
     const subCmds = await loadAccountSubCommands();
     const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const description = checkpointSub["resend"]?.meta?.description ?? "";
+    const description = checkpointSub["request"]?.meta?.description ?? "";
 
-    expect(description, "resend description should mention not every challenge type is resendable").toMatch(
+    expect(description, "request description should mention not every challenge type is resendable").toMatch(
       /not every|nothing to re-?send|does not support/i,
     );
     // Substrate vendor name assembled from fragments so the literal never
@@ -130,8 +110,8 @@ describe("account link / reconnect — checkpoint-required hint in description",
     const description = subCmds["link"]?.meta?.description ?? "";
 
     expect(description, "account link description should mention exit code 12").toMatch(/exits? 12/i);
-    expect(description, "account link description should point at `account checkpoint submit`").toMatch(
-      /checkpoint submit/,
+    expect(description, "account link description should point at `account checkpoint solve`").toMatch(
+      /checkpoint solve/,
     );
   });
 
@@ -140,24 +120,24 @@ describe("account link / reconnect — checkpoint-required hint in description",
     const description = subCmds["reconnect"]?.meta?.description ?? "";
 
     expect(description, "account reconnect description should mention exit code 12").toMatch(/exits? 12/i);
-    expect(description, "account reconnect description should point at `account checkpoint submit`").toMatch(
-      /checkpoint submit/,
+    expect(description, "account reconnect description should point at `account checkpoint solve`").toMatch(
+      /checkpoint solve/,
     );
   });
 
-  it("account refresh description is unaffected (no checkpoint hint on a non-checkpoint command)", async () => {
+  it("account disconnect description is unaffected (no checkpoint hint on a non-checkpoint command)", async () => {
     const subCmds = await loadAccountSubCommands();
-    const description = subCmds["refresh"]?.meta?.description ?? "";
+    const description = subCmds["disconnect"]?.meta?.description ?? "";
 
     expect(description).not.toMatch(/exits? 12/i);
   });
 });
 
-describe("account checkpoint submit — --code description", () => {
+describe("account checkpoint solve — --code description", () => {
   it("does not mention the deferred switch-challenge-type escape hatch", async () => {
     const subCmds = await loadAccountSubCommands();
     const checkpointSub = subCmds["checkpoint"]?.subCommands ?? {};
-    const args = (checkpointSub["submit"]?.args ?? {}) as Record<string, { description?: string }>;
+    const args = (checkpointSub["solve"]?.args ?? {}) as Record<string, { description?: string }>;
 
     expect(String(args["code"]?.description ?? "")).not.toMatch(/TRY_ANOTHER_WAY/);
   });

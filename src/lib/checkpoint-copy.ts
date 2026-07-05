@@ -69,6 +69,6 @@ export function printResendHintIfApplicable(
 ): void {
   if (!RESENDABLE_CHALLENGE_TYPES.has(type)) return;
   out.stderr.write(
-    `No code/notification? Re-send it: curviate account checkpoint resend --checkpoint ${accountId}\n`,
+    `No code/notification? Re-send it: curviate account checkpoint request ${accountId}\n`,
   );
 }

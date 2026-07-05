@@ -2,16 +2,16 @@
  * Tests for the `account` command group (root-scoped).
  *
  * Covers:
- *   account list         — accounts.list() + --all pagination
- *   account get          — accounts.get()
- *   account link         — accounts.link() body-flag + required flags + --preview
- *   account connect-link — accounts.createConnectLink() + --preview
- *   account reconnect    — accounts.reconnect() body-flag + required flags + --preview
- *   account refresh      — accounts.refresh() + --preview
- *   account update       — accounts.update() + --preview
- *   account disconnect   — accounts.disconnect() + --preview
- *   account checkpoint submit — accounts.submitCheckpoint() body-addressed + --preview
- *   account checkpoint poll   — accounts.pollCheckpoint() body-addressed + --preview
+ *   account list           — accounts.list() + --all pagination
+ *   account get            — accounts.get()
+ *   account link           — accounts.link() body-flag + required flags + --preview
+ *   account connect-link   — accounts.createConnectLink() (create-only) + --preview
+ *   account reconnect      — accounts.reconnect() body-flag + required flags + --preview
+ *   account reconnect-link — accounts.createReconnectLink() (path-addressed) + --preview
+ *   account update         — accounts.update() (metadata/proxy) + --preview
+ *   account disconnect     — accounts.disconnect() + --preview
+ *   account checkpoint solve — accounts.solveCheckpoint() path-addressed + --preview
+ *   account checkpoint poll  — accounts.pollCheckpoint() path-addressed + --preview
  *
  * All methods are root-scoped: the client exposes `client.accounts.*` directly
  * (no `client.account(id)` wrapper for these). account_id positionals pass
@@ -33,10 +33,10 @@ function makeClient() {
       link: vi.fn(),
       createConnectLink: vi.fn(),
       reconnect: vi.fn(),
-      refresh: vi.fn(),
+      createReconnectLink: vi.fn(),
       update: vi.fn(),
       disconnect: vi.fn(),
-      submitCheckpoint: vi.fn(),
+      solveCheckpoint: vi.fn(),
       pollCheckpoint: vi.fn(),
     },
   };
@@ -468,13 +468,14 @@ describe("account link", () => {
     );
   });
 
-  it("calls accounts.link with cookie method", async () => {
+  it("calls accounts.link with cookie method (user_agent required for cookie auth)", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const out = makeOut();
     await runAccountLink(client as never, {
       "seat-id": "seat_1",
       "auth-method": "cookie",
       "li-at": "li_at_value",
+      "user-agent": "Mozilla/5.0",
       json: true,
     } as AccountFlags, out);
 
@@ -482,9 +483,31 @@ describe("account link", () => {
       expect.objectContaining({
         seat_id: "seat_1",
         auth_method: "cookie",
+        user_agent: "Mozilla/5.0",
         cookie: expect.objectContaining({ li_at: "li_at_value" }),
       }),
     );
+  });
+
+  it("cookie auth without --user-agent exits 2 before calling accounts.link", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runAccountLink(client as never, {
+        "seat-id": "seat_1",
+        "auth-method": "cookie",
+        "li-at": "li_at_value",
+      } as AccountFlags, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(client.accounts.link).not.toHaveBeenCalled();
   });
 
   it("missing --seat-id exits 2", async () => {
@@ -528,6 +551,7 @@ describe("account link", () => {
       "seat-id": "seat_1",
       "auth-method": "cookie",
       "li-at": "li_at_value",
+      "user-agent": "Mozilla/5.0",
       preview: true,
     } as AccountFlags, out);
 
@@ -557,13 +581,11 @@ describe("account connect-link", () => {
     const out = makeOut();
     await runAccountConnectLink(client as never, {
       "seat-id": "seat_1",
-      purpose: "create",
       json: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.createConnectLink).toHaveBeenCalledWith(
-      expect.objectContaining({ seat_id: "seat_1", purpose: "create" }),
-    );
+    // Create-only: the body carries seat_id but no purpose/account_id fields.
+    expect(client.accounts.createConnectLink).toHaveBeenCalledWith({ seat_id: "seat_1" });
   });
 
   it("--preview renders request without calling createConnectLink", async () => {
@@ -602,6 +624,7 @@ describe("account reconnect", () => {
       "account-id": "acc_1",
       "auth-method": "cookie",
       "li-at": "li_at_value",
+      "user-agent": "Mozilla/5.0",
       json: true,
     } as AccountFlags, out);
 
@@ -635,6 +658,7 @@ describe("account reconnect", () => {
       "account-id": "acc_1",
       "auth-method": "cookie",
       "li-at": "val",
+      "user-agent": "Mozilla/5.0",
       preview: true,
     } as AccountFlags, out);
 
@@ -647,39 +671,57 @@ describe("account reconnect", () => {
 });
 
 // ---------------------------------------------------------------------------
-// account refresh
+// account reconnect-link (hosted re-auth; account_id is a path positional)
 // ---------------------------------------------------------------------------
 
-describe("account refresh", () => {
+describe("account reconnect-link", () => {
   let client: Client;
 
   beforeEach(() => {
     client = makeClient();
-    (client.accounts.refresh as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
+    (client.accounts.createReconnectLink as Mock).mockResolvedValue({
+      object: "hosted_auth_url",
+      url: "https://curviate.com/api/connect/re",
+      session_id: "cs_re",
+      expires_at: "2099-01-01T00:00:00.000Z",
+      account_id: "acc_1",
+    });
   });
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("calls accounts.refresh with verbatim account_id", async () => {
-    const { runAccountRefresh } = await import("../../src/commands/account.js");
+  it("non-interactive: calls createReconnectLink with the path account_id + body, prints url + session_id, exits 0", async () => {
+    const { runAccountReconnectLink } = await import("../../src/commands/account.js");
     const out = makeOut();
-    await runAccountRefresh(client as never, { "account-id": "acc_1", json: true } as AccountFlags, out);
-    expect(client.accounts.refresh).toHaveBeenCalledWith("acc_1");
+    await runAccountReconnectLink(
+      client as never,
+      { "account-id": "acc_1", "expires-in-seconds": "600", json: true } as AccountFlags,
+      out,
+      { isTTY: false, isOutputTTY: true },
+    );
+    expect(client.accounts.createReconnectLink).toHaveBeenCalledWith("acc_1", { expires_in_seconds: 600 });
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("cs_re");
   });
 
-  it("--preview renders request without calling refresh", async () => {
-    const { runAccountRefresh } = await import("../../src/commands/account.js");
+  it("--preview renders request without calling createReconnectLink", async () => {
+    const { runAccountReconnectLink } = await import("../../src/commands/account.js");
     const out = makeOut();
-    await runAccountRefresh(client as never, { "account-id": "acc_1", preview: true } as AccountFlags, out);
-    expect(client.accounts.refresh).not.toHaveBeenCalled();
+    await runAccountReconnectLink(
+      client as never,
+      { "account-id": "acc_1", preview: true } as AccountFlags,
+      out,
+    );
+    expect(client.accounts.createReconnectLink).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.refresh");
+    expect(parsed.method).toBe("accounts.createReconnectLink");
+    expect(parsed.args).toHaveProperty("accountId", "acc_1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// account update
+// account update (reshaped: metadata / proxy / --clear-proxy; no country/ip)
 // ---------------------------------------------------------------------------
 
 describe("account update", () => {
@@ -692,19 +734,52 @@ describe("account update", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("calls accounts.update with account_id and body", async () => {
+  it("forwards a --metadata JSON object as the metadata body field", async () => {
     const { runAccountUpdate } = await import("../../src/commands/account.js");
     const out = makeOut();
     await runAccountUpdate(client as never, {
       "account-id": "acc_1",
-      country: "DE",
+      metadata: '{"team":"growth"}',
       json: true,
     } as AccountFlags, out);
 
     expect(client.accounts.update).toHaveBeenCalledWith(
       "acc_1",
-      expect.objectContaining({ country: "DE" }),
+      { metadata: { team: "growth" } },
     );
+  });
+
+  it("--clear-proxy sends proxy:null", async () => {
+    const { runAccountUpdate } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountUpdate(client as never, {
+      "account-id": "acc_1",
+      "clear-proxy": true,
+      json: true,
+    } as AccountFlags, out);
+
+    expect(client.accounts.update).toHaveBeenCalledWith("acc_1", { proxy: null });
+  });
+
+  it("rejects a non-object --metadata with exit 2 before calling update", async () => {
+    const { runAccountUpdate } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runAccountUpdate(client as never, {
+        "account-id": "acc_1",
+        metadata: "not-json",
+        json: true,
+      } as AccountFlags, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(client.accounts.update).not.toHaveBeenCalled();
   });
 
   it("--preview renders request without calling update", async () => {
@@ -712,7 +787,7 @@ describe("account update", () => {
     const out = makeOut();
     await runAccountUpdate(client as never, {
       "account-id": "acc_1",
-      country: "US",
+      metadata: '{"team":"ops"}',
       preview: true,
     } as AccountFlags, out);
 
@@ -757,90 +832,87 @@ describe("account disconnect", () => {
 });
 
 // ---------------------------------------------------------------------------
-// account checkpoint submit (body-addressed — no path positional for checkpoint id)
+// account checkpoint solve (path-addressed — account_id positional, body {code})
 // ---------------------------------------------------------------------------
 
-describe("account checkpoint submit", () => {
+describe("account checkpoint solve", () => {
   let client: Client;
 
   beforeEach(() => {
     client = makeClient();
-    (client.accounts.submitCheckpoint as Mock).mockResolvedValue({ object: "account", status: "active" });
+    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({ object: "account", status: "active" });
   });
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("checkpoint id goes into the body (body-addressed), not a path arg", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+  it("account_id is the path arg (positional); the body carries only the code", async () => {
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
-    await runAccountCheckpointSubmit(client as never, {
-      checkpoint: "acc_pending_1",
+    await runAccountCheckpointSolve(client as never, {
+      "account-id": "acc_pending_1",
       code: "123456",
       json: true,
     } as AccountFlags, out);
 
-    // The SDK method signature is submitCheckpoint(body) — body carries account_id + code
-    expect(client.accounts.submitCheckpoint).toHaveBeenCalledWith({
-      account_id: "acc_pending_1",
-      code: "123456",
-    });
+    // The SDK signature is solveCheckpoint(accountId, { code }).
+    expect(client.accounts.solveCheckpoint).toHaveBeenCalledWith("acc_pending_1", { code: "123456" });
   });
 
-  it("missing --checkpoint exits 2", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+  it("missing account_id exits 2", async () => {
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
       throw new Error(`process.exit(${code})`);
     });
     try {
-      await runAccountCheckpointSubmit(client as never, { code: "123456" } as AccountFlags, out);
+      await runAccountCheckpointSolve(client as never, { code: "123456" } as AccountFlags, out);
       expect.fail("should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.submitCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("missing --code exits 2", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
       throw new Error(`process.exit(${code})`);
     });
     try {
-      await runAccountCheckpointSubmit(client as never, { checkpoint: "acc_1" } as AccountFlags, out);
+      await runAccountCheckpointSolve(client as never, { "account-id": "acc_1" } as AccountFlags, out);
       expect.fail("should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.submitCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
   });
 
-  it("--preview renders without calling submitCheckpoint", async () => {
-    const { runAccountCheckpointSubmit } = await import("../../src/commands/account.js");
+  it("--preview renders without calling solveCheckpoint", async () => {
+    const { runAccountCheckpointSolve } = await import("../../src/commands/account.js");
     const out = makeOut();
-    await runAccountCheckpointSubmit(client as never, {
-      checkpoint: "acc_pending_1",
+    await runAccountCheckpointSolve(client as never, {
+      "account-id": "acc_pending_1",
       code: "654321",
       preview: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.submitCheckpoint).not.toHaveBeenCalled();
+    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.submitCheckpoint");
-    // Body should show checkpoint id and code
-    expect(parsed.body).toHaveProperty("account_id", "acc_pending_1");
+    expect(parsed.method).toBe("accounts.solveCheckpoint");
+    // account_id is a path/positional arg; the body carries the code.
+    expect(parsed.args).toHaveProperty("accountId", "acc_pending_1");
     expect(parsed.body).toHaveProperty("code", "654321");
   });
 });
 
 // ---------------------------------------------------------------------------
-// account checkpoint poll (body-addressed)
+// account checkpoint poll (path-addressed — account_id positional, no body)
 // ---------------------------------------------------------------------------
 
 describe("account checkpoint poll", () => {
@@ -853,20 +925,18 @@ describe("account checkpoint poll", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("checkpoint id goes into the body (body-addressed)", async () => {
+  it("account_id is the path arg (positional), passed as a string", async () => {
     const { runAccountCheckpointPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     await runAccountCheckpointPoll(client as never, {
-      checkpoint: "acc_pending_1",
+      "account-id": "acc_pending_1",
       json: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith({
-      account_id: "acc_pending_1",
-    });
+    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith("acc_pending_1");
   });
 
-  it("missing --checkpoint exits 2", async () => {
+  it("missing account_id exits 2", async () => {
     const { runAccountCheckpointPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
@@ -887,7 +957,7 @@ describe("account checkpoint poll", () => {
     const { runAccountCheckpointPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     await runAccountCheckpointPoll(client as never, {
-      checkpoint: "acc_pending_1",
+      "account-id": "acc_pending_1",
       preview: true,
     } as AccountFlags, out);
 
@@ -895,6 +965,6 @@ describe("account checkpoint poll", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("accounts.pollCheckpoint");
-    expect(parsed.body).toHaveProperty("account_id", "acc_pending_1");
+    expect(parsed.args).toHaveProperty("accountId", "acc_pending_1");
   });
 });
