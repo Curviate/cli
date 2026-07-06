@@ -16,6 +16,11 @@ match the new account-in-path grammar.
 
 - **`account reconnect-link <account_id>`** — mint a one-time hosted **re-authorization** link for an existing disconnected account (the hosted counterpart of `account reconnect`). Same open+wait UX as `account connect-link`: on an interactive TTY the URL auto-opens and the command waits for the account to reconnect (exit `0` resolved, `9` expired/failed, `12` on a wait-window timeout); non-interactively it prints the url + session_id and returns immediately. Optional `--expires-in-seconds` / `--redirect-url`.
 - **`account update --metadata '<json>'`** — set the account's custom metadata (a flat JSON object that replaces the store wholesale). **`account update --clear-proxy`** — clear the custom proxy (revert to automatic proxy protection).
+- **New connect/checkpoint response fields ride through `--json` output** (coupled with the SDK 0.13.0 connect-fix regen — the CLI duck-types the response, so the fields pass through verbatim with no code change):
+  - `recovered` (boolean) on `account link` and `account checkpoint solve` completions — `true` when the connect reclaimed a LinkedIn identity already present on the workspace rather than connecting a brand-new one.
+  - the completed-account `status` is widened to `active | reconnect_needed | restricted | disconnected` (a recovered identity often reports needing a reconnect); the CLI reads `status` as a free-form string, so the wider set is unaffected.
+  - `challenge_type` (`mobile_app_approval`) + `recovery_hint` on an `account checkpoint poll` that returns `status: "expired"` (a mobile-approval timeout).
+  Surfacing `recovered` in the human-readable (non-`--json`) success line is a deferred UX follow-up — it would need consistent treatment across the direct-link, interactive-solve, and standalone-solve completion paths.
 
 ### Changed (BREAKING)
 
