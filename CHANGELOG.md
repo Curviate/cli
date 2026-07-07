@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.14.0] - 2026-07-07
+
+Webhooks surface cascade — the coupled release with `@curviate/sdk` 0.14.0. Additive minor.
+
+### Added
+
+- **`webhook get <id>`** — get a single webhook owned by the calling tenant (`webhooks.get`). Read command; `--preview` is a usage error (nothing to mutate), matching `webhook state-diff`.
+
+### Changed
+
+- **`@curviate/sdk` bumped to `^0.14.0`.** The SDK's webhook event catalogue expanded 21 → 27 (`chat.updated`, `chat.deleted`, `connection.new`, `account.initial_sync.*`, and account-lifecycle renames) and its `CurviateEvent` union re-keyed to match — this CLI never imports `CurviateEvent` directly, so `webhook verify`'s offline HMAC verification is unaffected; only the dependency range changed.
+
 ## [0.13.0] - 2026-07-05
 
 Accounts/Auth surface migration — the coupled release with `@curviate/sdk` 0.13.0. This is a

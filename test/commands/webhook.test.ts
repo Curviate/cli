@@ -25,6 +25,7 @@ function makeClient() {
       create: vi.fn(),
       list: vi.fn(),
       listEvents: vi.fn(),
+      get: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
       getStateDiff: vi.fn(),
@@ -298,6 +299,45 @@ describe("webhook events", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// webhook get
+// ---------------------------------------------------------------------------
+
+describe("webhook get", () => {
+  let client: Client;
+
+  beforeEach(() => {
+    client = makeClient();
+    (client.webhooks.get as Mock).mockResolvedValue({ object: "webhook", id: "wh_1" });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("calls webhooks.get with verbatim id", async () => {
+    const { runWebhookGet } = await import("../../src/commands/webhook.js");
+    const out = makeOut();
+    await runWebhookGet(client as never, { id: "wh_1", json: true } as WebhookFlags, out);
+    expect(client.webhooks.get).toHaveBeenCalledWith("wh_1");
+  });
+
+  it("--preview on a read exits 2", async () => {
+    const { runWebhookGet } = await import("../../src/commands/webhook.js");
+    const out = makeOut();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runWebhookGet(client as never, { id: "wh_1", preview: true } as WebhookFlags, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(client.webhooks.get).not.toHaveBeenCalled();
   });
 });
 

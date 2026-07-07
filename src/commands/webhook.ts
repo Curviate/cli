@@ -5,6 +5,7 @@
  *   webhook create <body…>             — register a webhook (write)
  *   webhook list                       — list webhooks
  *   webhook events                     — list the canonical event catalogue
+ *   webhook get <id>                   — get a single webhook (read)
  *   webhook update <id> <body…>        — update a webhook (write; --source is usage error)
  *   webhook delete <id>                — delete a webhook (write)
  *   webhook state-diff <account_id>    — get changes since last state (read)
@@ -69,6 +70,7 @@ type MinimalClient = {
     create: (body: Record<string, unknown>) => Promise<unknown>;
     list: (params?: Record<string, unknown>) => Promise<unknown>;
     listEvents: () => Promise<unknown>;
+    get: (id: string) => Promise<unknown>;
     update: (id: string, body: Record<string, unknown>) => Promise<unknown>;
     delete: (id: string) => Promise<unknown>;
     getStateDiff: (accountId: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -233,6 +235,27 @@ export async function runWebhookEvents(
 
   try {
     const result = await client.webhooks.listEvents();
+    renderSuccess(result, outOpts, out);
+  } catch (err) {
+    await handleError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `webhook get <id>`. Read command; no --preview (nothing to mutate).
+ */
+export async function runWebhookGet(
+  client: MinimalClient,
+  flags: WebhookFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const id = flags.id ?? "";
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await client.webhooks.get(id);
     renderSuccess(result, outOpts, out);
   } catch (err) {
     await handleError(err, outOpts, out);
@@ -476,6 +499,30 @@ const webhookEventsCommand = defineCommand({
   },
 });
 
+const webhookGetCommand = defineCommand({
+  meta: { name: "get", description: "Get a single webhook owned by the calling tenant." },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Webhook id (wh_…)." },
+  },
+  async run({ args }) {
+    const flags = args as WebhookFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runWebhookGet(client as unknown as MinimalClient, flags, out);
+  },
+});
+
 const webhookUpdateCommand = defineCommand({
   meta: { name: "update", description: "Update a webhook in place (source is immutable)." },
   args: {
@@ -605,6 +652,7 @@ export const webhookCommand = defineCommand({
     create: webhookCreateCommand,
     list: webhookListCommand,
     events: webhookEventsCommand,
+    get: webhookGetCommand,
     update: webhookUpdateCommand,
     delete: webhookDeleteCommand,
     "state-diff": webhookStateDiffCommand,
@@ -613,7 +661,7 @@ export const webhookCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate webhook <subcommand>\n" +
-      "  create | list | events | update | delete | state-diff | verify\n",
+      "  create | list | events | get | update | delete | state-diff | verify\n",
     );
   },
 });
