@@ -35,7 +35,7 @@ import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
-import { readAttachment, AttachError } from "../lib/attach.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import {
   assembleFilters,
   splitCsv,
@@ -43,7 +43,10 @@ import {
   DEFAULT_FILTER_READERS,
   type FilterReaders,
 } from "../lib/search-filters.js";
-import type { Curviate, CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError, paths } from "@curviate/sdk";
+
+/** `GET /v1/{account_id}/sales-navigator/search/parameters` query — `type` required, `keywords` optional. */
+type SNGetParametersQuery = paths["/v1/{account_id}/sales-navigator/search/parameters"]["get"]["parameters"]["query"];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +68,7 @@ type SalesNavFlags = {
   // Subcommand-specific
   to?: string;
   text?: string;
+  subject?: string;
   attach?: string | string[];
   voice?: string;
   video?: string;
@@ -318,14 +322,21 @@ export async function runSalesNavGetParameters(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
+  if (!flags.type) {
+    out.stderr.write("error: --type is required.\n");
+    process.exit(2);
+  }
+
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
-  const params: Record<string, unknown> = {};
-  if (flags.type) params["type"] = flags.type;
-  if (flags.keywords) params["keywords"] = flags.keywords;
-  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  // `type` is a free-form CLI string flag validated against the served enum
+  // server-side — a narrow cast here is the pragmatic alternative to
+  // hand-duplicating the enum union client-side (FR-001 body-typing rule).
+  const params: SNGetParametersQuery = { type: flags.type as SNGetParametersQuery["type"] };
+  if (flags.keywords) params.keywords = flags.keywords;
+  if (flags.limit) params.limit = parseInt(flags.limit, 10);
 
   try {
     const result = await ns.salesNavigator.getParameters(params);
@@ -336,8 +347,15 @@ export async function runSalesNavGetParameters(
 }
 
 /**
- * Run `sales-nav message new --to <id> "<text>" [--attach <f>…] [--voice <f>] [--video <f>]`.
- * Write command — supports --preview. Multipart when files present.
+ * Run `sales-nav message new --to <id> --subject <s> "<text>" [--attach <f>…] [--voice <f>] [--video <f>]`.
+ * Write command — supports --preview.
+ *
+ * v2: JSON-only (no multipart); `subject` is REQUIRED (unlike the classic
+ * messaging surface, where it's optional). There is no separate
+ * voice_message/video_message body field — every attachment (file, voice,
+ * or video) rides the single `attachments[]` array as a base64 object;
+ * voice/video use `send_mode: "native"` for a platform-native bubble
+ * (`metadata.duration` is not computed client-side and is left unset).
  */
 export async function runSalesNavMessageNew(
   client: Curviate,
@@ -347,9 +365,15 @@ export async function runSalesNavMessageNew(
   const accountId = requireAccount(flags.account, out);
   const to = flags.to ?? "";
   const text = flags.text ?? "";
+  const subject = flags.subject ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
   const voicePath = flags.voice;
   const videoPath = flags.video;
+
+  if (!subject) {
+    out.stderr.write("error: --subject is required (v2: REQUIRED for Sales Navigator messaging).\n");
+    process.exit(2);
+  }
 
   // Load all file attachments before preview or SDK call.
   let attachBuffers: Buffer[] = [];
@@ -368,16 +392,11 @@ export async function runSalesNavMessageNew(
     throw err;
   }
 
-  const body: Record<string, unknown> = {
-    attendees_ids: [to],
-    text,
-  };
-
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "salesNavigator.startChat",
       args: { attendees_ids: [to] },
-      body: { ...body },
+      body: { attendees_ids: [to], text, subject },
       account: accountId,
       attachments: [
         ...attachBuffers.map((buf, i) => ({
@@ -392,9 +411,18 @@ export async function runSalesNavMessageNew(
     return;
   }
 
-  if (attachBuffers.length > 0) body["attachments"] = attachBuffers;
-  if (voiceBuffer) body["voice_message"] = voiceBuffer;
-  if (videoBuffer) body["video_message"] = videoBuffer;
+  const attachments = [
+    ...attachPaths.map((p, i) => toAttachmentPayload(p, attachBuffers[i]!)),
+    ...(voiceBuffer && voicePath ? [{ ...toAttachmentPayload(voicePath, voiceBuffer), send_mode: "native" as const }] : []),
+    ...(videoBuffer && videoPath ? [{ ...toAttachmentPayload(videoPath, videoBuffer), send_mode: "native" as const }] : []),
+  ];
+
+  const body = {
+    attendees_ids: [to],
+    text,
+    subject,
+    ...(attachments.length > 0 ? { attachments } : {}),
+  };
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
@@ -723,6 +751,7 @@ const salesNavMessageNewCommand = defineCommand({
         "Recipient's LinkedIn provider ID (ACw… format, e.g. from a Sales Navigator search result or profile). Not resolved from a URL/slug — pass the provider ID directly.",
       required: true,
     },
+    subject: { type: "string", description: "Message subject line (required for Sales Navigator messaging).", required: true },
     text: { type: "positional", description: "Opening message text." },
     attach: { type: "string", description: "File to attach (repeatable, max 7 MiB each)." },
     voice: { type: "string", description: "Voice message file (max 7 MiB)." },

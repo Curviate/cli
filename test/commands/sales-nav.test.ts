@@ -6,7 +6,7 @@
  *   sales-nav search people [filters…]                                 → salesNavigator.searchPeople (POST)
  *   sales-nav search companies [filters…]                              → salesNavigator.searchCompanies (POST)
  *   sales-nav search parameters --type <t>                             → salesNavigator.getParameters (GET)
- *   sales-nav message new --to <id> "<text>" [--attach…] [--voice <f>] [--video <f>] → salesNavigator.startChat (multipart)
+ *   sales-nav message new --to <id> --subject <s> "<text>" [--attach…] [--voice <f>] [--video <f>] → salesNavigator.startChat (v2: JSON only, subject required)
  *   sales-nav profile <identifier>                                      → salesNavigator.getProfile (resolveIdentifier)
  *   sales-nav save-lead <user_id> [--list-id <id>]                     → salesNavigator.saveLead
  *
@@ -522,7 +522,7 @@ describe("sales-nav message new", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("calls salesNavigator.startChat with to and text", async () => {
+  it("calls salesNavigator.startChat with to, text, and subject (v2: required)", async () => {
     const { runSalesNavMessageNew } = await import("../../src/commands/sales-nav.js");
     const out = makeOut();
 
@@ -530,16 +530,39 @@ describe("sales-nav message new", () => {
       account: "acc_1",
       to: "ACo456",
       text: "hello sn",
+      subject: "Quick question",
       json: true,
     }, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(ns.salesNavigator.startChat).toHaveBeenCalledWith(
-      expect.objectContaining({ attendees_ids: ["ACo456"], text: "hello sn" }),
+      expect.objectContaining({ attendees_ids: ["ACo456"], text: "hello sn", subject: "Quick question" }),
     );
   });
 
-  it("--attach file passes Buffer in attachments", async () => {
+  it("missing --subject exits 2 before any SDK call (v2: required)", async () => {
+    const { runSalesNavMessageNew } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runSalesNavMessageNew(client as never, {
+        account: "acc_1",
+        to: "ACo456",
+        text: "hello sn",
+        json: true,
+      }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.salesNavigator.startChat).not.toHaveBeenCalled();
+  });
+
+  it("--attach file passes base64 payload in attachments (v2: no multipart)", async () => {
     const filePath = join(tmpDir, "attach.txt");
     await writeFile(filePath, "content");
 
@@ -550,17 +573,22 @@ describe("sales-nav message new", () => {
       account: "acc_1",
       to: "ACo456",
       text: "hello",
+      subject: "Subj",
       attach: filePath,
       json: true,
     }, out);
 
     const callArgs = (ns.salesNavigator.startChat as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    const attachments = callArgs["attachments"] as Buffer[];
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
     expect(Array.isArray(attachments)).toBe(true);
-    expect(attachments[0]).toBeInstanceOf(Buffer);
+    expect(attachments[0]).toEqual({
+      content: Buffer.from("content").toString("base64"),
+      content_type: "application/octet-stream",
+      filename: "attach.txt",
+    });
   });
 
-  it("--voice file passes Buffer as voice_message", async () => {
+  it("--voice file rides the shared attachments[] array with send_mode 'native' (v2: no voice_message field)", async () => {
     const voicePath = join(tmpDir, "voice.ogg");
     await writeFile(voicePath, "voicedata");
 
@@ -571,15 +599,22 @@ describe("sales-nav message new", () => {
       account: "acc_1",
       to: "ACo456",
       text: "hello",
+      subject: "Subj",
       voice: voicePath,
       json: true,
     }, out);
 
     const callArgs = (ns.salesNavigator.startChat as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    expect(callArgs["voice_message"]).toBeInstanceOf(Buffer);
+    expect(callArgs).not.toHaveProperty("voice_message");
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
+    expect(attachments[0]).toMatchObject({
+      content: Buffer.from("voicedata").toString("base64"),
+      filename: "voice.ogg",
+      send_mode: "native",
+    });
   });
 
-  it("--video file passes Buffer as video_message", async () => {
+  it("--video file rides the shared attachments[] array with send_mode 'native' (v2: no video_message field)", async () => {
     const videoPath = join(tmpDir, "video.mp4");
     await writeFile(videoPath, "videodata");
 
@@ -590,12 +625,19 @@ describe("sales-nav message new", () => {
       account: "acc_1",
       to: "ACo456",
       text: "hello",
+      subject: "Subj",
       video: videoPath,
       json: true,
     }, out);
 
     const callArgs = (ns.salesNavigator.startChat as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    expect(callArgs["video_message"]).toBeInstanceOf(Buffer);
+    expect(callArgs).not.toHaveProperty("video_message");
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
+    expect(attachments[0]).toMatchObject({
+      content: Buffer.from("videodata").toString("base64"),
+      filename: "video.mp4",
+      send_mode: "native",
+    });
   });
 
   it("--preview renders request, does not call startChat", async () => {
@@ -606,6 +648,7 @@ describe("sales-nav message new", () => {
       account: "acc_1",
       to: "ACo456",
       text: "hello",
+      subject: "Subj",
       preview: true,
     }, out);
 
@@ -625,6 +668,7 @@ describe("sales-nav message new", () => {
         account: "acc_1",
         to: "ACo456",
         text: "hello",
+        subject: "Subj",
         attach: join(tmpDir, "no-such-file.txt"),
       }, out);
       expect.fail("should have exited");
