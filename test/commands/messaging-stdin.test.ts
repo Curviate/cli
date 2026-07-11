@@ -18,8 +18,8 @@ import type { Mock } from "vitest";
 
 function makeMessageNs() {
   return {
-    profiles: {
-      get: vi.fn().mockResolvedValue({ provider_id: "ACoAAA123", public_identifier: "slug" }),
+    users: {
+      get: vi.fn().mockResolvedValue({ id: "ACoAAA123", public_identifier: "slug" }),
     },
     messaging: {
       startChat: vi.fn().mockResolvedValue({ object: "chat_started", chat_id: "c1", message_id: "m1" }),
@@ -264,12 +264,13 @@ describe("message edit with stdin sentinel", () => {
 
     await runMessageEdit(
       client as never,
-      { messageId: "msg_1", text: "-", account: "acc_1", json: true },
+      { chatId: "chat_1", messageId: "msg_1", text: "-", account: "acc_1", json: true },
       out,
       makeStdin("Edited text"),
     );
 
     expect(ns.messaging.editMessage).toHaveBeenCalledWith(
+      "chat_1",
       "msg_1",
       expect.objectContaining({ text: "Edited text" }),
     );
@@ -286,7 +287,7 @@ describe("message edit with stdin sentinel", () => {
     try {
       await runMessageEdit(
         client as never,
-        { messageId: "msg_1", text: "-", account: "acc_1", json: true },
+        { chatId: "chat_1", messageId: "msg_1", text: "-", account: "acc_1", json: true },
         out,
         makeEmptyStdin(),
       );
@@ -326,7 +327,7 @@ describe("message inmail with stdin sentinel", () => {
 
     await runMessageInMail(
       client as never,
-      { to: "ACoAAA123", subject: "Hi", text: "-", surface: "classic", account: "acc_1", json: true },
+      { to: "ACoAAA123", subject: "Hi", text: "-", account: "acc_1", json: true },
       out,
       makeStdin("InMail body"),
     );
@@ -347,7 +348,7 @@ describe("message inmail with stdin sentinel", () => {
     try {
       await runMessageInMail(
         client as never,
-        { to: "ACoAAA123", subject: "Hi", text: "-", surface: "classic", account: "acc_1", json: true },
+        { to: "ACoAAA123", subject: "Hi", text: "-", account: "acc_1", json: true },
         out,
         makeEmptyStdin(),
       );

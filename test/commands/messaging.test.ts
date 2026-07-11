@@ -2,8 +2,8 @@
  * Tests for messaging identifier resolution and chat-ID normalization.
  *
  * Covers:
- *   message new --to: LinkedIn URL/slug resolved via profiles.get; provider IDs pass through
- *   message inmail --to: URL/slug/provider-id/URN resolution; slug calls profiles.get
+ *   message new --to: LinkedIn URL/slug resolved via users.get; provider IDs pass through
+ *   message inmail --to: URL/slug/provider-id/URN resolution; slug calls users.get
  *   Chat ID normalization: LinkedIn messaging thread URLs stripped to bare provider ID
  *   on inbox get / inbox messages / inbox sync-chat / message send
  */
@@ -42,7 +42,7 @@ function makeInvalidRequestError() {
 
 function makeFullNs() {
   return {
-    profiles: {
+    users: {
       get: vi.fn(),
     },
     messaging: {
@@ -81,7 +81,6 @@ type MessageArgs = {
   to?: string;
   text?: string;
   subject?: string;
-  surface?: string;
   account?: string;
   json?: boolean;
   preview?: boolean;
@@ -97,7 +96,7 @@ type InboxArgs = {
 };
 
 // Stub profile response
-const PROFILE_STUB = { provider_id: "ACoAAA123", public_identifier: "raphael-redmer" };
+const PROFILE_STUB = { id: "ACoAAA123", public_identifier: "raphael-redmer" };
 // Stub startChat response
 const CHAT_STUB = { object: "chat_started", chat_id: "c1", message_id: "m1" };
 // Stub sendInMail response
@@ -118,7 +117,7 @@ describe("message new --to recipient resolution", () => {
   beforeEach(() => {
     ns = makeFullNs();
     client = makeClient(ns);
-    (ns.profiles.get as Mock).mockResolvedValue(PROFILE_STUB);
+    (ns.users.get as Mock).mockResolvedValue(PROFILE_STUB);
     (ns.messaging.startChat as Mock).mockResolvedValue(CHAT_STUB);
   });
 
@@ -126,7 +125,7 @@ describe("message new --to recipient resolution", () => {
     vi.restoreAllMocks();
   });
 
-  it("LinkedIn profile URL extracts slug, calls profiles.get, passes provider_id to startChat", async () => {
+  it("LinkedIn profile URL extracts slug, calls users.get, passes provider_id to startChat", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -137,14 +136,14 @@ describe("message new --to recipient resolution", () => {
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
+    expect(ns.users.get).toHaveBeenCalledTimes(1);
+    expect(ns.users.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
     expect(ns.messaging.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ attendees_ids: ["ACoAAA123"], text: "Hello" }),
     );
   });
 
-  it("bare slug calls profiles.get then startChat with provider_id", async () => {
+  it("bare slug calls users.get then startChat with provider_id", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -155,13 +154,13 @@ describe("message new --to recipient resolution", () => {
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
+    expect(ns.users.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
     expect(ns.messaging.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ attendees_ids: ["ACoAAA123"] }),
     );
   });
 
-  it("provider ID (uppercase prefix shape) bypasses profiles.get and goes directly to startChat", async () => {
+  it("provider ID (uppercase prefix shape) bypasses users.get and goes directly to startChat", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -172,7 +171,7 @@ describe("message new --to recipient resolution", () => {
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).not.toHaveBeenCalled();
+    expect(ns.users.get).not.toHaveBeenCalled();
     expect(ns.messaging.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ attendees_ids: ["ACoAAA123"] }),
     );
@@ -189,17 +188,17 @@ describe("message new --to recipient resolution", () => {
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
+    expect(ns.users.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
     expect(ns.messaging.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ attendees_ids: ["ACoAAA123"] }),
     );
   });
 
-  it("profiles.get not found exits 4 and startChat is never called", async () => {
+  it("users.get not found exits 4 and startChat is never called", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (ns.profiles.get as Mock).mockRejectedValue(makeNotFoundError());
+    (ns.users.get as Mock).mockRejectedValue(makeNotFoundError());
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(
       (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
@@ -221,7 +220,7 @@ describe("message new --to recipient resolution", () => {
     expect(ns.messaging.startChat).not.toHaveBeenCalled();
   });
 
-  it("URL and bare slug each make exactly one profiles.get call then one startChat call", async () => {
+  it("URL and bare slug each make exactly one users.get call then one startChat call", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -232,7 +231,7 @@ describe("message new --to recipient resolution", () => {
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledTimes(1);
+    expect(ns.users.get).toHaveBeenCalledTimes(1);
     expect(ns.messaging.startChat).toHaveBeenCalledTimes(1);
   });
 });
@@ -248,7 +247,7 @@ describe("message inmail --to resolution", () => {
   beforeEach(() => {
     ns = makeFullNs();
     client = makeClient(ns);
-    (ns.profiles.get as Mock).mockResolvedValue(PROFILE_STUB);
+    (ns.users.get as Mock).mockResolvedValue(PROFILE_STUB);
     (ns.messaging.sendInMail as Mock).mockResolvedValue(INMAIL_STUB);
   });
 
@@ -256,7 +255,7 @@ describe("message inmail --to resolution", () => {
     vi.restoreAllMocks();
   });
 
-  it("LinkedIn profile URL extracts slug, calls profiles.get, sendInMail receives provider_id as recipient_urn", async () => {
+  it("LinkedIn profile URL extracts slug, calls users.get, sendInMail receives provider_id as recipient_urn", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -264,19 +263,18 @@ describe("message inmail --to resolution", () => {
       to: "https://www.linkedin.com/in/raphael-redmer",
       subject: "Hi",
       text: "Body",
-      surface: "classic",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
+    expect(ns.users.get).toHaveBeenCalledTimes(1);
+    expect(ns.users.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({ recipient_urn: "ACoAAA123" }),
     );
   });
 
-  it("bare slug calls profiles.get, sendInMail receives resolved provider_id as recipient_urn", async () => {
+  it("bare slug calls users.get, sendInMail receives resolved provider_id as recipient_urn", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -284,18 +282,17 @@ describe("message inmail --to resolution", () => {
       to: "raphael-redmer",
       subject: "Hi",
       text: "Body",
-      surface: "classic",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
+    expect(ns.users.get).toHaveBeenCalledWith("raphael-redmer", expect.anything());
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({ recipient_urn: "ACoAAA123" }),
     );
   });
 
-  it("provider ID passes directly to sendInMail without calling profiles.get", async () => {
+  it("provider ID passes directly to sendInMail without calling users.get", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -303,18 +300,17 @@ describe("message inmail --to resolution", () => {
       to: "ACoAAA123",
       subject: "Hi",
       text: "Body",
-      surface: "classic",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).not.toHaveBeenCalled();
+    expect(ns.users.get).not.toHaveBeenCalled();
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({ recipient_urn: "ACoAAA123" }),
     );
   });
 
-  it("URN passes directly to sendInMail without calling profiles.get", async () => {
+  it("URN passes directly to sendInMail without calling users.get", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -322,22 +318,21 @@ describe("message inmail --to resolution", () => {
       to: "urn:li:member:12345",
       subject: "Hi",
       text: "Body",
-      surface: "classic",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).not.toHaveBeenCalled();
+    expect(ns.users.get).not.toHaveBeenCalled();
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({ recipient_urn: "urn:li:member:12345" }),
     );
   });
 
-  it("profiles.get not found exits 4 and sendInMail is never called", async () => {
+  it("users.get not found exits 4 and sendInMail is never called", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (ns.profiles.get as Mock).mockRejectedValue(makeNotFoundError());
+    (ns.users.get as Mock).mockRejectedValue(makeNotFoundError());
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(
       (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
@@ -347,7 +342,6 @@ describe("message inmail --to resolution", () => {
         to: "raphael-redmer",
         subject: "Hi",
         text: "Body",
-        surface: "classic",
         account: "acc_1",
         json: true,
       } as MessageArgs, out);
@@ -361,7 +355,7 @@ describe("message inmail --to resolution", () => {
     expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
-  it("empty --to exits 2 without calling profiles.get or sendInMail", async () => {
+  it("empty --to exits 2 without calling users.get or sendInMail", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -373,7 +367,6 @@ describe("message inmail --to resolution", () => {
         to: "",
         subject: "Hi",
         text: "Body",
-        surface: "classic",
         account: "acc_1",
       } as MessageArgs, out);
       expect.fail("should have exited");
@@ -383,15 +376,15 @@ describe("message inmail --to resolution", () => {
       exitSpy.mockRestore();
     }
 
-    expect(ns.profiles.get).not.toHaveBeenCalled();
+    expect(ns.users.get).not.toHaveBeenCalled();
     expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
-  it("profiles.get invalid request exits 2 and sendInMail is never called", async () => {
+  it("users.get invalid request exits 2 and sendInMail is never called", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (ns.profiles.get as Mock).mockRejectedValue(makeInvalidRequestError());
+    (ns.users.get as Mock).mockRejectedValue(makeInvalidRequestError());
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(
       (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
@@ -401,7 +394,6 @@ describe("message inmail --to resolution", () => {
         to: "not-valid-form",
         subject: "Hi",
         text: "Body",
-        surface: "classic",
         account: "acc_1",
         json: true,
       } as MessageArgs, out);
@@ -415,7 +407,7 @@ describe("message inmail --to resolution", () => {
     expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
-  it("slug and URL each make exactly two SDK calls: one profiles.get then one sendInMail", async () => {
+  it("slug and URL each make exactly two SDK calls: one users.get then one sendInMail", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -423,12 +415,11 @@ describe("message inmail --to resolution", () => {
       to: "raphael-redmer",
       subject: "Hi",
       text: "Body",
-      surface: "classic",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.profiles.get).toHaveBeenCalledTimes(1);
+    expect(ns.users.get).toHaveBeenCalledTimes(1);
     expect(ns.messaging.sendInMail).toHaveBeenCalledTimes(1);
   });
 });
@@ -617,7 +608,7 @@ describe("chat ID normalization on message send", () => {
 });
 
 describe("normalization makes zero network calls on all chat commands", () => {
-  it("inbox get with thread URL does not call profiles.get", async () => {
+  it("inbox get with thread URL does not call users.get", async () => {
     const ns = makeMessagingOnlyNs();
     const client = makeClient(ns);
     (ns.messaging.getChat as Mock).mockResolvedValue(CHAT_DETAIL_STUB);
@@ -631,7 +622,7 @@ describe("normalization makes zero network calls on all chat commands", () => {
       json: true,
     } as InboxArgs, out);
 
-    // Only one call: getChat — no profiles.get or any other lookup
+    // Only one call: getChat — no users.get or any other lookup
     expect(ns.messaging.getChat).toHaveBeenCalledTimes(1);
     expect(ns.messaging.getChat).toHaveBeenCalledWith("2-XY==");
   });

@@ -4,20 +4,26 @@
  * Subcommands:
  *   message new --to <url|slug|provider_id> "<text>" [--attach <file>…] — start new chat (write)
  *   message <chat_id> "<text>" [--attach <file>…]              — send message to chat (write)
- *   message get <message_id>                                    — get a message (read)
- *   message edit <message_id> "<text>"                         — edit a message (write)
- *   message delete <message_id>                                 — delete a message (write)
- *   message react <message_id> --emoji <e>                     — react to message (write, body field: reaction)
- *   message attachment <message_id> <attachment_id> [-o <file>] — download attachment (binary)
- *   message inmail --to <url|slug|provider-id|urn> --surface <s> --subject <s> "<text>" — send InMail (write)
+ *   message get <chat_id> <message_id>                          — get a message (read)
+ *   message edit <chat_id> <message_id> "<text>"                — edit a message (write)
+ *   message delete <chat_id> <message_id>                       — delete a message (write)
+ *   message react <chat_id> <message_id> --emoji <e>            — react to message (write, body field: reaction)
+ *   message attachment <chat_id> <message_id> <attachment_id> [-o <file>] — download attachment (binary)
+ *   message inmail --to <url|slug|provider-id|urn> --subject <s> "<text>" — send InMail (write)
  *   message inmail-balance                                      — get InMail credit balance (read)
  *
- * chat_id / message_id / attachment_id pass through verbatim.
+ * v2 (sdk/007): get/edit/delete/react/attachment are re-homed under
+ * /chats/{chat_id}/messages/{message_id} — every one of them now takes a
+ * leading chat_id as well as message_id. --surface has no v2 home on
+ * sendInMail (the body is just recipient_urn/subject/text) and is dropped.
+ *
+ * chat_id / message_id / attachment_id pass through verbatim (chat_id is
+ * additionally normalized from a thread URL to its bare provider id, same as
+ * `message send`).
  * --to for `message new` accepts a LinkedIn URL, bare slug, or provider ID.
- *   URL/slug inputs resolve via profiles.get; provider-ID-shaped inputs pass through directly.
+ *   URL/slug inputs resolve via users.get; provider-ID-shaped inputs pass through directly.
  * --to for `message inmail` accepts a LinkedIn URL, bare slug, provider ID, or member URN.
- *   URL/slug inputs resolve via profiles.get; URN and provider-ID pass through directly.
- * --surface for `message inmail` is required (sales_nav | recruiter | classic).
+ *   URL/slug inputs resolve via users.get; URN and provider-ID pass through directly.
  * <chat_id> on `message send` accepts a LinkedIn messaging thread URL or bare provider ID;
  *   thread URLs are normalized to the bare provider ID (zero network calls).
  */
@@ -30,7 +36,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { readAttachment, AttachError } from "../lib/attach.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
@@ -42,7 +48,6 @@ type MessageFlags = {
   text?: string;
   emoji?: string;
   subject?: string;
-  surface?: string;
   output?: string;
   attach?: string | string[];
   account?: string;
@@ -107,10 +112,6 @@ function normalizeAttachPaths(attach: string | string[] | undefined): string[] {
   return Array.isArray(attach) ? attach : [attach];
 }
 
-/** Valid InMail surfaces — must match the API enum exactly. */
-const INMAIL_SURFACES = ["sales_nav", "recruiter", "classic"] as const;
-
-
 /** A LinkedIn member URN: urn:li:member:<digits>. */
 const MEMBER_URN_RE = /^urn:li:member:\d+$/;
 
@@ -141,9 +142,12 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * Write command — supports --preview.
  *
  * --to resolution:
- *   LinkedIn URL or bare slug → profiles.get(slug) → provider_id passed to startChat.
- *   Provider-ID-shaped input (uppercase AC/AD/AE prefix) → passed directly, no profiles.get call.
- *   profiles.get not-found → exit 4.
+ *   LinkedIn URL or bare slug → users.get(slug) → provider_id passed to startChat.
+ *   Provider-ID-shaped input (uppercase AC/AD/AE prefix) → passed directly, no users.get call.
+ *   users.get not-found → exit 4.
+ *
+ * v2: attachments travel as base64 {content,content_type,filename} objects
+ * (application/json only — no multipart op), never raw Buffers.
  */
 export async function runMessageNew(
   client: Curviate,
@@ -175,7 +179,7 @@ export async function runMessageNew(
   const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
   // Resolve the recipient to a provider ID.
-  // URL/slug inputs call profiles.get; provider-ID-shaped inputs pass through directly.
+  // URL/slug inputs call users.get; provider-ID-shaped inputs pass through directly.
   const resolvedSlugOrId = resolveIdentifier(rawTo);
   let providerId: string | undefined;
 
@@ -183,26 +187,23 @@ export async function runMessageNew(
     // Already a provider ID — use directly without an extra SDK call.
     providerId = resolvedSlugOrId;
   } else {
-    // Slug or other form — resolve via profiles.get.
+    // Slug or other form — resolve via users.get.
     try {
-      const profileData = await ns.profiles.get(resolvedSlugOrId, {});
-      providerId = profileData["provider_id"] as string;
+      const profileData = await ns.users.get(resolvedSlugOrId, {});
+      providerId = profileData.id;
     } catch (err: unknown) {
       await handleSdkError(err, outOpts, out);
       return; // unreachable: handleSdkError always calls process.exit
     }
   }
 
-  const body: Record<string, unknown> = {
-    attendees_ids: [providerId!],
-    text,
-  };
+  const attachmentPayloads = attachBuffers.map((buf, i) => toAttachmentPayload(attachPaths[i]!, buf));
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.startChat",
       args: { attendees_ids: [providerId!] },
-      body: { ...body },
+      body: { attendees_ids: [providerId!], text },
       account: accountId,
       attachments: attachBuffers.map((buf, i) => ({
         name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
@@ -213,9 +214,11 @@ export async function runMessageNew(
     return;
   }
 
-  if (attachBuffers.length > 0) {
-    body["attachments"] = attachBuffers;
-  }
+  const body = {
+    attendees_ids: [providerId!],
+    text,
+    ...(attachmentPayloads.length > 0 ? { attachments: attachmentPayloads } : {}),
+  };
 
   try {
     const result = await ns.messaging.startChat(body);
@@ -258,13 +261,11 @@ export async function runMessageSend(
     throw err;
   }
 
-  const body: Record<string, unknown> = { text };
-
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.sendMessage",
       args: { chat_id: chatId },
-      body: { ...body },
+      body: { text },
       account: accountId,
       attachments: attachBuffers.map((buf, i) => ({
         name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
@@ -275,9 +276,11 @@ export async function runMessageSend(
     return;
   }
 
-  if (attachBuffers.length > 0) {
-    body["attachments"] = attachBuffers;
-  }
+  const attachmentPayloads = attachBuffers.map((buf, i) => toAttachmentPayload(attachPaths[i]!, buf));
+  const body = {
+    text,
+    ...(attachmentPayloads.length > 0 ? { attachments: attachmentPayloads } : {}),
+  };
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
@@ -291,8 +294,10 @@ export async function runMessageSend(
 }
 
 /**
- * Run `message get <message_id>`.
+ * Run `message get <chat_id> <message_id>`.
  * Read command — rejects --preview and --all.
+ * v2: re-homed under /chats/{chat_id}/messages/{message_id} — chat_id is now
+ * a leading positional (normalized the same way as `message send`'s).
  */
 export async function runMessageGet(
   client: Curviate,
@@ -303,12 +308,13 @@ export async function runMessageGet(
   rejectAllOnNonPaginated(flags.all, out);
 
   const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.messaging.getMessage(messageId);
+    const result = await ns.messaging.getMessage(chatId, messageId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -316,8 +322,10 @@ export async function runMessageGet(
 }
 
 /**
- * Run `message edit <message_id> "<text>"`.
+ * Run `message edit <chat_id> <message_id> "<text>"`.
  * Write command — supports --preview.
+ * v2: re-homed under /chats/{chat_id}/messages/{message_id} — chat_id is now
+ * a leading positional.
  */
 export async function runMessageEdit(
   client: Curviate,
@@ -326,6 +334,7 @@ export async function runMessageEdit(
   _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
   const rawText = flags.text ?? "";
 
@@ -335,7 +344,7 @@ export async function runMessageEdit(
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.editMessage",
-      args: { message_id: messageId },
+      args: { chat_id: chatId, message_id: messageId },
       body: { text },
       account: accountId,
     });
@@ -347,7 +356,7 @@ export async function runMessageEdit(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.messaging.editMessage(messageId, { text });
+    const result = await ns.messaging.editMessage(chatId, messageId, { text });
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -355,8 +364,10 @@ export async function runMessageEdit(
 }
 
 /**
- * Run `message delete <message_id>`.
+ * Run `message delete <chat_id> <message_id>`.
  * Write command — supports --preview.
+ * v2: re-homed under /chats/{chat_id}/messages/{message_id} — chat_id is now
+ * a leading positional.
  */
 export async function runMessageDelete(
   client: Curviate,
@@ -364,12 +375,13 @@ export async function runMessageDelete(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.deleteMessage",
-      args: { message_id: messageId },
+      args: { chat_id: chatId, message_id: messageId },
       body: {},
       account: accountId,
     });
@@ -381,7 +393,7 @@ export async function runMessageDelete(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.messaging.deleteMessage(messageId);
+    const result = await ns.messaging.deleteMessage(chatId, messageId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -389,9 +401,11 @@ export async function runMessageDelete(
 }
 
 /**
- * Run `message react <message_id> --emoji <e>`.
+ * Run `message react <chat_id> <message_id> --emoji <e>`.
  * Write command — supports --preview.
  * CLI flag is --emoji; the SDK body field is `reaction` (confirmed from AddReactionBody).
+ * v2: re-homed under /chats/{chat_id}/messages/{message_id} — chat_id is now
+ * a leading positional.
  */
 export async function runMessageReact(
   client: Curviate,
@@ -399,13 +413,14 @@ export async function runMessageReact(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
   const reaction = flags.emoji ?? "";
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "messaging.addReaction",
-      args: { message_id: messageId },
+      args: { chat_id: chatId, message_id: messageId },
       body: { reaction },
       account: accountId,
     });
@@ -417,7 +432,7 @@ export async function runMessageReact(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.messaging.addReaction(messageId, { reaction });
+    const result = await ns.messaging.addReaction(chatId, messageId, { reaction });
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -425,8 +440,10 @@ export async function runMessageReact(
 }
 
 /**
- * Run `message attachment <message_id> <attachment_id> [-o <file>]`.
+ * Run `message attachment <chat_id> <message_id> <attachment_id> [-o <file>]`.
  * Read command — binary response. Rejects --preview.
+ * v2: re-homed under /chats/{chat_id}/messages/{message_id}/attachments/{attachment_id}
+ * — chat_id is now a leading positional.
  * @param isTTY — injectable for tests (avoids reading process.stdout.isTTY)
  */
 export async function runMessageAttachment(
@@ -438,12 +455,13 @@ export async function runMessageAttachment(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
   const attachmentId = flags.attachmentId ?? "";
   const ns = client.account(accountId);
 
   try {
-    const data = await ns.messaging.getAttachment(messageId, attachmentId);
+    const data = await ns.messaging.getAttachment(chatId, messageId, attachmentId);
     await writeBinaryOutput(data, {
       outputPath: flags.output,
       isTTY,
@@ -464,11 +482,14 @@ export async function runMessageAttachment(
  * Write command — supports --preview.
  *
  * --to resolution:
- *   LinkedIn URL or bare slug → profiles.get(slug) → provider_id used as recipient_urn.
- *   Provider ID (AC/AD/AE prefix) → passed directly as recipient_urn, no profiles.get call.
- *   Member URN (urn:li:member:<N>) → passed directly as recipient_urn, no profiles.get call.
+ *   LinkedIn URL or bare slug → users.get(slug) → provider_id used as recipient_urn.
+ *   Provider ID (AC/AD/AE prefix) → passed directly as recipient_urn, no users.get call.
+ *   Member URN (urn:li:member:<N>) → passed directly as recipient_urn, no users.get call.
  *   Empty string → exit 2.
- *   profiles.get not-found → exit 4.
+ *   users.get not-found → exit 4.
+ *
+ * v2: the body is just {recipient_urn, subject, text} — --surface has no v2
+ * home (the old body's `surface` field is gone) and is no longer accepted.
  */
 export async function runMessageInMail(
   client: Curviate,
@@ -477,13 +498,6 @@ export async function runMessageInMail(
   _readStdin?: () => Promise<string>,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const surface = flags.surface ?? "";
-  if (!(INMAIL_SURFACES as readonly string[]).includes(surface)) {
-    out.stderr.write(
-      `error: --surface is required and must be one of ${INMAIL_SURFACES.join(", ")}.\n`,
-    );
-    process.exit(2);
-  }
 
   const rawTo = flags.to ?? "";
   if (!rawTo) {
@@ -508,10 +522,10 @@ export async function runMessageInMail(
     // Already a provider ID — pass through directly.
     recipientUrn = resolvedSlugOrId;
   } else {
-    // Slug or URL-derived slug — resolve via profiles.get.
+    // Slug or URL-derived slug — resolve via users.get.
     try {
-      const profileData = await ns.profiles.get(resolvedSlugOrId, {});
-      recipientUrn = profileData["provider_id"] as string;
+      const profileData = await ns.users.get(resolvedSlugOrId, {});
+      recipientUrn = profileData.id;
     } catch (err: unknown) {
       await handleSdkError(err, outOpts, out);
       return; // unreachable: handleSdkError always calls process.exit
@@ -524,9 +538,8 @@ export async function runMessageInMail(
   // Resolve stdin sentinel: "-" reads all of stdin.
   const text = await resolveTextOrStdin(rawText, out, _readStdin);
 
-  const body: Record<string, unknown> = {
+  const body = {
     recipient_urn: recipientUrn!,
-    surface,
     subject,
     text,
   };
@@ -553,6 +566,7 @@ export async function runMessageInMail(
 /**
  * Run `message inmail-balance`.
  * Read command — rejects --preview and --all.
+ * v2: relocated to users.getInMailCredits (was messaging.getInMailBalance).
  */
 export async function runMessageInMailBalance(
   client: Curviate,
@@ -567,7 +581,7 @@ export async function runMessageInMailBalance(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.messaging.getInMailBalance();
+    const result = await ns.users.getInMailCredits();
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -616,6 +630,7 @@ const messageGetCommand = defineCommand({
   args: {
     // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
     ...READ_SINGLE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
   },
   async run({ args }) {
@@ -642,6 +657,7 @@ const messageEditCommand = defineCommand({
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
     text: { type: "positional", description: "Replacement text. Pass - to read from stdin." },
   },
@@ -669,6 +685,7 @@ const messageDeleteCommand = defineCommand({
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
   },
   async run({ args }) {
@@ -695,6 +712,7 @@ const messageReactCommand = defineCommand({
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
     emoji: { type: "string", description: "Native emoji reaction value (e.g. 👍).", required: true },
   },
@@ -722,6 +740,7 @@ const messageAttachmentCommand = defineCommand({
   args: {
     // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
     ...READ_SINGLE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
     attachmentId: { type: "positional", description: "Attachment ID." },
     output: { type: "string", alias: "o", description: "Path to write the file to." },
@@ -761,7 +780,6 @@ const messageInMailCommand = defineCommand({
         "Recipient: LinkedIn profile URL, bare slug, provider-id (ACoAAA…), or member URN (urn:li:member:<id>). URL and slug inputs resolve the provider ID automatically.",
       required: true,
     },
-    surface: { type: "string", description: "InMail surface: sales_nav, recruiter, or classic (classic uses the account's own premium InMail credits).", required: true },
     subject: { type: "string", description: "InMail subject line.", required: true },
     text: { type: "positional", description: "InMail body text. Pass - to read from stdin." },
   },
@@ -873,11 +891,11 @@ export const messageCommand = defineCommand({
       process.stderr.write(
         "Usage: curviate message new --to <attendee> \"<text>\" [--attach <file>…]\n" +
         "       curviate message <chat_id> \"<text>\" [--attach <file>…]\n" +
-        "       curviate message get <message_id>\n" +
-        "       curviate message edit <message_id> \"<text>\"\n" +
-        "       curviate message delete <message_id>\n" +
-        "       curviate message react <message_id> --emoji <e>\n" +
-        "       curviate message attachment <message_id> <attachment_id> [-o <file>]\n" +
+        "       curviate message get <chat_id> <message_id>\n" +
+        "       curviate message edit <chat_id> <message_id> \"<text>\"\n" +
+        "       curviate message delete <chat_id> <message_id>\n" +
+        "       curviate message react <chat_id> <message_id> --emoji <e>\n" +
+        "       curviate message attachment <chat_id> <message_id> <attachment_id> [-o <file>]\n" +
         "       curviate message inmail --to <id> --subject <s> \"<text>\"\n" +
         "       curviate message inmail-balance\n",
       );

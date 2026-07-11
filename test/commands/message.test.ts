@@ -2,15 +2,21 @@
  * Tests for the `message` command group.
  *
  * Coverage:
- *   message new --to <attendee> "<text>" [--attach <file>…]   → messaging.startChat (multipart)
- *   message <chat_id> "<text>" [--attach <file>…]             → messaging.sendMessage (multipart)
- *   message get <message_id>                                   → messaging.getMessage
- *   message edit <message_id> "<text>"                        → messaging.editMessage
- *   message delete <message_id>                               → messaging.deleteMessage
- *   message react <message_id> --emoji <e>                    → messaging.addReaction (body field: `reaction`)
- *   message attachment <message_id> <attachment_id> -o <file> → messaging.getAttachment (binary)
+ *   message new --to <attendee> "<text>" [--attach <file>…]   → messaging.startChat (base64 JSON)
+ *   message <chat_id> "<text>" [--attach <file>…]             → messaging.sendMessage (base64 JSON)
+ *   message get <chat_id> <message_id>                          → messaging.getMessage
+ *   message edit <chat_id> <message_id> "<text>"               → messaging.editMessage
+ *   message delete <chat_id> <message_id>                      → messaging.deleteMessage
+ *   message react <chat_id> <message_id> --emoji <e>           → messaging.addReaction (body field: `reaction`)
+ *   message attachment <chat_id> <message_id> <attachment_id> -o <file> → messaging.getAttachment (binary)
  *   message inmail --to <id> --subject <s> "<text>"           → messaging.sendInMail (--to via resolveIdentifier)
- *   message inmail-balance                                     → messaging.getInMailBalance
+ *   message inmail-balance                                     → users.getInMailCredits
+ *
+ * v2: get/edit/delete/react/attachment are re-homed under chat_id (leading
+ * positional); attachments travel as base64 {content,content_type,filename}
+ * objects, never raw Buffers; sendInMail has no --surface (dropped, no v2
+ * home); inmail-balance relocated from messaging.getInMailBalance to
+ * users.getInMailCredits.
  *
  * --preview on writes: renders preview, no SDK call.
  * --preview on reads: exit 2.
@@ -36,7 +42,9 @@ function makeMessagingNs() {
       addReaction: vi.fn(),
       getAttachment: vi.fn(),
       sendInMail: vi.fn(),
-      getInMailBalance: vi.fn(),
+    },
+    users: {
+      getInMailCredits: vi.fn(),
     },
   };
 }
@@ -55,7 +63,6 @@ type MessageArgs = {
   text?: string;
   emoji?: string;
   subject?: string;
-  surface?: string;
   output?: string;
   attach?: string | string[];
   account?: string;
@@ -106,7 +113,7 @@ describe("message new", () => {
     );
   });
 
-  it("message new --to ACo123 'hello' --attach <file> — reads file and passes Buffer in attachments", async () => {
+  it("message new --to ACo123 'hello' --attach <file> — reads file and passes base64 payload in attachments (v2: no multipart)", async () => {
     const { runMessageNew } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -122,9 +129,13 @@ describe("message new", () => {
     } as MessageArgs, out);
 
     const callArgs = (ns.messaging.startChat as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    const attachments = callArgs["attachments"] as Buffer[];
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
     expect(Array.isArray(attachments)).toBe(true);
-    expect(attachments[0]).toBeInstanceOf(Buffer);
+    expect(attachments[0]).toEqual({
+      content: Buffer.from("content").toString("base64"),
+      content_type: "application/octet-stream",
+      filename: "file.txt",
+    });
   });
 
   it("message new --attach <missing-file> — exits 2 before SDK call", async () => {
@@ -224,7 +235,7 @@ describe("message send (message <chat_id>)", () => {
     );
   });
 
-  it("message <chat_id> '<text>' --attach <file> — passes Buffer in attachments", async () => {
+  it("message <chat_id> '<text>' --attach <file> — passes base64 payload in attachments (v2: no multipart)", async () => {
     const { runMessageSend } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -240,8 +251,12 @@ describe("message send (message <chat_id>)", () => {
     } as MessageArgs, out);
 
     const callArgs = (ns.messaging.sendMessage as Mock).mock.calls[0]![1] as Record<string, unknown>;
-    const attachments = callArgs["attachments"] as Buffer[];
-    expect(attachments[0]).toBeInstanceOf(Buffer);
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
+    expect(attachments[0]).toEqual({
+      content: Buffer.from("imgdata").toString("base64"),
+      content_type: "image/png",
+      filename: "img.png",
+    });
   });
 
   it("message <chat_id> --attach <missing> — exits 2, no SDK call", async () => {
@@ -301,13 +316,13 @@ describe("message get / edit / delete", () => {
     vi.restoreAllMocks();
   });
 
-  it("message get <message_id> — calls getMessage with verbatim id", async () => {
+  it("message get <chat_id> <message_id> — calls getMessage with chat_id + message_id", async () => {
     const { runMessageGet } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runMessageGet(client as never, { messageId: "msg_xyz", account: "acc_1", json: true } as MessageArgs, out);
+    await runMessageGet(client as never, { chatId: "chat_abc", messageId: "msg_xyz", account: "acc_1", json: true } as MessageArgs, out);
 
-    expect(ns.messaging.getMessage).toHaveBeenCalledWith("msg_xyz");
+    expect(ns.messaging.getMessage).toHaveBeenCalledWith("chat_abc", "msg_xyz");
   });
 
   it("message get --preview — exits 2 (read command)", async () => {
@@ -318,7 +333,7 @@ describe("message get / edit / delete", () => {
       throw new Error(`process.exit(${code})`);
     });
     try {
-      await runMessageGet(client as never, { messageId: "msg_xyz", account: "acc_1", preview: true } as MessageArgs, out);
+      await runMessageGet(client as never, { chatId: "chat_abc", messageId: "msg_xyz", account: "acc_1", preview: true } as MessageArgs, out);
       expect.fail("should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
@@ -327,18 +342,19 @@ describe("message get / edit / delete", () => {
     }
   });
 
-  it("message edit <message_id> '<text>' — calls editMessage with id and text body", async () => {
+  it("message edit <chat_id> <message_id> '<text>' — calls editMessage with chat_id, message_id, and text body", async () => {
     const { runMessageEdit } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageEdit(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_xyz",
       text: "updated text",
       account: "acc_1",
       json: true,
     } as MessageArgs, out);
 
-    expect(ns.messaging.editMessage).toHaveBeenCalledWith("msg_xyz", { text: "updated text" });
+    expect(ns.messaging.editMessage).toHaveBeenCalledWith("chat_abc", "msg_xyz", { text: "updated text" });
   });
 
   it("message edit --preview — renders preview, no editMessage call", async () => {
@@ -346,6 +362,7 @@ describe("message get / edit / delete", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageEdit(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_xyz",
       text: "updated",
       account: "acc_1",
@@ -358,13 +375,13 @@ describe("message get / edit / delete", () => {
     expect(parsed.method).toBe("messaging.editMessage");
   });
 
-  it("message delete <message_id> — calls deleteMessage with verbatim id", async () => {
+  it("message delete <chat_id> <message_id> — calls deleteMessage with chat_id + message_id", async () => {
     const { runMessageDelete } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runMessageDelete(client as never, { messageId: "msg_xyz", account: "acc_1", json: true } as MessageArgs, out);
+    await runMessageDelete(client as never, { chatId: "chat_abc", messageId: "msg_xyz", account: "acc_1", json: true } as MessageArgs, out);
 
-    expect(ns.messaging.deleteMessage).toHaveBeenCalledWith("msg_xyz");
+    expect(ns.messaging.deleteMessage).toHaveBeenCalledWith("chat_abc", "msg_xyz");
   });
 
   it("message delete --preview — renders preview, no deleteMessage call", async () => {
@@ -372,6 +389,7 @@ describe("message get / edit / delete", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageDelete(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_xyz",
       account: "acc_1",
       preview: true,
@@ -398,11 +416,12 @@ describe("message react", () => {
     vi.restoreAllMocks();
   });
 
-  it("message react <id> --emoji 👍 — calls addReaction with body field 'reaction'", async () => {
+  it("message react <chat_id> <id> --emoji 👍 — calls addReaction with chat_id, message_id, and body field 'reaction'", async () => {
     const { runMessageReact } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageReact(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_xyz",
       emoji: "👍",
       account: "acc_1",
@@ -410,7 +429,7 @@ describe("message react", () => {
     } as MessageArgs, out);
 
     // SDK body field is `reaction`, not `emoji`
-    expect(ns.messaging.addReaction).toHaveBeenCalledWith("msg_xyz", { reaction: "👍" });
+    expect(ns.messaging.addReaction).toHaveBeenCalledWith("chat_abc", "msg_xyz", { reaction: "👍" });
   });
 
   it("message react --preview — renders preview, no addReaction call", async () => {
@@ -418,6 +437,7 @@ describe("message react", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageReact(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_xyz",
       emoji: "👍",
       account: "acc_1",
@@ -452,19 +472,20 @@ describe("message attachment (binary)", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("message attachment <msg_id> <att_id> -o <file> — writes binary to file", async () => {
+  it("message attachment <chat_id> <msg_id> <att_id> -o <file> — writes binary to file", async () => {
     const { runMessageAttachment } = await import("../../src/commands/message.js");
     const outFile = join(tmpDir, "out.bin");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageAttachment(client as never, {
+      chatId: "chat_abc",
       messageId: "msg_1",
       attachmentId: "att_1",
       output: outFile,
       account: "acc_1",
     } as MessageArgs, out, false);
 
-    expect(ns.messaging.getAttachment).toHaveBeenCalledWith("msg_1", "att_1");
+    expect(ns.messaging.getAttachment).toHaveBeenCalledWith("chat_abc", "msg_1", "att_1");
 
     // Verify file was written
     const { readFile } = await import("node:fs/promises");
@@ -482,6 +503,7 @@ describe("message attachment (binary)", () => {
     try {
       // isTTY=true, no outputPath
       await runMessageAttachment(client as never, {
+        chatId: "chat_abc",
         messageId: "msg_1",
         attachmentId: "att_1",
         account: "acc_1",
@@ -503,6 +525,7 @@ describe("message attachment (binary)", () => {
     });
     try {
       await runMessageAttachment(client as never, {
+        chatId: "chat_abc",
         messageId: "msg_1",
         attachmentId: "att_1",
         account: "acc_1",
@@ -525,20 +548,19 @@ describe("message inmail / inmail-balance", () => {
     ns = makeMessagingNs();
     client = makeClient(ns);
     (ns.messaging.sendInMail as Mock).mockResolvedValue({ inmail_id: "im_1" });
-    (ns.messaging.getInMailBalance as Mock).mockResolvedValue({ balance: 50 });
+    (ns.users.getInMailCredits as Mock).mockResolvedValue({ balance: 50 });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("message inmail --to urn:li:member:99 --surface sales_nav --subject 'Hi' 'text' — calls sendInMail with correct body", async () => {
+  it("message inmail --to urn:li:member:99 --subject 'Hi' 'text' — calls sendInMail with correct body", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:99",
-      surface: "sales_nav",
       subject: "Hi",
       text: "Hello there",
       account: "acc_1",
@@ -549,25 +571,24 @@ describe("message inmail / inmail-balance", () => {
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
       expect.objectContaining({
         recipient_urn: "urn:li:member:99",
-        surface: "sales_nav",
         subject: "Hi",
         text: "Hello there",
       }),
     );
   });
 
-  // ── Wire-encoding regression: the body MUST carry every API-required field.
-  // OpenAPI required = [account_id, recipient_urn, surface, subject, text].
-  // account_id rides via client.account(id); the rest are the request body.
-  // A prior version omitted `surface` → guaranteed API 400. This test asserts
-  // the exact key names + values the SDK method receives.
-  it("message inmail — body carries recipient_urn, surface, subject, text (every required field)", async () => {
+  // ── Wire-encoding regression: the body MUST carry every API-required field
+  // and NOTHING else. OpenAPI required = [account_id, recipient_urn, subject,
+  // text] — v2 has no `surface` field at all (was removed upstream; a prior
+  // CLI version sent it anyway → guaranteed API 400 for an unrecognized
+  // field). This test asserts the exact key set + values the SDK method
+  // receives.
+  it("message inmail — body carries exactly recipient_urn, subject, text (no surface)", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:12345",
-      surface: "recruiter",
       subject: "Role at Acme",
       text: "Body text",
       account: "acc_1",
@@ -576,22 +597,21 @@ describe("message inmail / inmail-balance", () => {
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     const body = (ns.messaging.sendInMail as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    // Every body-level required field present, with exact key names + shapes.
+    // Every body-level required field present, with exact key names + shapes
+    // — and no stray `surface` key.
     expect(body).toEqual({
       recipient_urn: "urn:li:member:12345",
-      surface: "recruiter",
       subject: "Role at Acme",
       text: "Body text",
     });
   });
 
-  it("message inmail --surface classic --to <provider-id> — accepts a provider id and sends classic", async () => {
+  it("message inmail --to <provider-id> — accepts a provider id directly", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMail(client as never, {
       to: "ACoAAA1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuVwX",
-      surface: "classic",
       subject: "Exploring synergies",
       text: "Hi there",
       account: "acc_1",
@@ -601,19 +621,17 @@ describe("message inmail / inmail-balance", () => {
     const body = (ns.messaging.sendInMail as Mock).mock.calls[0]![0] as Record<string, unknown>;
     expect(body).toEqual({
       recipient_urn: "ACoAAA1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuVwX",
-      surface: "classic",
       subject: "Exploring synergies",
       text: "Hi there",
     });
   });
 
-  it("message inmail --surface classic --to <urn> — a URN recipient still passes through", async () => {
+  it("message inmail --to <urn> — a URN recipient still passes through", async () => {
     const { runMessageInMail } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:778899",
-      surface: "classic",
       subject: "Hi",
       text: "Hello",
       account: "acc_1",
@@ -621,53 +639,8 @@ describe("message inmail / inmail-balance", () => {
     } as MessageArgs, out);
 
     expect(ns.messaging.sendInMail).toHaveBeenCalledWith(
-      expect.objectContaining({ recipient_urn: "urn:li:member:778899", surface: "classic" }),
+      expect.objectContaining({ recipient_urn: "urn:li:member:778899" }),
     );
-  });
-
-  it("message inmail — missing --surface exits 2 before any SDK call", async () => {
-    const { runMessageInMail } = await import("../../src/commands/message.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runMessageInMail(client as never, {
-        to: "urn:li:member:99",
-        subject: "Hi",
-        text: "Hello",
-        account: "acc_1",
-      } as MessageArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
-  });
-
-  it("message inmail — invalid --surface value exits 2 before any SDK call", async () => {
-    const { runMessageInMail } = await import("../../src/commands/message.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runMessageInMail(client as never, {
-        to: "urn:li:member:99",
-        surface: "messaging",
-        subject: "Hi",
-        text: "Hello",
-        account: "acc_1",
-      } as MessageArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(ns.messaging.sendInMail).not.toHaveBeenCalled();
   });
 
   it("message inmail — empty --to exits 2 before any SDK call", async () => {
@@ -679,7 +652,6 @@ describe("message inmail / inmail-balance", () => {
     try {
       await runMessageInMail(client as never, {
         to: "",
-        surface: "sales_nav",
         subject: "Hi",
         text: "Hello",
         account: "acc_1",
@@ -699,7 +671,6 @@ describe("message inmail / inmail-balance", () => {
 
     await runMessageInMail(client as never, {
       to: "urn:li:member:99",
-      surface: "sales_nav",
       subject: "Hi",
       text: "Hello",
       account: "acc_1",
@@ -710,19 +681,17 @@ describe("message inmail / inmail-balance", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("messaging.sendInMail");
-    // Preview must be honest: the assembled body includes surface.
-    expect(parsed.body).toEqual(
-      expect.objectContaining({ recipient_urn: "urn:li:member:99", surface: "sales_nav" }),
-    );
+    // Preview must be honest: the assembled body has no surface field.
+    expect(parsed.body).toEqual({ recipient_urn: "urn:li:member:99", subject: "Hi", text: "Hello" });
   });
 
-  it("message inmail-balance — calls getInMailBalance", async () => {
+  it("message inmail-balance — calls users.getInMailCredits", async () => {
     const { runMessageInMailBalance } = await import("../../src/commands/message.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runMessageInMailBalance(client as never, { account: "acc_1", json: true } as MessageArgs, out);
 
-    expect(ns.messaging.getInMailBalance).toHaveBeenCalled();
+    expect(ns.users.getInMailCredits).toHaveBeenCalled();
   });
 
   it("message inmail-balance --preview — exits 2 (read command)", async () => {
