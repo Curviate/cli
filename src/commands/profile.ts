@@ -19,7 +19,12 @@
  * subset of fields. Pass --verbose to get the full SDK response.
  *
  * --sections: comma-separated LinkedIn sections to fetch (profile me and
- * profile <id> only). Empty string is a usage error (exit 2).
+ * profile <id> only). Empty string is a usage error (exit 2). A bare value
+ * is auto-prefixed to the server's linkedin_-prefixed vocabulary (skills →
+ * linkedin_skills, D9); an unknown section (after prefixing) is a usage
+ * error (exit 2) naming the bad value — see lib/sections.ts. On profile
+ * <id>, a slug/URL is first resolved to the provider id (D7, lib/member-id.ts)
+ * since the sections-enriched read 400s on a raw slug.
  *
  * Company slug resolution (--posts --is-company): when the resolved id is
  * non-numeric, getCompany is called first to obtain the numeric company id
@@ -30,6 +35,7 @@ import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveMemberProviderId, resolveMemberOrMeProviderId } from "../lib/member-id.js";
+import { parseSectionsFlag } from "../lib/sections.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -260,12 +266,18 @@ export async function runProfileMe(
   }
 
   // Base behavior: no activity flag → users.get("me") with optional sections.
+  // D9: auto-prefix bare section values (skills → linkedin_skills) and
+  // validate against the served vocabulary — an unknown section is a usage
+  // error (exit 2) here, before any network call, not a raw 400 from the API.
   const params: { linkedin_sections?: string[] } = {};
   if (flags.sections) {
-    params.linkedin_sections = flags.sections
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const parsedSections = parseSectionsFlag(flags.sections);
+    if (!parsedSections.ok) {
+      out.stderr.write(parsedSections.error);
+      process.exit(2);
+      return;
+    }
+    params.linkedin_sections = parsedSections.sections;
   }
 
   try {
@@ -295,14 +307,27 @@ export async function runProfileGet(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
-  // --sections "" is a usage error on the default (users.get) branch.
-  // Validate early (before the try block) so the mock-throw from process.exit(2)
-  // doesn't get swallowed by the catch-all error handler below.
+  // --sections is a usage error on the default (users.get) branch when
+  // empty, or when it contains an unknown section (D9 — validated/prefixed
+  // by parseSectionsFlag). Validate early (before the try block) so the
+  // mock-throw from process.exit(2) doesn't get swallowed by the catch-all
+  // error handler below.
   const isListCommand = flags.posts || flags.comments || flags.reactions || flags.followers;
   if (!isListCommand && flags.sections === "") {
     out.stderr.write("error: --sections must not be empty. Omit the flag or provide section names.\n");
     process.exit(2);
     return;
+  }
+
+  let parsedSections: string[] | undefined;
+  if (!isListCommand && flags.sections) {
+    const result = parseSectionsFlag(flags.sections);
+    if (!result.ok) {
+      out.stderr.write(result.error);
+      process.exit(2);
+      return;
+    }
+    parsedSections = result.sections;
   }
 
   const accountId = requireAccount(flags.account, out);
@@ -405,12 +430,10 @@ export async function runProfileGet(
 
       // v2 users.get exposes only `linkedin_sections`; the pre-v2 signal-a-view
       // request has no home on this op, so the command carries no such flag.
+      // D9: parsedSections is already auto-prefixed and validated above.
       const params: { linkedin_sections?: string[] } = {};
-      if (flags.sections) {
-        params.linkedin_sections = flags.sections
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
+      if (parsedSections) {
+        params.linkedin_sections = parsedSections;
       }
 
       // D7: the sections-enriched users.get call 400s on a raw slug/URL,
@@ -764,7 +787,11 @@ const profileMeCommand = defineCommand({
     ...GLOBAL_FLAGS,
     sections: {
       type: "string",
-      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education). Only applies to the base getMe call (no activity flag).",
+      description:
+        "Comma-separated LinkedIn sections to fetch — linkedin_experience, linkedin_education, linkedin_languages, " +
+        "linkedin_skills, linkedin_certifications, linkedin_volunteer_experience, linkedin_projects, linkedin_recommendations, " +
+        "linkedin_interests, or linkedin_* for all (each also has a _preview variant). A bare value (e.g. skills) is " +
+        "auto-prefixed to linkedin_skills. Only applies to the base getMe call (no activity flag).",
     },
     posts: {
       type: "boolean",
@@ -835,7 +862,7 @@ const profileEndorseCommand = defineCommand({
     id: { type: "positional", description: "Member identifier (URL, slug, or URN)." },
     "endorsement-id": {
       type: "string",
-      description: "Endorsement ID to endorse — get it from the target's skills section via `profile <id> --sections skills`.",
+      description: "Endorsement ID to endorse — get it from the target's skills section via `profile <id> --sections linkedin_skills`.",
       required: true,
     },
   },
@@ -952,7 +979,11 @@ export const profileCommand = defineCommand({
     "is-company": { type: "boolean", description: "When listing posts, treat the profile as a company page.", default: false },
     sections: {
       type: "string",
-      description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education).",
+      description:
+        "Comma-separated LinkedIn sections to fetch — linkedin_experience, linkedin_education, linkedin_languages, " +
+        "linkedin_skills, linkedin_certifications, linkedin_volunteer_experience, linkedin_projects, linkedin_recommendations, " +
+        "linkedin_interests, or linkedin_* for all (each also has a _preview variant). A bare value (e.g. skills) is " +
+        "auto-prefixed to linkedin_skills.",
     },
   },
   subCommands: {

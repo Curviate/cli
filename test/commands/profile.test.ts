@@ -356,7 +356,7 @@ describe("profile me — --sections passthrough", () => {
     vi.restoreAllMocks();
   });
 
-  it("--sections 'experience,education' calls users.get('me') with linkedin_sections array", async () => {
+  it("--sections 'experience,education' auto-prefixes to linkedin_experience,linkedin_education (D9)", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -368,11 +368,11 @@ describe("profile me — --sections passthrough", () => {
 
     expect(accountNs.users.get).toHaveBeenCalledWith(
       "me",
-      expect.objectContaining({ linkedin_sections: ["experience", "education"] }),
+      expect.objectContaining({ linkedin_sections: ["linkedin_experience", "linkedin_education"] }),
     );
   });
 
-  it("--sections '*' calls users.get('me') with linkedin_sections:['*']", async () => {
+  it("--sections '*' auto-prefixes to linkedin_sections:['linkedin_*'] (D9)", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -384,8 +384,48 @@ describe("profile me — --sections passthrough", () => {
 
     expect(accountNs.users.get).toHaveBeenCalledWith(
       "me",
-      expect.objectContaining({ linkedin_sections: ["*"] }),
+      expect.objectContaining({ linkedin_sections: ["linkedin_*"] }),
     );
+  });
+
+  it("--sections 'linkedin_skills' (already canonical) passes through unchanged (D9)", async () => {
+    const { runProfileMe } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileMe(
+      client as never,
+      { account: "acc_1", json: true, sections: "linkedin_skills" } as ProfileCommandArgs,
+      out,
+    );
+
+    expect(accountNs.users.get).toHaveBeenCalledWith(
+      "me",
+      expect.objectContaining({ linkedin_sections: ["linkedin_skills"] }),
+    );
+  });
+
+  it("--sections 'bogus-section' is a usage error naming the bad value, no SDK call (D9)", async () => {
+    const { runProfileMe } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(
+      (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
+    );
+    try {
+      await runProfileMe(
+        client as never,
+        { account: "acc_1", sections: "bogus-section" } as ProfileCommandArgs,
+        out,
+      );
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+    const stderrOut = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).toContain("bogus-section");
   });
 
   it("--sections '' exits 2 (empty string is a usage error)", async () => {
@@ -425,7 +465,7 @@ describe("profile <id> — --sections passthrough", () => {
     vi.restoreAllMocks();
   });
 
-  it("--sections 'experience' calls get with linkedin_sections:['experience']", async () => {
+  it("--sections 'experience' auto-prefixes to linkedin_sections:['linkedin_experience'] (D9)", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -437,8 +477,32 @@ describe("profile <id> — --sections passthrough", () => {
 
     expect(accountNs.users.get).toHaveBeenCalledWith(
       "jdoe",
-      expect.objectContaining({ linkedin_sections: ["experience"] }),
+      expect.objectContaining({ linkedin_sections: ["linkedin_experience"] }),
     );
+  });
+
+  it("--sections 'bogus-section' on profile <id> is a usage error naming the bad value, no SDK call (D9)", async () => {
+    const { runProfileGet } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(
+      (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
+    );
+    try {
+      await runProfileGet(
+        client as never,
+        { id: "jdoe", account: "acc_1", sections: "bogus-section" } as ProfileCommandArgs,
+        out,
+      );
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+    const stderrOut = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).toContain("bogus-section");
   });
 
   it("--sections '' exits 2 on profile <id> (usage error)", async () => {

@@ -276,4 +276,25 @@ describe("profile command surface", () => {
       }
     }
   });
+
+  // D9: the --help example (`experience,education`) advertised bare values
+  // that 400 server-side — the vocabulary is linkedin_-prefixed. Both
+  // `profile <id> --sections` and `profile me --sections` must show a
+  // canonical (linkedin_-prefixed) example, not the broken bare one.
+
+  it("profile <id> --sections help shows a canonical linkedin_-prefixed example, not the broken bare one", async () => {
+    const { profileCommand } = await import("../../src/commands/profile.js");
+    const cmd = profileCommand as unknown as { args?: Record<string, { description?: string }> };
+    const desc = cmd.args?.["sections"]?.description ?? "";
+    expect(desc).toContain("linkedin_");
+    expect(desc).not.toContain("e.g. experience,education");
+  });
+
+  it("profile me --sections help shows a canonical linkedin_-prefixed example, not the broken bare one", async () => {
+    const { profileCommand } = await import("../../src/commands/profile.js");
+    const subs = (profileCommand as unknown as CommandLike).subCommands ?? {};
+    const desc = (subs["me"]?.args as Record<string, { description?: string }> | undefined)?.["sections"]?.description ?? "";
+    expect(desc).toContain("linkedin_");
+    expect(desc).not.toContain("e.g. experience,education");
+  });
 });
