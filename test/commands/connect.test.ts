@@ -285,7 +285,7 @@ describe("connect sent / received — list reads", () => {
   });
 });
 
-describe("connect respond / cancel — writes, invitation_id NOT resolved", () => {
+describe("connect accept / decline / cancel — writes, invitation_id NOT resolved", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -301,49 +301,45 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     vi.restoreAllMocks();
   });
 
-  it("connect respond <id> --action accept — calls invites.accept with verbatim id, bodyless", async () => {
-    const { runConnectRespond } = await import("../../src/commands/connect.js");
+  it("connect accept <id> — calls invites.accept with the verbatim id, bodyless", async () => {
+    const { runConnectAccept } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runConnectRespond(client as never, {
+    await runConnectAccept(client as never, {
       id: "inv_123",
-      action: "accept",
       account: "acc_1",
       json: true,
     } as ConnectArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(accountNs.invites.accept).toHaveBeenCalledWith("inv_123");
+    expect((accountNs.invites.accept as Mock).mock.calls[0]).toHaveLength(1);
     expect(accountNs.invites.decline).not.toHaveBeenCalled();
   });
 
-  it("connect respond <id> --action decline — calls invites.decline with verbatim id, bodyless", async () => {
-    const { runConnectRespond } = await import("../../src/commands/connect.js");
+  it("connect decline <id> — calls invites.decline with the verbatim id, bodyless", async () => {
+    const { runConnectDecline } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runConnectRespond(client as never, {
+    await runConnectDecline(client as never, {
       id: "inv_999",
-      action: "decline",
       account: "acc_1",
       json: true,
     } as ConnectArgs, out);
 
     expect(accountNs.invites.decline).toHaveBeenCalledWith("inv_999");
+    expect((accountNs.invites.decline as Mock).mock.calls[0]).toHaveLength(1);
     expect(accountNs.invites.accept).not.toHaveBeenCalled();
   });
 
-  it("connect respond — an --action other than accept/decline exits 2 before any SDK call", async () => {
-    const { runConnectRespond } = await import("../../src/commands/connect.js");
+  it("connect accept — without --account exits 2 before any SDK call", async () => {
+    const { runConnectAccept } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
       throw new Error(`process.exit(${code})`);
     });
     try {
-      await runConnectRespond(client as never, {
-        id: "inv_123",
-        action: "maybe",
-        account: "acc_1",
-      } as ConnectArgs, out);
+      await runConnectAccept(client as never, { id: "inv_123" } as ConnectArgs, out);
       expect.fail("should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
@@ -351,16 +347,14 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
       exitSpy.mockRestore();
     }
     expect(accountNs.invites.accept).not.toHaveBeenCalled();
-    expect(accountNs.invites.decline).not.toHaveBeenCalled();
   });
 
-  it("connect respond --preview — renders preview without calling accept/decline", async () => {
-    const { runConnectRespond } = await import("../../src/commands/connect.js");
+  it("connect accept --preview — renders the bodyless preview without calling accept", async () => {
+    const { runConnectAccept } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runConnectRespond(client as never, {
+    await runConnectAccept(client as never, {
       id: "inv_123",
-      action: "accept",
       account: "acc_1",
       preview: true,
     } as ConnectArgs, out);
@@ -369,7 +363,24 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("invites.accept");
-    // v2: accept/decline are bodyless.
+    // accept/decline are bodyless.
+    expect(parsed.body).toEqual({});
+  });
+
+  it("connect decline --preview — renders the bodyless preview without calling decline", async () => {
+    const { runConnectDecline } = await import("../../src/commands/connect.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runConnectDecline(client as never, {
+      id: "inv_123",
+      account: "acc_1",
+      preview: true,
+    } as ConnectArgs, out);
+
+    expect(accountNs.invites.decline).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.method).toBe("invites.decline");
     expect(parsed.body).toEqual({});
   });
 
@@ -419,15 +430,17 @@ describe("connect write commands — no pagination flags in args definition", ()
     }
   });
 
-  it("connect respond — args definition has no pagination/projection flags", async () => {
+  it("connect accept / decline — args definition has no pagination/projection flags", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
       { args?: Record<string, unknown> }
     >;
-    const respondArgs = subCmds["respond"]?.args ?? {};
-    for (const flag of PAGINATION_FLAGS) {
-      expect(respondArgs, `connect respond args must NOT include --${flag}`).not.toHaveProperty(flag);
+    for (const name of ["accept", "decline"]) {
+      const args = subCmds[name]?.args ?? {};
+      for (const flag of PAGINATION_FLAGS) {
+        expect(args, `connect ${name} args must NOT include --${flag}`).not.toHaveProperty(flag);
+      }
     }
   });
 
@@ -716,23 +729,27 @@ describe("connect help strings — Tier-1", () => {
     expect(desc).toContain("already-handled");
   });
 
-  it("connect respond positional id description references connect received as source", async () => {
+  it("connect accept / decline positional id description references connect received as source", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
       { args?: Record<string, { description?: string }> }
     >;
-    const desc = subCmds["respond"]?.args?.["id"]?.description ?? "";
-    expect(desc).toContain("connect received");
+    for (const name of ["accept", "decline"]) {
+      const desc = subCmds[name]?.args?.["id"]?.description ?? "";
+      expect(desc, `connect ${name} id desc`).toContain("connect received");
+    }
   });
 
-  it("connect respond has no --shared-secret flag (v2: accept/decline are bodyless)", async () => {
+  it("the combined respond command is gone; accept / decline take no --shared-secret flag (bodyless)", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
       { args?: Record<string, unknown> }
     >;
-    expect(subCmds["respond"]?.args?.["shared-secret"]).toBeUndefined();
+    expect(subCmds["respond"]).toBeUndefined();
+    expect(subCmds["accept"]?.args?.["shared-secret"]).toBeUndefined();
+    expect(subCmds["decline"]?.args?.["shared-secret"]).toBeUndefined();
   });
 });
 

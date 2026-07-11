@@ -5,18 +5,19 @@
  *   connect <id> [--note <text>]            — send invitation (write, --preview OK)
  *   connect sent                            — list sent invitations (read)
  *   connect received                        — list received invitations (read)
- *   connect respond <id> --action <a>       — accept/decline (write, --preview OK)
+ *   connect accept <id>                     — accept a received invitation (write, --preview OK)
+ *   connect decline <id>                    — decline a received invitation (write, --preview OK)
  *   connect cancel <id>                     — cancel sent invitation (write, --preview OK)
  *
  * <id> for `connect <id>` passes through resolveIdentifier (member URL/slug/URN).
- * <id> for `respond` and `cancel` is an invitation_id — passed verbatim, NOT resolved.
- * All subcommands are account-scoped.
+ * <id> for `accept`, `decline`, and `cancel` is an invitation_id — passed
+ * verbatim, NOT resolved. All subcommands are account-scoped.
  *
- * v2: the old combined `invites.respond(id, {action, shared_secret})`
- * split into two dedicated, BODYLESS ops — `invites.accept` / `invites.decline`.
- * `respond` keeps its noun (the command surface stays stable) but now
- * branches on --action to call the right one; --shared-secret has no v2 home
- * (the accept/decline ops take no body at all) and is no longer accepted.
+ * v2: the old combined `invites.respond(id, {action, shared_secret})` split
+ * into two dedicated, BODYLESS ops — `invites.accept` / `invites.decline` —
+ * surfaced here as the separate `connect accept` / `connect decline`
+ * subcommands. The combined `respond --action` command is removed; the
+ * accept/decline ops take no body at all.
  */
 
 import { defineCommand } from "citty";
@@ -33,7 +34,6 @@ import type { Curviate, CurviateError } from "@curviate/sdk";
 type ConnectFlags = {
   id?: string;
   note?: string;
-  action?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -239,15 +239,11 @@ export async function runConnectReceived(
 }
 
 /**
- * Run `connect respond <invitation_id> --action accept|decline`.
+ * Run `connect accept <invitation_id>` — invites.accept (bodyless).
  * Write command — supports --preview.
  * invitation_id is NOT passed through resolveIdentifier.
- *
- * v2: dispatches to the bodyless `invites.accept`/`invites.decline` op that
- * matches --action. --shared-secret is gone (no v2 home — accept/decline
- * take no body).
  */
-export async function runConnectRespond(
+export async function runConnectAccept(
   client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
@@ -255,18 +251,10 @@ export async function runConnectRespond(
   const accountId = requireAccount(flags.account, out);
   // invitation_id passes verbatim — NOT URL-normalized
   const invitationId = flags.id ?? "";
-  const action = flags.action ?? "";
-
-  if (action !== "accept" && action !== "decline") {
-    out.stderr.write("error: --action must be 'accept' or 'decline'.\n");
-    process.exit(2);
-  }
-
-  const method = action === "accept" ? "invites.accept" : "invites.decline";
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method,
+      method: "invites.accept",
       args: { invitation_id: invitationId },
       body: {},
       account: accountId,
@@ -279,9 +267,50 @@ export async function runConnectRespond(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = action === "accept"
-      ? await ns.invites.accept(invitationId)
-      : await ns.invites.decline(invitationId);
+    const result = await ns.invites.accept(invitationId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    const { CurviateError } = await import("@curviate/sdk");
+    if (err instanceof CurviateError) {
+      const { getExitCode } = await import("../lib/exit-codes.js");
+      renderError(err as CurviateError, outOpts, out);
+      process.exit(getExitCode(err.code));
+    }
+    renderUnexpectedError(err, out);
+    process.exit(1);
+  }
+}
+
+/**
+ * Run `connect decline <invitation_id>` — invites.decline (bodyless).
+ * Write command — supports --preview.
+ * invitation_id is NOT passed through resolveIdentifier.
+ */
+export async function runConnectDecline(
+  client: Curviate,
+  flags: ConnectFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  // invitation_id passes verbatim — NOT URL-normalized
+  const invitationId = flags.id ?? "";
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({
+      method: "invites.decline",
+      args: { invitation_id: invitationId },
+      body: {},
+      account: accountId,
+    });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.invites.decline(invitationId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -376,7 +405,7 @@ const connectReceivedCommand = defineCommand({
     name: "received",
     description:
       "Returns pending received invitations only — already-handled invitations are not returned. " +
-      "The `inviter.*` fields identify who sent the request. Use the `id` field with `connect respond`.",
+      "The `inviter.*` fields identify who sent the request. Use the `id` field with `connect accept` or `connect decline`.",
   },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
@@ -398,15 +427,14 @@ const connectReceivedCommand = defineCommand({
   },
 });
 
-const connectRespondCommand = defineCommand({
-  meta: { name: "respond", description: "Accept or decline a received invitation." },
+const connectAcceptCommand = defineCommand({
+  meta: { name: "accept", description: "Accept a received invitation." },
   args: {
     ...WRITE_FLAGS,
     id: {
       type: "positional",
-      description: "Invitation id to respond to — use the `id` field from `connect received`.",
+      description: "Invitation id to accept — use the `id` field from `connect received`.",
     },
-    action: { type: "string", description: "Response action: accept or decline.", required: true },
   },
   async run({ args }) {
     const flags = args as ConnectFlags;
@@ -423,7 +451,35 @@ const connectRespondCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectRespond(client, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectAccept(client, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
+const connectDeclineCommand = defineCommand({
+  meta: { name: "decline", description: "Decline a received invitation." },
+  args: {
+    ...WRITE_FLAGS,
+    id: {
+      type: "positional",
+      description: "Invitation id to decline — use the `id` field from `connect received`.",
+    },
+  },
+  async run({ args }) {
+    const flags = args as ConnectFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runConnectDecline(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -478,7 +534,8 @@ export const connectCommand = defineCommand({
   subCommands: {
     sent: connectSentCommand,
     received: connectReceivedCommand,
-    respond: connectRespondCommand,
+    accept: connectAcceptCommand,
+    decline: connectDeclineCommand,
     cancel: connectCancelCommand,
   },
   async run({ args }) {
@@ -489,7 +546,8 @@ export const connectCommand = defineCommand({
         "Usage: curviate connect <id> [--note <text>]\n" +
         "       curviate connect sent\n" +
         "       curviate connect received\n" +
-        "       curviate connect respond <invitation_id> --action accept|decline\n" +
+        "       curviate connect accept <invitation_id>\n" +
+        "       curviate connect decline <invitation_id>\n" +
         "       curviate connect cancel <invitation_id>\n",
       );
       return;

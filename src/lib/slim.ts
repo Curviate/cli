@@ -221,7 +221,7 @@ export function slimInviteSent(data: unknown): Record<string, unknown> {
  * Drops: invited_user* (self-referential — describes the authenticated user).
  * Projects specifics to { shared_secret } only (drops constant provider field).
  * Keeps: id, inviter (all sub-fields), date, parsed_datetime, invitation_text,
- *         specifics.shared_secret (required for connect respond).
+ *         specifics.shared_secret (retained from the received-invite shape).
  */
 export function slimInviteReceivedItem(item: Record<string, unknown>): Record<string, unknown> {
   const rawSpecifics =
