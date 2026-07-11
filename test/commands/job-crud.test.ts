@@ -118,6 +118,151 @@ describe("job list", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// job list --state: D10 client-side re-filter (upstream filtering is
+// best-effort; the request vocabulary OPEN maps to the response item's own
+// state LISTED -- every other value is the identical string on both sides)
+// ---------------------------------------------------------------------------
+
+describe("job list --state re-filter (D10)", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("--state OPEN: only items whose own state is LISTED survive; DRAFT items upstream returned anyway are dropped", async () => {
+    (accountNs.jobs.list as Mock).mockResolvedValue({
+      object: "job_posting_list",
+      items: [
+        { object: "job_posting", id: "job_1", title: "A", company: "Acme", state: "LISTED", applications_count: 0 },
+        { object: "job_posting", id: "job_2", title: "B", company: "Acme", state: "DRAFT", applications_count: 0 },
+      ],
+      cursor: null,
+    });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "OPEN", account: "acc_1", json: true } as Args, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.["id"]).toBe("job_1");
+  });
+
+  it("--state OPEN: dropped items produce a stderr note naming the count", async () => {
+    (accountNs.jobs.list as Mock).mockResolvedValue({
+      object: "job_posting_list",
+      items: [
+        { object: "job_posting", id: "job_1", title: "A", company: "Acme", state: "LISTED", applications_count: 0 },
+        { object: "job_posting", id: "job_2", title: "B", company: "Acme", state: "DRAFT", applications_count: 0 },
+        { object: "job_posting", id: "job_3", title: "C", company: "Acme", state: "CLOSED", applications_count: 0 },
+      ],
+      cursor: null,
+    });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "OPEN", account: "acc_1", json: true } as Args, out);
+
+    const stderr = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderr).toMatch(/dropped 2 of 3/i);
+  });
+
+  it("--state DRAFT: identical request/response string, filters directly (no OPEN->LISTED mapping needed)", async () => {
+    (accountNs.jobs.list as Mock).mockResolvedValue({
+      object: "job_posting_list",
+      items: [
+        { object: "job_posting", id: "job_1", title: "A", company: "Acme", state: "DRAFT", applications_count: 0 },
+        { object: "job_posting", id: "job_2", title: "B", company: "Acme", state: "LISTED", applications_count: 0 },
+      ],
+      cursor: null,
+    });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "DRAFT", account: "acc_1", json: true } as Args, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.["id"]).toBe("job_1");
+  });
+
+  it("no items dropped -> no stderr note is written", async () => {
+    (accountNs.jobs.list as Mock).mockResolvedValue({
+      object: "job_posting_list",
+      items: [
+        { object: "job_posting", id: "job_1", title: "A", company: "Acme", state: "LISTED", applications_count: 0 },
+      ],
+      cursor: null,
+    });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "OPEN", account: "acc_1", json: true } as Args, out);
+
+    expect(out.stderr.write).not.toHaveBeenCalled();
+  });
+
+  it("cursor and envelope fields pass through untouched by the re-filter", async () => {
+    (accountNs.jobs.list as Mock).mockResolvedValue({
+      object: "job_posting_list",
+      items: [
+        { object: "job_posting", id: "job_1", title: "A", company: "Acme", state: "DRAFT", applications_count: 0 },
+      ],
+      cursor: "cur_next",
+    });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "OPEN", account: "acc_1", json: true } as Args, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["object"]).toBe("job_posting_list");
+    expect(result["cursor"]).toBe("cur_next");
+    expect(result["items"]).toEqual([]);
+  });
+
+  it("--all: re-filters each streamed item against its own state; the upstream cursor walk is unaffected by filtering", async () => {
+    (accountNs.jobs.list as Mock)
+      .mockResolvedValueOnce({
+        items: [
+          { object: "job_posting", id: "job_1", state: "LISTED" },
+          { object: "job_posting", id: "job_2", state: "DRAFT" },
+        ],
+        cursor: "cur_2",
+      })
+      .mockResolvedValueOnce({
+        items: [
+          { object: "job_posting", id: "job_3", state: "LISTED" },
+        ],
+        cursor: null,
+      });
+    const { runJobList } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobList(client as never, { state: "OPEN", account: "acc_1", all: true } as Args, out);
+
+    // Both upstream pages were walked (the second call received the first
+    // page's cursor) even though page 1 had a filtered-out item.
+    expect(accountNs.jobs.list).toHaveBeenCalledTimes(2);
+    expect((accountNs.jobs.list as Mock).mock.calls[1]?.[0]).toMatchObject({ cursor: "cur_2" });
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const ids = written.trim().split("\n").map((line) => (JSON.parse(line) as Record<string, unknown>)["id"]);
+    expect(ids).toEqual(["job_1", "job_3"]);
+
+    const stderr = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderr).toMatch(/dropped 1 of 2/i);
+  });
+});
+
 describe("job create", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;

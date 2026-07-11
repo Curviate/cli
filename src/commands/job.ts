@@ -17,6 +17,13 @@
  * --preview and never touch the network under it. A paid publish
  * (PROMOTED/PROMOTED_PLUS) requires an explicit budget — supplying it IS the
  * opt-in to spend real money on the connected account's LinkedIn payment method.
+ *
+ * D10: `job list --state` is best-effort upstream (LinkedIn, not this CLI,
+ * decides how strictly to honor it) — every returned page is re-filtered
+ * against each item's own `state` before reaching output (a stderr note
+ * reports dropped items); the upstream pagination cursor is unaffected, so
+ * `--all` still walks the same unfiltered upstream pages. See
+ * `filterJobsByState`/`requestStateToItemState` below.
  */
 
 import { defineCommand } from "citty";
@@ -41,6 +48,8 @@ type CreateJobBody = Parameters<AccountNs["jobs"]["create"]>[0];
 type UpdateJobBody = Parameters<AccountNs["jobs"]["update"]>[1];
 type PublishJobBody = Parameters<AccountNs["jobs"]["publish"]>[1];
 type JobListQuery = Parameters<AccountNs["jobs"]["list"]>[0];
+type JobListPage = Awaited<ReturnType<AccountNs["jobs"]["list"]>>;
+type JobListItem = JobListPage["items"][number];
 type ListApplicantsParams = NonNullable<Parameters<AccountNs["jobs"]["listApplicants"]>[1]>;
 
 type JobFlags = {
@@ -99,6 +108,48 @@ const APPLY_METHODS = ["linkedin", "external"] as const;
 const PUBLISH_MODES = ["FREE", "PROMOTED", "PROMOTED_PLUS"] as const;
 const BUDGET_SCOPES = ["DAILY", "TOTAL"] as const;
 const RATINGS = ["UNRATED", "NOT_A_FIT", "MAYBE", "GOOD_FIT"] as const;
+
+// ---------------------------------------------------------------------------
+// D10: `job list --state` client-side re-filter.
+//
+// LinkedIn applies the upstream state filter on a best-effort basis: OPEN
+// commonly returns the same postings as DRAFT, and no query is guaranteed to
+// return an item whose own `state` is LISTED even though LISTED is a valid
+// value of that field (per the SDK's own documented contract on this query
+// param). Silent wrong-filtering is worse than honesty, so every returned
+// page is re-filtered here against each item's own `state` before it reaches
+// --json output.
+//
+// The request vocabulary (JOB_STATES: DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED)
+// and the response item's own `state` field
+// (DRAFT|LISTED|CLOSED|REVIEW|SUSPENDED) differ in exactly one value: the
+// request's OPEN corresponds to the response's LISTED. Every other value is
+// the identical string on both sides.
+//
+// This is a PAGE-LOCAL filter, not a global one: it never changes the
+// pagination cursor. The cursor comes from the upstream response's own
+// `cursor` field, untouched by which items survive filtering -- `--all`
+// keeps walking the same unfiltered upstream pages it always did, it just
+// stops re-emitting items that don't match their own state.
+// ---------------------------------------------------------------------------
+
+function requestStateToItemState(state: string): string {
+  return state === "OPEN" ? "LISTED" : state;
+}
+
+function filterJobsByState(
+  items: readonly JobListItem[] | undefined,
+  requestedState: string,
+): { items: JobListItem[]; dropped: number } {
+  const source = items ?? [];
+  const wantedState = requestStateToItemState(requestedState);
+  const filtered = source.filter((item) => item.state === wantedState);
+  return { items: filtered, dropped: source.length - filtered.length };
+}
+
+function stateFilterDroppedNote(dropped: number, total: number, requestedState: string): string {
+  return `note: LinkedIn's --state filter is best-effort -- dropped ${dropped} of ${total} returned item(s) on this page whose own state was not "${requestedState}". The page walk itself is unaffected (upstream pages are fetched unfiltered).\n`;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -217,7 +268,16 @@ export async function runJobGet(client: Curviate, flags: JobFlags, out: OutputSt
   }
 }
 
-/** Run `job list --state <s>` — jobs.list (paginated read). --state is required. */
+/**
+ * Run `job list --state <s>` — jobs.list (paginated read). --state is required.
+ *
+ * D10: LinkedIn's state filter is best-effort — every returned page is
+ * re-filtered against each item's own `state` before reaching output, so
+ * --json only ever contains real matches (a stderr note reports how many
+ * were dropped). This is page-local: it never touches the pagination
+ * cursor, which is threaded from the unfiltered upstream response — `--all`
+ * walks exactly the same upstream pages it always did.
+ */
 export async function runJobList(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
@@ -236,7 +296,18 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
   try {
     if (all) {
       // Narrow cast at the query-argument call site: state is validated above.
-      const fn = (p: typeof base) => ns.jobs.list(p as JobListQuery);
+      // Re-filter each page's items in the wrapped fn (not after streamAll
+      // flattens them) so the note stays page-local and streamAll's own
+      // cursor/truncation bookkeeping — driven by the untouched page.cursor
+      // — never sees the filtering at all.
+      const fn = (p: typeof base) =>
+        ns.jobs.list(p as JobListQuery).then((page) => {
+          const { items: filtered, dropped } = filterJobsByState(page.items, state);
+          if (dropped > 0) {
+            out.stderr.write(stateFilterDroppedNote(dropped, page.items?.length ?? 0, state));
+          }
+          return { ...page, items: filtered };
+        });
       for await (const item of streamAll(fn, base, {
         maxPages,
         out,
@@ -245,7 +316,11 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
       }
     } else {
       const result = await ns.jobs.list(base as JobListQuery);
-      renderSuccess(result, outOpts, out);
+      const { items: filtered, dropped } = filterJobsByState(result.items, state);
+      if (dropped > 0) {
+        out.stderr.write(stateFilterDroppedNote(dropped, result.items?.length ?? 0, state));
+      }
+      renderSuccess({ ...result, items: filtered }, outOpts, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -565,7 +640,7 @@ const jobListCommand = defineCommand({
   meta: { name: "list", description: "List your own classic job postings by state." },
   args: {
     ...GLOBAL_FLAGS,
-    state: { type: "string", description: "Filter by state (required): DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED.", required: true },
+    state: { type: "string", description: "Filter by state (required): DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED. Best-effort on LinkedIn's side -- verify item.state. The CLI re-filters returned items against their own state (dropped items are noted on stderr), but the upstream page walk itself is unfiltered, so --all may fetch more pages than the filtered item count implies.", required: true },
   },
   async run({ args }) {
     await withClient(args as JobFlags, runJobList);
