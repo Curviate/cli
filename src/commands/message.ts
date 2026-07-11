@@ -7,7 +7,7 @@
  *   message get <chat_id> <message_id>                          — get a message (read)
  *   message edit <chat_id> <message_id> "<text>"                — edit a message (write)
  *   message delete <chat_id> <message_id>                       — delete a message (write)
- *   message react <chat_id> <message_id> --emoji <e>            — react to message (write, body field: reaction)
+ *   message react <chat_id> <message_id> <emoji>                — react to message (write, body field: reaction; --emoji alias)
  *   message attachment <chat_id> <message_id> <attachment_id> [-o <file>] — download attachment (binary)
  *   message inmail --to <url|slug|provider-id|urn> --subject <s> "<text>" — send InMail (write)
  *   message inmail-balance                                      — get InMail credit balance (read)
@@ -47,6 +47,8 @@ type MessageFlags = {
   to?: string;
   text?: string;
   emoji?: string;
+  /** Deprecated alias for the positional <emoji> (the old `--emoji` flag). */
+  emojiAlias?: string;
   subject?: string;
   output?: string;
   attach?: string | string[];
@@ -401,9 +403,11 @@ export async function runMessageDelete(
 }
 
 /**
- * Run `message react <chat_id> <message_id> --emoji <e>`.
+ * Run `message react <chat_id> <message_id> <emoji>`.
  * Write command — supports --preview.
- * CLI flag is --emoji; the SDK body field is `reaction` (confirmed from AddReactionBody).
+ * <emoji> is the canonical positional (the deprecated `--emoji` flag still
+ * works as an alias); the SDK body field is `reaction` (confirmed from
+ * AddReactionBody).
  * v2: re-homed under /chats/{chat_id}/messages/{message_id} — chat_id is now
  * a leading positional.
  */
@@ -415,7 +419,18 @@ export async function runMessageReact(
   const accountId = requireAccount(flags.account, out);
   const chatId = normalizeChatId(flags.chatId ?? "");
   const messageId = flags.messageId ?? "";
-  const reaction = flags.emoji ?? "";
+  // Unified reaction input: the canonical positional <emoji>, falling back to
+  // the deprecated `--emoji` alias. Positional wins when both are given.
+  const reaction = flags.emoji ?? flags.emojiAlias ?? "";
+
+  // A reaction value is required (citty no longer enforces it now that the
+  // positional is optional to allow the flag alias) — a missing value is a
+  // usage error, not a silent empty-body reaction.
+  if (!reaction) {
+    out.stderr.write("error: a reaction is required — pass it as `message react <chat_id> <message_id> <emoji>` (or --emoji <e>).\n");
+    process.exit(2);
+    return;
+  }
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -714,7 +729,12 @@ const messageReactCommand = defineCommand({
     ...WRITE_FLAGS,
     chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
     messageId: { type: "positional", description: "Message ID." },
-    emoji: { type: "string", description: "Native emoji reaction value (e.g. 👍).", required: true },
+    emoji: { type: "positional", required: false, description: "Native emoji reaction value (e.g. 👍)." },
+    emojiAlias: {
+      type: "string",
+      alias: "emoji",
+      description: "Deprecated: pass the emoji as the positional <emoji> instead. --emoji still works.",
+    },
   },
   async run({ args }) {
     const flags = args as MessageFlags;
@@ -894,7 +914,7 @@ export const messageCommand = defineCommand({
         "       curviate message get <chat_id> <message_id>\n" +
         "       curviate message edit <chat_id> <message_id> \"<text>\"\n" +
         "       curviate message delete <chat_id> <message_id>\n" +
-        "       curviate message react <chat_id> <message_id> --emoji <e>\n" +
+        "       curviate message react <chat_id> <message_id> <emoji>\n" +
         "       curviate message attachment <chat_id> <message_id> <attachment_id> [-o <file>]\n" +
         "       curviate message inmail --to <id> --subject <s> \"<text>\"\n" +
         "       curviate message inmail-balance\n",

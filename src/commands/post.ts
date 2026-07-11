@@ -4,7 +4,7 @@
  * Subcommands:
  *   post get <post_id>                                    — get a single post (read)
  *   post create "<text>" [--attach <file>…]              — create post (write, JSON only in v2)
- *   post react <post_id> --reaction <r>                  — react to post (write, body field: reaction)
+ *   post react <post_id> <reaction>                      — react to post (write, body field: reaction; --reaction alias)
  *   post reactions <post_id>                             — list reactions (paginated, read)
  *   post delete <post_id>                                — delete a post you own (write)
  *   post unreact <post_id> <reaction>                    — remove your reaction (write)
@@ -48,6 +48,8 @@ type PostFlags = {
   userId?: string;
   text?: string;
   reaction?: string;
+  /** Deprecated alias for the positional <reaction> (the old `--reaction` flag). */
+  reactionAlias?: string;
   "reply-to"?: string;
   "as-organization"?: string;
   attach?: string | string[];
@@ -231,9 +233,10 @@ export async function runPostCreate(
 }
 
 /**
- * Run `post react <post_id> --reaction <r> [--as-organization <org>]`.
+ * Run `post react <post_id> <reaction> [--as-organization <org>]`.
  * Write command — supports --preview.
- * --reaction: validated against the write-side enum (lowercase only).
+ * <reaction>: the canonical positional (the deprecated `--reaction` flag still
+ * works as an alias); validated against the write-side enum (lowercase only).
  * --as-organization: reacts on behalf of an organization page (v2 body
  * field: `react_as`).
  *
@@ -248,12 +251,14 @@ export async function runPostReact(
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
   const postId = flags.postId ?? "";
-  const reaction = flags.reaction ?? "";
+  // Unified reaction input: the canonical positional <reaction>, falling back
+  // to the deprecated `--reaction` alias. Positional wins when both are given.
+  const reaction = flags.reaction ?? flags.reactionAlias ?? "";
 
   // Validate write-side enum (must be lowercase; uppercase read-side values rejected).
   if (!VALID_REACTIONS.has(reaction)) {
     out.stderr.write(
-      `error: --reaction must be one of: like, celebrate, support, love, insightful, funny. Got: "${reaction}"\n`,
+      `error: reaction must be one of: like, celebrate, support, love, insightful, funny. Got: "${reaction}"\n`,
     );
     process.exit(2);
     return;
@@ -573,13 +578,18 @@ const postReactCommand = defineCommand({
         "POSTID is always the post's id.",
     },
     reaction: {
-      type: "string",
-      required: true,
+      type: "positional",
+      required: false,
       description:
         "Write-side reaction (lowercase). Write values: like, celebrate, support, love, insightful, funny. " +
         "Read-side vocabulary (in the value and user_reacted response fields): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT. " +
         "Confirmed write→read mappings: like=LIKE, celebrate=PRAISE, insightful=INTEREST. " +
         "(support, love, and funny are valid write values; their read-side pairings are unconfirmed.)",
+    },
+    reactionAlias: {
+      type: "string",
+      alias: "reaction",
+      description: "Deprecated: pass the reaction as the positional <reaction> instead. --reaction still works.",
     },
     "as-organization": {
       type: "string",
@@ -718,7 +728,7 @@ export const postCommand = defineCommand({
       "Usage: curviate post <subcommand>\n" +
       "  get <post_id>\n" +
       "  create \"<text>\" [--attach <file>…]\n" +
-      "  react <post_id> --reaction <r> [--as-organization <org_id>]\n" +
+      "  react <post_id> <reaction> [--as-organization <org_id>]\n" +
       "  reactions <post_id>\n" +
       "  delete <post_id>\n" +
       "  unreact <post_id> <reaction>\n" +
