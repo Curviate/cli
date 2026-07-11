@@ -19,7 +19,6 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
-import type { Mock } from "vitest";
 import { spawnSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
