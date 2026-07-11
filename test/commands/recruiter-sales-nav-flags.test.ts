@@ -28,7 +28,11 @@ describe("recruiter write commands — no pagination flags in help", () => {
     ["reject-applicant", ["reject-applicant"]],
     ["job.create", ["job", "create"]],
     ["job.publish", ["job", "publish"]],
+    ["job.close", ["job", "close"]],
     ["job.checkpoint", ["job", "checkpoint"]],
+    ["project.update", ["project", "update"]],
+    ["project-job.create", ["project-job", "create"]],
+    ["project-job.update", ["project-job", "update"]],
   ])("recruiter %s — args definition has no pagination flags", async (_label, path) => {
     const { recruiterCommand } = await import("../../src/commands/recruiter.js");
     let cmd = recruiterCommand as unknown as CommandLike;
@@ -50,6 +54,8 @@ describe("recruiter single-object read commands — no pagination flags in help 
     ["applicant (get)", ["applicant"]],
     ["applicant.resume", ["applicant", "resume"]],
     ["job.get", ["job", "get"]],
+    ["project-job.get", ["project-job", "get"]],
+    ["project-job.budget", ["project-job", "budget"]],
   ])("recruiter %s — no pagination-only flags", async (_label, path) => {
     const { recruiterCommand } = await import("../../src/commands/recruiter.js");
     let cmd = recruiterCommand as unknown as CommandLike;
@@ -71,6 +77,8 @@ describe("recruiter list commands — DOES have pagination flags (negative contr
     ["projects", ["projects"]],
     ["jobs", ["jobs"]],
     ["job.applicants", ["job", "applicants"]],
+    ["pipeline", ["pipeline"]],
+    ["talent-search", ["talent-search"]],
   ])("recruiter %s — args definition retains pagination flags", async (_label, path) => {
     const { recruiterCommand } = await import("../../src/commands/recruiter.js");
     let cmd = recruiterCommand as unknown as CommandLike;

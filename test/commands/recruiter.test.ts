@@ -47,14 +47,23 @@ function makeRecruiterNs() {
       getProfile: vi.fn(),
       searchPeople: vi.fn(),
       searchParameters: vi.fn(),
+      searchFromUrl: vi.fn(),
+      searchTalentPool: vi.fn(),
       listProjects: vi.fn(),
       getProject: vi.fn(),
+      updateProject: vi.fn(),
+      listPipeline: vi.fn(),
       saveCandidate: vi.fn(),
       addApplicant: vi.fn(),
       rejectApplicant: vi.fn(),
       listJobs: vi.fn(),
       createJob: vi.fn(),
+      getProjectJob: vi.fn(),
+      createProjectJob: vi.fn(),
+      getProjectJobBudget: vi.fn(),
+      updateProjectJob: vi.fn(),
       publishJob: vi.fn(),
+      closeJob: vi.fn(),
       solveJobCheckpoint: vi.fn(),
       listApplicants: vi.fn(),
       getApplicant: vi.fn(),
@@ -740,6 +749,89 @@ describe("recruiter search parameters", () => {
   });
 });
 
+// ─── recruiter search <url> ────────────────────────────────────────────────
+
+describe("recruiter search <url>", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.searchFromUrl as Mock).mockResolvedValue({ object: "recruiter_people_search_result", data: [] });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.searchFromUrl with {url} body and no pagination params by default", async () => {
+    const { runRecruiterSearchFromUrl } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchFromUrl(client as never, {
+      account: "acc_1",
+      url: "https://www.linkedin.com/talent/search/...",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.searchFromUrl).toHaveBeenCalledWith(
+      { url: "https://www.linkedin.com/talent/search/..." },
+      undefined,
+    );
+  });
+
+  it("--limit/--cursor pass through as query params, not in the body", async () => {
+    const { runRecruiterSearchFromUrl } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchFromUrl(client as never, {
+      account: "acc_1",
+      url: "https://www.linkedin.com/talent/search/...",
+      limit: "10",
+      cursor: "cur_1",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.searchFromUrl).toHaveBeenCalledWith(
+      { url: "https://www.linkedin.com/talent/search/..." },
+      { limit: 10, cursor: "cur_1" },
+    );
+  });
+
+  it("--all streams all pages", async () => {
+    (ns.recruiter.searchFromUrl as Mock)
+      .mockResolvedValueOnce({ data: [{ id: "1" }], cursor: "cur_1" })
+      .mockResolvedValueOnce({ data: [{ id: "2" }], cursor: null });
+
+    const { runRecruiterSearchFromUrl } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchFromUrl(client as never, { account: "acc_1", url: "https://linkedin.com/x", all: true, json: true }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("\n");
+    const lines = written.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
+  });
+
+  it("rejects --preview (read command)", async () => {
+    const { runRecruiterSearchFromUrl } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterSearchFromUrl(client as never, { account: "acc_1", url: "https://linkedin.com/x", preview: true }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.searchFromUrl).not.toHaveBeenCalled();
+  });
+});
+
 // ─── recruiter projects ────────────────────────────────────────────────────
 
 describe("recruiter projects", () => {
@@ -812,6 +904,387 @@ describe("recruiter project", () => {
 
     // project_id is a native id — must NOT be URL-resolved
     expect(ns.recruiter.getProject).toHaveBeenCalledWith("proj_abc");
+  });
+});
+
+// ─── recruiter project update <project_id> ────────────────────────────────
+
+describe("recruiter project update", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.updateProject as Mock).mockResolvedValue({ object: "recruiter_project_updated" });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.updateProject with projectId verbatim + only the provided fields", async () => {
+    const { runRecruiterUpdateProject } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterUpdateProject(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      name: "Q3 Backend Hiring",
+      visibility: "SHARED",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.updateProject).toHaveBeenCalledWith("proj_9", { name: "Q3 Backend Hiring", visibility: "SHARED" });
+  });
+
+  it("--preview renders request, does not call updateProject", async () => {
+    const { runRecruiterUpdateProject } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterUpdateProject(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      name: "Renamed",
+      preview: true,
+    }, out);
+
+    expect(ns.recruiter.updateProject).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.method).toBe("recruiter.updateProject");
+    expect(parsed.body).toEqual({ name: "Renamed" });
+  });
+});
+
+// ─── recruiter pipeline <project_id> ──────────────────────────────────────
+
+describe("recruiter pipeline", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.listPipeline as Mock).mockResolvedValue({ items: [{ id: "cand_1" }], cursor: null });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.listPipeline with projectId verbatim (read, no --channel-id requirement)", async () => {
+    const { runRecruiterListPipeline } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterListPipeline(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      json: true,
+    }, out);
+
+    const calls = (ns.recruiter.listPipeline as Mock).mock.calls;
+    expect(calls[0]![0]).toBe("proj_9");
+  });
+
+  it("--stage-id / --keywords filter into the body", async () => {
+    const { runRecruiterListPipeline } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterListPipeline(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      "stage-id": "sta_1",
+      keywords: "backend",
+      json: true,
+    }, out);
+
+    const calls = (ns.recruiter.listPipeline as Mock).mock.calls;
+    expect(calls[0]![1]).toEqual(expect.objectContaining({ stage_id: "sta_1", keywords: "backend" }));
+  });
+
+  it("--all streams all pages", async () => {
+    (ns.recruiter.listPipeline as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "cand_1" }], cursor: "cur_1" })
+      .mockResolvedValueOnce({ items: [{ id: "cand_2" }], cursor: null });
+
+    const { runRecruiterListPipeline } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterListPipeline(client as never, { account: "acc_1", projectId: "proj_9", all: true, json: true }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("\n");
+    const lines = written.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
+  });
+
+  it("rejects --preview (read command)", async () => {
+    const { runRecruiterListPipeline } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterListPipeline(client as never, { account: "acc_1", projectId: "proj_9", preview: true }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.recruiter.listPipeline).not.toHaveBeenCalled();
+  });
+});
+
+// ─── recruiter project-job get/budget <project_id> [<job_id>] ─────────────
+
+describe("recruiter project-job get", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.getProjectJob as Mock).mockResolvedValue({ object: "recruiter_job_posting", id: "job_1", project_id: "proj_9" });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.getProjectJob with projectId verbatim (singular, not a list)", async () => {
+    const { runRecruiterGetProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetProjectJob(client as never, { account: "acc_1", projectId: "proj_9", json: true }, out);
+
+    expect(ns.recruiter.getProjectJob).toHaveBeenCalledWith("proj_9");
+  });
+
+  it("404 RESOURCE_NOT_FOUND (no job attached) surfaces as exit 4", async () => {
+    const err = Object.assign(new Error("not found"), {
+      code: "RESOURCE_NOT_FOUND",
+      userFixable: true,
+      retryLikelyToSucceed: false,
+      toJSON: () => ({ code: "RESOURCE_NOT_FOUND", message: "not found" }),
+    });
+    const { CurviateError } = await import("@curviate/sdk");
+    Object.setPrototypeOf(err, CurviateError.prototype);
+    (ns.recruiter.getProjectJob as Mock).mockRejectedValue(err);
+
+    const { runRecruiterGetProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterGetProjectJob(client as never, { account: "acc_1", projectId: "proj_9", json: true }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+});
+
+describe("recruiter project-job budget", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.getProjectJobBudget as Mock).mockResolvedValue({ object: "recruiter_job_posting_budget", promoted: {}, free: { eligible: true } });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.getProjectJobBudget with projectId + jobId verbatim", async () => {
+    const { runRecruiterGetProjectJobBudget } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetProjectJobBudget(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      jobId: "job_42",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.getProjectJobBudget).toHaveBeenCalledWith("proj_9", "job_42");
+  });
+});
+
+// A complete recruiter-job-body flag set — the required set per the v2
+// createProjectJob schema (job_title, company, workplace_type, location,
+// employment_status, seniority_level, description, industry, job_function,
+// apply_method). Shared by project-job create's happy-path + misuse tests.
+const FULL_RECRUITER_JOB_FLAGS = {
+  "job-title-id": "title_1",
+  "job-title": "Senior Backend Engineer",
+  "company-id": "comp_1",
+  "workplace-type": "REMOTE",
+  location: "loc_1",
+  "employment-status": "FULL_TIME",
+  "seniority-level": "MID_SENIOR_LEVEL",
+  description: "Build agents.",
+  industry: "ind_1,ind_2",
+  "job-function": "fn_1",
+  "apply-method": "linkedin",
+  "notification-email": "jobs@example.com",
+};
+
+const FULL_RECRUITER_JOB_BODY = {
+  job_title: { id: "title_1", name: "Senior Backend Engineer" },
+  company: { id: "comp_1" },
+  workplace_type: "REMOTE",
+  location: "loc_1",
+  employment_status: "FULL_TIME",
+  seniority_level: "MID_SENIOR_LEVEL",
+  description: "Build agents.",
+  industry: ["ind_1", "ind_2"],
+  job_function: ["fn_1"],
+  apply_method: { method: "linkedin", notification_email: "jobs@example.com" },
+};
+
+describe("recruiter project-job create", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.createProjectJob as Mock).mockResolvedValue({ object: "recruiter_job_posting", id: "job_new" });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("assembles the full body from scalar flags and calls createProjectJob(projectId, body)", async () => {
+    const { runRecruiterCreateProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterCreateProjectJob(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      ...FULL_RECRUITER_JOB_FLAGS,
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.createProjectJob).toHaveBeenCalledWith("proj_9", FULL_RECRUITER_JOB_BODY);
+  });
+
+  it.each([
+    ["job-title-id", "--job-title-id"],
+    ["company-id", "--company-id"],
+    ["workplace-type", "--workplace-type"],
+    ["location", "--location"],
+    ["employment-status", "--employment-status"],
+    ["seniority-level", "--seniority-level"],
+    ["description", "--description"],
+    ["industry", "--industry"],
+    ["job-function", "--job-function"],
+    ["apply-method", "--apply-method"],
+  ])("missing %s exits 2 naming %s, before any SDK call", async (flagKey, flagName) => {
+    const { runRecruiterCreateProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    const flags = { ...FULL_RECRUITER_JOB_FLAGS } as Record<string, string | undefined>;
+    delete flags[flagKey];
+    // job_title needs BOTH id and name dropped together to actually remove
+    // the key from the assembled body when the id half is what's under test.
+    if (flagKey === "job-title-id") delete flags["job-title"];
+
+    try {
+      await runRecruiterCreateProjectJob(client as never, {
+        account: "acc_1",
+        projectId: "proj_9",
+        ...flags,
+      }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain(flagName);
+    expect(ns.recruiter.createProjectJob).not.toHaveBeenCalled();
+  });
+
+  it("--preview shows the assembled body, does not call createProjectJob", async () => {
+    const { runRecruiterCreateProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterCreateProjectJob(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      ...FULL_RECRUITER_JOB_FLAGS,
+      preview: true,
+    }, out);
+
+    expect(ns.recruiter.createProjectJob).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.method).toBe("recruiter.createProjectJob");
+    expect(parsed.body).toEqual(FULL_RECRUITER_JOB_BODY);
+  });
+});
+
+describe("recruiter project-job update", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.updateProjectJob as Mock).mockResolvedValue({ object: "recruiter_job_posting_edited" });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("PATCH semantics — only the supplied fields are sent, no required-field validation", async () => {
+    const { runRecruiterUpdateProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterUpdateProjectJob(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      jobId: "job_42",
+      description: "New description.",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.updateProjectJob).toHaveBeenCalledWith("proj_9", "job_42", { description: "New description." });
+  });
+
+  it("--preview renders request, does not call updateProjectJob", async () => {
+    const { runRecruiterUpdateProjectJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterUpdateProjectJob(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      jobId: "job_42",
+      "workplace-type": "HYBRID",
+      preview: true,
+    }, out);
+
+    expect(ns.recruiter.updateProjectJob).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.method).toBe("recruiter.updateProjectJob");
+    expect(parsed.body).toEqual({ workplace_type: "HYBRID" });
   });
 });
 
@@ -1169,21 +1642,21 @@ describe("recruiter job create", () => {
     };
   }
 
-  // A complete job-create body. project_name is the genuinely new v2
-  // top-level requirement (createJob always opens a brand-new project);
-  // the remaining fields document the pre-v2 shape the scalar convenience
-  // flags (--job-title/--employment-type) still write (a known re-point gap,
-  // see the KNOWN v2 GAP comment on assembleJobCreateBody) — the CLI does
-  // not itself validate their shape, so this fixture is not asserting they
-  // are v2-correct, only that the body-assembly pipeline (JSON source +
-  // scalar overlay + project_name) wires every field through untouched.
+  // A complete v2 job-create body (project_name + the full recruiter-job-body
+  // required set: job_title, company, workplace_type, location,
+  // employment_status, seniority_level, description, industry, job_function,
+  // apply_method — the v2 createJob schema).
   const FULL_BODY = {
-    job_title: { text: "Senior AI Engineer" },
+    job_title: { id: "title_1", name: "Senior AI Engineer" },
     company: { id: "1441" },
-    workplace: "REMOTE",
+    workplace_type: "REMOTE",
     location: "103644278",
+    employment_status: "FULL_TIME",
+    seniority_level: "MID_SENIOR_LEVEL",
     description: "<p>Build agents.</p>",
-    recruiter: { project: { id: "proj_1" } },
+    industry: ["ind_1"],
+    job_function: ["fn_1"],
+    apply_method: { method: "linkedin", notification_email: "jobs@example.com" },
     project_name: "Q3 Hiring",
   };
 
@@ -1221,7 +1694,7 @@ describe("recruiter job create", () => {
     const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
     expect(body).toEqual(FULL_BODY);
     // Spot-check the required keys are all present with correct names.
-    for (const k of ["job_title", "company", "workplace", "location", "description", "recruiter"]) {
+    for (const k of ["job_title", "company", "workplace_type", "location", "employment_status", "seniority_level", "description", "industry", "job_function", "apply_method"]) {
       expect(body).toHaveProperty(k);
     }
   });
@@ -1247,48 +1720,48 @@ describe("recruiter job create", () => {
     const out = makeOut();
     // JSON sets job_title/description; the scalar flags must override them.
     const readers = makeReaders({
-      stdin: JSON.stringify({ ...FULL_BODY, description: "OLD", employment_type: "PART_TIME" }),
+      stdin: JSON.stringify({ ...FULL_BODY, description: "OLD", employment_status: "PART_TIME" }),
     });
 
     await runRecruiterCreateJob(client as never, {
       account: "acc_1",
       body: "-",
+      "job-title-id": "title_2",
       "job-title": "Staff Engineer",
       description: "NEW",
-      "employment-type": "FULL_TIME",
+      "employment-status": "FULL_TIME",
       json: true,
     }, out, readers);
 
     const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    // --job-title maps to job_title.text (job_title is an object in the API).
-    expect(body["job_title"]).toEqual({ text: "Staff Engineer" });
+    // --job-title-id/--job-title map to job_title:{id,name} (an object in the API).
+    expect(body["job_title"]).toEqual({ id: "title_2", name: "Staff Engineer" });
     expect(body["description"]).toBe("NEW");
-    expect(body["employment_type"]).toBe("FULL_TIME");
+    expect(body["employment_status"]).toBe("FULL_TIME");
     // Untouched JSON fields survive.
     expect(body["company"]).toEqual(FULL_BODY.company);
-    expect(body["recruiter"]).toEqual(FULL_BODY.recruiter);
+    expect(body["apply_method"]).toEqual(FULL_BODY.apply_method);
   });
 
-  it("scalar flags alone (no JSON source) assemble a partial body", async () => {
+  it("scalar flags alone (no JSON source) assemble the full required body", async () => {
     const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
 
     await runRecruiterCreateJob(client as never, {
       account: "acc_1",
-      "job-title": "Engineer",
-      description: "Build things",
+      ...FULL_RECRUITER_JOB_FLAGS,
       "project-name": "Q3 Hiring",
       json: true,
     }, out);
 
     const body = (ns.recruiter.createJob as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    expect(body).toEqual({ job_title: { text: "Engineer" }, description: "Build things", project_name: "Q3 Hiring" });
+    expect(body).toEqual({ ...FULL_RECRUITER_JOB_BODY, project_name: "Q3 Hiring" });
   });
 
   // ── v2's createJob always opens a brand-new project; project_name is a
-  // genuinely new top-level requirement (not a rename) — validated
-  // client-side the same way as other newly-required re-point fields.
-  it("missing project_name (no --project-name, no project_name in JSON) exits 2 before any SDK call", async () => {
+  // genuinely new top-level requirement (not a rename) — folded into the
+  // shared required-fields check alongside the rest of the job body.
+  it("missing project_name (no --project-name, no project_name in JSON) exits 2 naming --project-name, before any SDK call", async () => {
     const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
     const exitSpy = mockExit();
@@ -1296,8 +1769,7 @@ describe("recruiter job create", () => {
     try {
       await runRecruiterCreateJob(client as never, {
         account: "acc_1",
-        "job-title": "Engineer",
-        description: "Build things",
+        ...FULL_RECRUITER_JOB_FLAGS,
       }, out);
       expect.fail("should have exited");
     } catch (e) {
@@ -1305,6 +1777,32 @@ describe("recruiter job create", () => {
     } finally {
       exitSpy.mockRestore();
     }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--project-name");
+    expect(ns.recruiter.createJob).not.toHaveBeenCalled();
+  });
+
+  it("missing a required job-body field (e.g. --workplace-type) exits 2 naming the flag, before any SDK call", async () => {
+    const { runRecruiterCreateJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+    const flags = { ...FULL_RECRUITER_JOB_FLAGS } as Record<string, string | undefined>;
+    delete flags["workplace-type"];
+
+    try {
+      await runRecruiterCreateJob(client as never, {
+        account: "acc_1",
+        ...flags,
+        "project-name": "Q3 Hiring",
+      }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--workplace-type");
     expect(ns.recruiter.createJob).not.toHaveBeenCalled();
   });
 
@@ -1358,6 +1856,7 @@ describe("recruiter job create", () => {
     await runRecruiterCreateJob(client as never, {
       account: "acc_1",
       body: "-",
+      "job-title-id": "title_9",
       "job-title": "Lead Engineer",
       preview: true,
     }, out, readers);
@@ -1367,7 +1866,7 @@ describe("recruiter job create", () => {
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("recruiter.createJob");
     // Honest preview: the assembled body carries the merged scalar override.
-    expect(parsed.body.job_title).toEqual({ text: "Lead Engineer" });
+    expect(parsed.body.job_title).toEqual({ id: "title_9", name: "Lead Engineer" });
     expect(parsed.body.company).toEqual(FULL_BODY.company);
   });
 });
@@ -1424,6 +1923,177 @@ describe("recruiter job publish", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("recruiter.publishJob");
+  });
+
+  it("--mode PROMOTED with --budget-* publishes with the budget object", async () => {
+    const { runRecruiterPublishJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterPublishJob(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      jobId: "job_42",
+      mode: "PROMOTED",
+      "budget-currency": "EUR",
+      "budget-amount": "25",
+      "budget-scope": "DAILY",
+      json: true,
+    }, out);
+
+    expect(ns.recruiter.publishJob).toHaveBeenCalledWith(
+      "proj_9",
+      "job_42",
+      { mode: "PROMOTED", budget: { currency: "EUR", amount: 25, scope: "DAILY" } },
+    );
+  });
+
+  it("without --mode exits 2 naming --mode, no SDK call", async () => {
+    const { runRecruiterPublishJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterPublishJob(client as never, { account: "acc_1", projectId: "proj_9", jobId: "job_42" }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--mode");
+    expect(ns.recruiter.publishJob).not.toHaveBeenCalled();
+  });
+
+  it("--mode PROMOTED without --budget-* exits 2 naming --budget-currency, no SDK call", async () => {
+    const { runRecruiterPublishJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterPublishJob(client as never, { account: "acc_1", projectId: "proj_9", jobId: "job_42", mode: "PROMOTED" }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--budget-currency");
+    expect(ns.recruiter.publishJob).not.toHaveBeenCalled();
+  });
+});
+
+// ─── recruiter job close <project_id> <job_id> ────────────────────────────
+
+describe("recruiter job close", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.closeJob as Mock).mockResolvedValue({ object: "recruiter_job_posting_closed" });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.closeJob with projectId + jobId verbatim, bodyless", async () => {
+    const { runRecruiterCloseJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterCloseJob(client as never, { account: "acc_1", projectId: "proj_9", jobId: "job_42", json: true }, out);
+
+    expect(ns.recruiter.closeJob).toHaveBeenCalledWith("proj_9", "job_42");
+  });
+
+  it("--preview renders request, does not call closeJob", async () => {
+    const { runRecruiterCloseJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterCloseJob(client as never, { account: "acc_1", projectId: "proj_9", jobId: "job_42", preview: true }, out);
+
+    expect(ns.recruiter.closeJob).not.toHaveBeenCalled();
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const parsed = JSON.parse(written);
+    expect(parsed.method).toBe("recruiter.closeJob");
+  });
+});
+
+// ─── recruiter talent-search <project_id> --channel-id <id> ───────────────
+
+describe("recruiter talent-search", () => {
+  let ns: ReturnType<typeof makeRecruiterNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeRecruiterNs();
+    client = makeClient(ns);
+    (ns.recruiter.searchTalentPool as Mock).mockResolvedValue({ items: [{ id: "cand_1" }], cursor: null });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls recruiter.searchTalentPool with projectId verbatim and channel_id in the body", async () => {
+    const { runRecruiterSearchTalentPool } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchTalentPool(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      "channel-id": "ch_1",
+      keywords: "backend",
+      json: true,
+    }, out);
+
+    const calls = (ns.recruiter.searchTalentPool as Mock).mock.calls;
+    expect(calls[0]![0]).toBe("proj_9");
+    expect(calls[0]![1]).toEqual(expect.objectContaining({ channel_id: "ch_1", keywords: "backend" }));
+  });
+
+  it("missing --channel-id exits 2 before any SDK call", async () => {
+    const { runRecruiterSearchTalentPool } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runRecruiterSearchTalentPool(client as never, { account: "acc_1", projectId: "proj_9", json: true }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--channel-id");
+    expect(ns.recruiter.searchTalentPool).not.toHaveBeenCalled();
+  });
+
+  it("--all streams all pages", async () => {
+    (ns.recruiter.searchTalentPool as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "cand_1" }], cursor: "cur_1" })
+      .mockResolvedValueOnce({ items: [{ id: "cand_2" }], cursor: null });
+
+    const { runRecruiterSearchTalentPool } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterSearchTalentPool(client as never, {
+      account: "acc_1",
+      projectId: "proj_9",
+      "channel-id": "ch_1",
+      all: true,
+      json: true,
+    }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("\n");
+    const lines = written.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
   });
 });
 
