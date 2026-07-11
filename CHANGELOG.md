@@ -6,6 +6,90 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.15.0] - 2026-07-11
+
+Full v2 API-surface parity — the coupled release with `@curviate/sdk` 0.15.0. A large
+**breaking** minor (pre-1.0): the CLI is re-pointed onto the v2-only API, drops the
+commands whose endpoint no longer exists, relocates several verbs, and adds commands for
+the new v2 methods. Every command noun kept its intent-shaped name; only the wiring,
+removed orphans, relocations, and additions changed.
+
+### Removed (BREAKING)
+
+Commands whose underlying v2 endpoint no longer exists:
+
+- **`account connect-link`**, **`account reconnect-link`**, **`account reconnect`** — the hosted-link and in-place re-auth flows. Connect a new account with `account link`; poll a hosted session with `account connect-session poll`.
+- **`company followers`**
+- **`inbox sync`**, **`inbox sync-chat`** — message history now syncs implicitly.
+- **`post list`**
+- **`recruiter sync`**, **`recruiter add-applicant`**, **`recruiter reject-applicant`**, **`recruiter job checkpoint`**
+- **`sales-nav sync`**
+- **`webhook state-diff`**
+
+Flags with no v2 request-side home — dropped entirely (not defined, parsed, or forwarded), with no replacement:
+
+- **`profile --notify`** — signal-a-view has no v2 request field.
+- **`message inmail --surface`** — the v2 send-InMail body carries no surface/type discriminator.
+- **`post create --video-thumbnail`** — v2 posts carry media only via `--attach`.
+- **`search people|companies|posts|jobs --url`** — from-URL search is now the bare `search <url>` form.
+
+### Changed (BREAKING)
+
+Renames and relocations:
+
+- **`post comment`** / **`post comments`** (and `post react --comment-id`) → the new **`comment`** group (`comment add`, `comment reply`, `comment react`, and the rest). Comment threads are first-class.
+- **`connect respond --accept` / `--decline`** → **`connect accept <id>`** / **`connect decline <id>`**; the combined `respond` is removed.
+- **`recruiter add-candidate`** → **`recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>`** (full body reshape).
+- **`recruiter project-jobs`** → **`recruiter project-job get <project_id>`** (cardinality fix — a project has at most one attached posting; single-object read, no pagination).
+- **`recruiter job applicants`** → **`recruiter applicants <project_id>`** (the applicant list is project-scoped, not job-scoped; `--channel-id` still required).
+- **`profile connections`** → **`profile relations`**.
+
+CLI-visible shape changes:
+
+- **`job publish`** now requires **`--mode`** (`FREE | PROMOTED | PROMOTED_PLUS`); `PROMOTED`/`PROMOTED_PLUS` additionally require the full `--budget-*` triple.
+- **`recruiter job create`** now requires **`--project-name`** and takes the full v2 job body — `--employment-status` replaces the pre-v2 `--employment-type` on this command, alongside the company / workplace / location flags.
+- **`recruiter message new`** is now **JSON-only** (file/voice/video attachments ride the body as base64 — no multipart) and requires **`--subject`** and **`--signature`**.
+
+Dependency and request grammar:
+
+- **`@curviate/sdk` bumped to `0.15.0`.**
+- **Account-first path grammar.** Every account-scoped request now addresses the account in the URL path instead of a query/body field. This is handled entirely inside the SDK — no CLI syntax changes — but every command's underlying request moved.
+
+### Added
+
+New **`comment`** command group (the comment-thread surface):
+
+- `comment list <post_id>`, `comment add`, `comment reply`, `comment edit`, `comment delete`, `comment replies`, `comment react`, `comment reactions`, `comment unreact`, `comment user`.
+
+Job-posting management — the **`job`** family:
+
+- `job list`, `job create`, `job update`, `job budget`, `job publish`, `job close`, `job applicants`, `job applicant get`, and `job applicant resume` (binary résumé download via `-o`).
+
+Profile:
+
+- `profile update`, `profile follow`, `profile unfollow`, `profile following` (alongside `profile followers`).
+
+Posts:
+
+- `post delete`, `post unreact`, `post user-posts`, `post user-reactions`.
+
+Search and inbox:
+
+- `search <url>` (run a pasted search / saved-search / lead-list URL directly), `inbox mark-read`.
+
+Recruiter (project-centric surface):
+
+- `recruiter projects`, `recruiter project`, `recruiter project update`, `recruiter pipeline`, `recruiter project-job get|create|budget|update`, `recruiter talent-search`, `recruiter save-candidate`, `recruiter applicants`, `recruiter applicant get|resume`, plus `recruiter job close` and `recruiter search <url>`.
+
+Sales Navigator:
+
+- `sales-nav search <url>`, plus the v2 list surface: `sales-nav account-lists`, `lead-lists`, `browse-account-list`, `browse-lead-list`, `save-account`.
+
+### Notes — no user action required
+
+- **`profile endorse`**: the substrate renamed the endorsement body field; the CLI `--skill <id>` flag and its usage are unchanged.
+- **`post react --as-organization`**: unchanged at the flag level; only the internal wire key was renamed, so the flag behaves exactly as before.
+
 ## [0.14.0] - 2026-07-07
 
 Webhooks surface cascade — the coupled release with `@curviate/sdk` 0.14.0. Additive minor.
