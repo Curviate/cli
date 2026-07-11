@@ -1,10 +1,6 @@
 /**
- * SDK-parity test — asserts the CLI provides exactly one command for each of
- * the SDK's 93 public resource methods.
- *
- * (Was 88: `salesNavigator` gained the 5-method v2 list-surface cascade,
- * 7→12: 88 + 5 = 93. `saveLead`'s breaking re-signature does not change the
- * method count.)
+ * SDK-parity test — asserts the CLI provides exactly one primary command for
+ * each of the SDK's 115 public resource methods (the full v2 surface).
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -13,10 +9,21 @@
  *   3. The test asserts:
  *      (a) every manifest entry resolves to an existing SDK method,
  *      (b) every SDK method is covered by exactly one manifest entry,
- *      (c) the total mapped-method count is 93.
+ *      (c) the total mapped-method count is 115.
  *
- * A negative fixture at the bottom demonstrates that removing an SDK method
- * causes the bijection assertion to fail.
+ * The manifest holds exactly ONE counted entry per SDK method. Five convenience
+ * routes are intentionally NOT counted (they reuse coverage a canonical command
+ * already provides, so a separate entry would double-cover its method and break
+ * the bijection):
+ *   - `profile me`            → users.get('me')          (alias of `profile get`)
+ *   - `profile … --posts`     → posts.listUserPosts      (alias of `post user-posts`)
+ *   - `profile … --comments`  → comments.listUserComments(alias of `comment user`)
+ *   - `profile … --reactions` → posts.listUserReactions  (alias of `post user-reactions`)
+ *   - `profile … --followers` → users.listFollowers      (alias of `profile followers`)
+ *
+ * A negative-guard block at the bottom demonstrates that the bijection fails
+ * when a manifest entry references a missing method, or when a real method is
+ * left uncovered.
  */
 
 import { describe, it, expect } from "vitest";
@@ -27,30 +34,36 @@ import { describe, it, expect } from "vitest";
 //
 // Format: "cli command path" → "sdkNamespace.methodName"
 // The left side is documentation only; the right side is machine-checked.
-// `webhook verify` is intentionally absent — it calls constructEvent offline,
-// not an SDK resource method.
+// `webhook verify`, `login`, and `config *` are intentionally absent — they
+// call no SDK resource method (offline HMAC / local config management).
 
 const PARITY_MANIFEST: Record<string, string> = {
-  // accounts (12)
-  "account list":                "accounts.list",
-  "account get":                 "accounts.get",
-  "account link":                "accounts.link",
-  "account connect-link":        "accounts.createConnectLink",
-  "account reconnect-link":      "accounts.createReconnectLink",
-  "account connect-session poll": "accounts.getConnectSession",
-  "account reconnect":           "accounts.reconnect",
-  "account update":              "accounts.update",
-  "account disconnect":          "accounts.disconnect",
-  "account checkpoint solve":    "accounts.solveCheckpoint",
-  "account checkpoint poll":     "accounts.pollCheckpoint",
-  "account checkpoint request":  "accounts.requestCheckpoint",
+  // accounts (4)
+  "account list":       "accounts.list",
+  "account get":        "accounts.get",
+  "account update":     "accounts.update",
+  "account disconnect": "accounts.disconnect",
 
-  // messaging (14)
+  // webhooks (6)
+  "webhook create": "webhooks.create",
+  "webhook list":   "webhooks.list",
+  "webhook events": "webhooks.listEvents",
+  "webhook get":    "webhooks.get",
+  "webhook update": "webhooks.update",
+  "webhook delete": "webhooks.delete",
+
+  // auth (5) — mounted under the `account` noun (intent-shaped tree)
+  "account link":                 "auth.intent",
+  "account checkpoint solve":     "auth.solveCheckpoint",
+  "account checkpoint request":   "auth.requestCheckpoint",
+  "account checkpoint poll":      "auth.pollCheckpoint",
+  "account connect-session poll": "auth.getSession",
+
+  // messaging (12) — split across the `inbox` and `message` nouns
   "inbox list":             "messaging.listChats",
   "inbox get":              "messaging.getChat",
   "inbox messages":         "messaging.listMessages",
-  "inbox sync":             "messaging.syncMessages",
-  "inbox sync-chat":        "messaging.syncChat",
+  "inbox mark-read":        "messaging.markChatRead",
   "message new":            "messaging.startChat",
   "message send":           "messaging.sendMessage",
   "message get":            "messaging.getMessage",
@@ -59,93 +72,115 @@ const PARITY_MANIFEST: Record<string, string> = {
   "message react":          "messaging.addReaction",
   "message attachment":     "messaging.getAttachment",
   "message inmail":         "messaging.sendInMail",
-  "message inmail-balance": "messaging.getInMailBalance",
 
-  // profiles (8) — getCompany removed (hard-moved to companies.get, below)
-  "profile me":          "profiles.getMe",
-  "profile get":         "profiles.get",
-  "profile connections": "profiles.listConnections",
-  "profile followers":   "profiles.listFollowers",
-  "profile posts":       "profiles.listPosts",
-  "profile comments":    "profiles.listComments",
-  "profile reactions":   "profiles.listReactions",
-  "profile endorse":     "profiles.endorse",
+  // users (9) — mounted under the `profile` noun (+ inmail-balance under message)
+  "profile get":            "users.get",
+  "profile relations":      "users.listRelations",
+  "profile followers":      "users.listFollowers",
+  "profile following":      "users.listFollowing",
+  "profile follow":         "users.follow",
+  "profile unfollow":       "users.unfollow",
+  "profile update":         "users.update",
+  "profile endorse":        "users.endorseSkill",
+  "message inmail-balance": "users.getInMailCredits",
 
-  // companies (5)
-  "company get":       "companies.get",
-  "company employees": "companies.employees",
-  "company posts":     "companies.posts",
-  "company jobs":      "companies.jobs",
-  "company followers": "companies.followers",
-
-  // invites (5)
+  // invites (6) — mounted under the `connect` noun
   "connect send":     "invites.send",
   "connect sent":     "invites.listSent",
   "connect received": "invites.listReceived",
-  "connect respond":  "invites.respond",
+  "connect accept":   "invites.accept",
+  "connect decline":  "invites.decline",
   "connect cancel":   "invites.cancel",
 
-  // search (5)
-  "search parameters": "search.getParameters",
+  // search (6)
+  "search":            "search.fromUrl",
   "search people":     "search.people",
   "search companies":  "search.companies",
   "search posts":      "search.posts",
   "search jobs":       "search.jobs",
+  "search parameters": "search.getParameters",
 
-  // posts (7)
-  "post list":      "posts.list",
-  "post get":       "posts.get",
-  "post create":    "posts.create",
-  "post comments":  "posts.listComments",
-  "post comment":   "posts.comment",
-  "post reactions": "posts.listReactions",
-  "post react":     "posts.react",
+  // posts (9) — `comment list` wraps posts.listComments (the comment group)
+  "post get":            "posts.get",
+  "post create":         "posts.create",
+  "post react":          "posts.react",
+  "post reactions":      "posts.listReactions",
+  "post delete":         "posts.delete",
+  "post unreact":        "posts.unreact",
+  "post user-posts":     "posts.listUserPosts",
+  "post user-reactions": "posts.listUserReactions",
+  "comment list":        "posts.listComments",
 
-  // salesNavigator (12) — 7 v1 + 5 v2 list-surface cascade
-  "sales-nav search-people":       "salesNavigator.searchPeople",
-  "sales-nav search-companies":    "salesNavigator.searchCompanies",
-  "sales-nav parameters":          "salesNavigator.getParameters",
-  "sales-nav message":             "salesNavigator.startChat",
+  // salesNavigator (12)
+  "sales-nav search people":       "salesNavigator.searchPeople",
+  "sales-nav search companies":    "salesNavigator.searchCompanies",
+  "sales-nav search parameters":   "salesNavigator.getParameters",
+  "sales-nav search":              "salesNavigator.searchFromUrl",
+  "sales-nav message new":         "salesNavigator.startChat",
   "sales-nav profile":             "salesNavigator.getProfile",
   "sales-nav save-lead":           "salesNavigator.saveLead",
-  "sales-nav sync":                "salesNavigator.syncMessages",
   "sales-nav account-lists":       "salesNavigator.accountLists",
   "sales-nav lead-lists":          "salesNavigator.leadLists",
   "sales-nav browse-account-list": "salesNavigator.browseAccountList",
   "sales-nav browse-lead-list":    "salesNavigator.browseLeadList",
   "sales-nav save-account":        "salesNavigator.saveAccount",
 
-  // recruiter (17)
-  "recruiter sync":               "recruiter.syncMessages",
-  "recruiter message":            "recruiter.startChat",
-  "recruiter profile":            "recruiter.getProfile",
-  "recruiter search":             "recruiter.searchPeople",
-  "recruiter parameters":         "recruiter.getParameters",
-  "recruiter projects":           "recruiter.listProjects",
-  "recruiter project":            "recruiter.getProject",
-  "recruiter add-candidate":      "recruiter.addCandidate",
-  "recruiter add-applicant":      "recruiter.addApplicant",
-  "recruiter reject-applicant":   "recruiter.rejectApplicant",
-  "recruiter jobs":               "recruiter.listJobs",
-  "recruiter job create":         "recruiter.createJob",
-  "recruiter job publish":        "recruiter.publishJob",
-  "recruiter job checkpoint":     "recruiter.solveJobCheckpoint",
-  "recruiter job applicants":     "recruiter.listApplicants",
-  "recruiter applicant":          "recruiter.getApplicant",
-  "recruiter applicant resume":   "recruiter.downloadResume",
-  "recruiter job get":            "recruiter.getJob",
+  // recruiter (23)
+  "recruiter profile":             "recruiter.getProfile",
+  "recruiter message new":         "recruiter.startChat",
+  "recruiter search people":       "recruiter.searchPeople",
+  "recruiter search parameters":   "recruiter.searchParameters",
+  "recruiter search":              "recruiter.searchFromUrl",
+  "recruiter talent-search":       "recruiter.searchTalentPool",
+  "recruiter projects":            "recruiter.listProjects",
+  "recruiter project":             "recruiter.getProject",
+  "recruiter project update":      "recruiter.updateProject",
+  "recruiter pipeline":            "recruiter.listPipeline",
+  "recruiter project-job get":     "recruiter.getProjectJob",
+  "recruiter project-job create":  "recruiter.createProjectJob",
+  "recruiter project-job budget":  "recruiter.getProjectJobBudget",
+  "recruiter project-job update":  "recruiter.updateProjectJob",
+  "recruiter save-candidate":      "recruiter.saveCandidate",
+  "recruiter applicants":          "recruiter.listApplicants",
+  "recruiter jobs":                "recruiter.listJobs",
+  "recruiter job create":          "recruiter.createJob",
+  "recruiter job publish":         "recruiter.publishJob",
+  "recruiter job close":           "recruiter.closeJob",
+  "recruiter job get":             "recruiter.getJob",
+  "recruiter applicant get":       "recruiter.getApplicant",
+  "recruiter applicant resume":    "recruiter.downloadResume",
 
-  // jobs (1)
-  "job get": "jobs.get",
+  // jobs (10)
+  "job get":              "jobs.get",
+  "job list":             "jobs.list",
+  "job create":           "jobs.create",
+  "job update":           "jobs.update",
+  "job budget":           "jobs.getBudget",
+  "job publish":          "jobs.publish",
+  "job close":            "jobs.close",
+  "job applicants":       "jobs.listApplicants",
+  "job applicant get":    "jobs.getApplicant",
+  "job applicant resume": "jobs.downloadResume",
 
-  // webhooks (6)
-  "webhook create":     "webhooks.create",
-  "webhook list":       "webhooks.list",
-  "webhook events":     "webhooks.listEvents",
-  "webhook update":     "webhooks.update",
-  "webhook delete":     "webhooks.delete",
-  "webhook state-diff": "webhooks.getStateDiff",
+  // companies (4)
+  "company get":       "companies.get",
+  "company employees": "companies.employees",
+  "company posts":     "companies.posts",
+  "company jobs":      "companies.jobs",
+
+  // comments (9)
+  "comment add":       "comments.create",
+  "comment reply":     "comments.reply",
+  "comment edit":      "comments.edit",
+  "comment delete":    "comments.delete",
+  "comment replies":   "comments.listReplies",
+  "comment react":     "comments.addReaction",
+  "comment reactions": "comments.listReactions",
+  "comment unreact":   "comments.removeReaction",
+  "comment user":      "comments.listUserComments",
 };
+
+const EXPECTED_METHOD_COUNT = 115;
 
 // ---------------------------------------------------------------------------
 // SDK method enumeration via client instance prototype inspection
@@ -160,19 +195,18 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
   const { Curviate } = await import("@curviate/sdk");
   const client = new Curviate({ apiKey: "rdc_live_parity_test_stub" });
 
-  // Each entry: [namespace key on the client, namespace key on account scope]
-  // The account-scoped namespaces are on client.account("x"), and the root
-  // namespaces (accounts, webhooks) are on the client directly.
+  // Root namespaces live on the client directly.
   const rootNamespaces: [string, object][] = [
     ["accounts", client.accounts],
     ["webhooks", client.webhooks],
+    ["auth", client.auth],
   ];
 
-  // account-scoped: pick them via client.account() — same classes, different context
+  // Account-scoped namespaces live on client.account(id).
   const scoped = client.account("stub_account_id");
   const scopedNamespaces: [string, object][] = [
     ["messaging", scoped.messaging],
-    ["profiles", scoped.profiles],
+    ["users", scoped.users],
     ["invites", scoped.invites],
     ["search", scoped.search],
     ["posts", scoped.posts],
@@ -180,6 +214,7 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
     ["recruiter", scoped.recruiter],
     ["jobs", scoped.jobs],
     ["companies", scoped.companies],
+    ["comments", scoped.comments],
   ];
 
   const methods = new Set<string>();
@@ -187,6 +222,7 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
     const proto = Object.getPrototypeOf(instance) as Record<string, unknown>;
     for (const name of Object.getOwnPropertyNames(proto)) {
       if (name === "constructor") continue;
+      if (typeof (instance as Record<string, unknown>)[name] !== "function") continue;
       methods.add(`${ns}.${name}`);
     }
   }
@@ -198,9 +234,9 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — command manifest", () => {
-  it("manifest has exactly 93 entries", () => {
+  it(`manifest has exactly ${EXPECTED_METHOD_COUNT} entries`, () => {
     const count = Object.keys(PARITY_MANIFEST).length;
-    expect(count, `manifest length should be 93, got ${count}`).toBe(93);
+    expect(count, `manifest length should be ${EXPECTED_METHOD_COUNT}, got ${count}`).toBe(EXPECTED_METHOD_COUNT);
   });
 
   it("every manifest entry maps to a real SDK method (no phantom references)", async () => {
@@ -252,35 +288,32 @@ describe("SDK parity — command manifest", () => {
     ).toHaveLength(0);
   });
 
-  it("SDK has exactly 93 public resource methods", async () => {
+  it(`SDK has exactly ${EXPECTED_METHOD_COUNT} public resource methods`, async () => {
     const sdkMethods = await buildSdkMethodSet();
-    expect(sdkMethods.size, `SDK has ${sdkMethods.size} public methods, expected 93`).toBe(93);
+    expect(
+      sdkMethods.size,
+      `SDK has ${sdkMethods.size} public methods, expected ${EXPECTED_METHOD_COUNT}`,
+    ).toBe(EXPECTED_METHOD_COUNT);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Negative guard — demonstrates the test fails when a method is removed
+// Negative guards — demonstrate the bijection fails on drift
 // ---------------------------------------------------------------------------
 
 describe("SDK parity — negative guard (injected phantom)", () => {
   it("bijection check detects a phantom manifest entry (non-existent SDK method)", async () => {
-    // Build a manifest that includes a method that does NOT exist on the SDK.
-    // The bijection assertion must detect it.
     const sdkMethods = await buildSdkMethodSet();
     const phantomMethod = "accounts.nonExistentMethod";
 
-    // Verify the phantom is not accidentally present in the SDK
     expect(sdkMethods.has(phantomMethod)).toBe(false);
 
-    // Simulate the check: a manifest with a phantom entry would be flagged
     const testManifest = { ...PARITY_MANIFEST, "account phantom": phantomMethod };
     const phantoms = Object.values(testManifest).filter((m) => !sdkMethods.has(m));
     expect(phantoms).toContain(phantomMethod);
   });
 
   it("bijection check detects a missing SDK method (uncovered method)", async () => {
-    // Simulate removing "accounts.list" from the manifest.
-    // The coverage check must report it as uncovered.
     const sdkMethods = await buildSdkMethodSet();
     const removedMethod = "accounts.list";
 
