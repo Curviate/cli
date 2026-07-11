@@ -4,13 +4,19 @@
  * Subcommands:
  *   connect <id> [--note <text>]            — send invitation (write, --preview OK)
  *   connect sent                            — list sent invitations (read)
- *   connect received                        — list received invitations (read; items carry shared_secret)
- *   connect respond <id> --action <a> --shared-secret <s>  — accept/decline (write, --preview OK)
+ *   connect received                        — list received invitations (read)
+ *   connect respond <id> --action <a>       — accept/decline (write, --preview OK)
  *   connect cancel <id>                     — cancel sent invitation (write, --preview OK)
  *
  * <id> for `connect <id>` passes through resolveIdentifier (member URL/slug/URN).
  * <id> for `respond` and `cancel` is an invitation_id — passed verbatim, NOT resolved.
  * All subcommands are account-scoped.
+ *
+ * v2 (sdk/007): the old combined `invites.respond(id, {action, shared_secret})`
+ * split into two dedicated, BODYLESS ops — `invites.accept` / `invites.decline`.
+ * `respond` keeps its noun (cli/008 FR-002 — noun tree stable) but now
+ * branches on --action to call the right one; --shared-secret has no v2 home
+ * (the accept/decline ops take no body at all) and is no longer accepted.
  */
 
 import { defineCommand } from "citty";
@@ -28,7 +34,6 @@ type ConnectFlags = {
   id?: string;
   note?: string;
   action?: string;
-  "shared-secret"?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -97,8 +102,10 @@ export async function runConnectSend(
   const rawId = flags.id ?? "";
   const resolvedId = resolveIdentifier(rawId);
 
-  const body: Record<string, unknown> = { recipient_identifier: resolvedId };
-  if (flags.note) body["message"] = flags.note;
+  const body = {
+    recipient_identifier: resolvedId,
+    ...(flags.note ? { message: flags.note } : {}),
+  };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -235,6 +242,10 @@ export async function runConnectReceived(
  * Run `connect respond <invitation_id> --action accept|decline`.
  * Write command — supports --preview.
  * invitation_id is NOT passed through resolveIdentifier.
+ *
+ * v2: dispatches to the bodyless `invites.accept`/`invites.decline` op that
+ * matches --action. --shared-secret is gone (no v2 home — accept/decline
+ * take no body).
  */
 export async function runConnectRespond(
   client: Curviate,
@@ -245,22 +256,19 @@ export async function runConnectRespond(
   // invitation_id passes verbatim — NOT URL-normalized
   const invitationId = flags.id ?? "";
   const action = flags.action ?? "";
-  const sharedSecret = flags["shared-secret"] ?? "";
-  if (!sharedSecret) {
-    out.stderr.write(
-      "error: --shared-secret is required. Read it from `connect received` " +
-        "(each item carries its per-invitation shared_secret).\n",
-    );
+
+  if (action !== "accept" && action !== "decline") {
+    out.stderr.write("error: --action must be 'accept' or 'decline'.\n");
     process.exit(2);
   }
 
-  const body = { action, shared_secret: sharedSecret };
+  const method = action === "accept" ? "invites.accept" : "invites.decline";
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "invites.respond",
+      method,
       args: { invitation_id: invitationId },
-      body,
+      body: {},
       account: accountId,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
@@ -271,7 +279,9 @@ export async function runConnectRespond(
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.invites.respond(invitationId, body);
+    const result = action === "accept"
+      ? await ns.invites.accept(invitationId)
+      : await ns.invites.decline(invitationId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -366,7 +376,7 @@ const connectReceivedCommand = defineCommand({
     name: "received",
     description:
       "Returns pending received invitations only — already-handled invitations are not returned. " +
-      "The `inviter.*` fields identify who sent the request. `specifics.shared_secret` is required for `connect respond`.",
+      "The `inviter.*` fields identify who sent the request. Use the `id` field with `connect respond`.",
   },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
@@ -397,12 +407,6 @@ const connectRespondCommand = defineCommand({
       description: "Invitation id to respond to — use the `id` field from `connect received`.",
     },
     action: { type: "string", description: "Response action: accept or decline.", required: true },
-    "shared-secret": {
-      type: "string",
-      description:
-        "Per-invitation shared secret — use `specifics.shared_secret` from the same `connect received` item.",
-      required: true,
-    },
   },
   async run({ args }) {
     const flags = args as ConnectFlags;

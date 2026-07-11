@@ -11,7 +11,8 @@ function makeAccountNs() {
       send: vi.fn(),
       listSent: vi.fn(),
       listReceived: vi.fn(),
-      respond: vi.fn(),
+      accept: vi.fn(),
+      decline: vi.fn(),
       cancel: vi.fn(),
     },
   };
@@ -27,7 +28,6 @@ type ConnectArgs = {
   id?: string;
   note?: string;
   action?: string;
-  "shared-secret"?: string;
   account?: string;
   json?: boolean;
   preview?: boolean;
@@ -53,7 +53,7 @@ describe("connect <id> — send invitation", () => {
     (accountNs.invites.send as Mock).mockResolvedValue({ status: "sent" });
     (accountNs.invites.listSent as Mock).mockResolvedValue({ items: [], cursor: null });
     (accountNs.invites.listReceived as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.invites.respond as Mock).mockResolvedValue({ status: "accepted" });
+    (accountNs.invites.accept as Mock).mockResolvedValue({ status: "accepted" });
     (accountNs.invites.cancel as Mock).mockResolvedValue({ status: "cancelled" });
   });
 
@@ -292,7 +292,8 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.invites.respond as Mock).mockResolvedValue({ status: "accepted" });
+    (accountNs.invites.accept as Mock).mockResolvedValue({ status: "accepted" });
+    (accountNs.invites.decline as Mock).mockResolvedValue({ status: "declined" });
     (accountNs.invites.cancel as Mock).mockResolvedValue({ status: "cancelled" });
   });
 
@@ -300,50 +301,38 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     vi.restoreAllMocks();
   });
 
-  it("connect respond <id> --action accept --shared-secret <s> — calls respond with verbatim id", async () => {
+  it("connect respond <id> --action accept — calls invites.accept with verbatim id, bodyless", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runConnectRespond(client as never, {
       id: "inv_123",
       action: "accept",
-      "shared-secret": "tok_abc",
       account: "acc_1",
       json: true,
     } as ConnectArgs, out);
 
-    expect(accountNs.invites.respond).toHaveBeenCalledWith("inv_123", {
-      action: "accept",
-      shared_secret: "tok_abc",
-    });
+    expect(client.account).toHaveBeenCalledWith("acc_1");
+    expect(accountNs.invites.accept).toHaveBeenCalledWith("inv_123");
+    expect(accountNs.invites.decline).not.toHaveBeenCalled();
   });
 
-  // ── Wire-encoding regression: the body MUST carry both required fields.
-  // OpenAPI required = [account_id, action, shared_secret]. account_id rides
-  // via client.account(id); action + shared_secret are the request body.
-  // A prior version sent {action} only → guaranteed API 400.
-  it("connect respond — body carries both action and shared_secret (every required field)", async () => {
+  it("connect respond <id> --action decline — calls invites.decline with verbatim id, bodyless", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runConnectRespond(client as never, {
       id: "inv_999",
       action: "decline",
-      "shared-secret": "tok_xyz",
       account: "acc_1",
       json: true,
     } as ConnectArgs, out);
 
-    expect(client.account).toHaveBeenCalledWith("acc_1");
-    const [id, body] = (accountNs.invites.respond as Mock).mock.calls[0]! as [
-      string,
-      Record<string, unknown>,
-    ];
-    expect(id).toBe("inv_999");
-    expect(body).toEqual({ action: "decline", shared_secret: "tok_xyz" });
+    expect(accountNs.invites.decline).toHaveBeenCalledWith("inv_999");
+    expect(accountNs.invites.accept).not.toHaveBeenCalled();
   });
 
-  it("connect respond — missing --shared-secret exits 2 before any SDK call", async () => {
+  it("connect respond — an --action other than accept/decline exits 2 before any SDK call", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
@@ -352,7 +341,7 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     try {
       await runConnectRespond(client as never, {
         id: "inv_123",
-        action: "accept",
+        action: "maybe",
         account: "acc_1",
       } as ConnectArgs, out);
       expect.fail("should have exited");
@@ -361,27 +350,27 @@ describe("connect respond / cancel — writes, invitation_id NOT resolved", () =
     } finally {
       exitSpy.mockRestore();
     }
-    expect(accountNs.invites.respond).not.toHaveBeenCalled();
+    expect(accountNs.invites.accept).not.toHaveBeenCalled();
+    expect(accountNs.invites.decline).not.toHaveBeenCalled();
   });
 
-  it("connect respond --preview — renders preview (with shared_secret) without calling respond", async () => {
+  it("connect respond --preview — renders preview without calling accept/decline", async () => {
     const { runConnectRespond } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runConnectRespond(client as never, {
       id: "inv_123",
       action: "accept",
-      "shared-secret": "tok_abc",
       account: "acc_1",
       preview: true,
     } as ConnectArgs, out);
 
-    expect(accountNs.invites.respond).not.toHaveBeenCalled();
+    expect(accountNs.invites.accept).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("invites.respond");
-    // Preview must be honest: the assembled body includes shared_secret.
-    expect(parsed.body).toEqual({ action: "accept", shared_secret: "tok_abc" });
+    expect(parsed.method).toBe("invites.accept");
+    // v2: accept/decline are bodyless.
+    expect(parsed.body).toEqual({});
   });
 
   it("connect cancel <id> — calls cancel with verbatim id (not URL-resolved)", async () => {
@@ -515,7 +504,8 @@ describe("connect sent slim default", () => {
         listSent: vi.fn().mockResolvedValue(SENT_STUB),
         listReceived: vi.fn(),
         send: vi.fn(),
-        respond: vi.fn(),
+        accept: vi.fn(),
+        decline: vi.fn(),
         cancel: vi.fn(),
       },
     };
@@ -547,7 +537,8 @@ describe("connect sent slim default", () => {
         listSent: vi.fn().mockResolvedValue(SENT_STUB),
         listReceived: vi.fn(),
         send: vi.fn(),
-        respond: vi.fn(),
+        accept: vi.fn(),
+        decline: vi.fn(),
         cancel: vi.fn(),
       },
     };
@@ -610,7 +601,8 @@ describe("connect received slim default", () => {
         listReceived: vi.fn().mockResolvedValue(RECEIVED_STUB),
         listSent: vi.fn(),
         send: vi.fn(),
-        respond: vi.fn(),
+        accept: vi.fn(),
+        decline: vi.fn(),
         cancel: vi.fn(),
       },
     };
@@ -652,7 +644,8 @@ describe("connect received slim default", () => {
         listReceived: vi.fn().mockResolvedValue(RECEIVED_STUB),
         listSent: vi.fn(),
         send: vi.fn(),
-        respond: vi.fn(),
+        accept: vi.fn(),
+        decline: vi.fn(),
         cancel: vi.fn(),
       },
     };
@@ -712,7 +705,7 @@ describe("connect help strings — Tier-1", () => {
     expect(desc).toContain("connect cancel");
   });
 
-  it("connect received description contains pending, already-handled, and specifics.shared_secret", async () => {
+  it("connect received description contains pending and already-handled", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
@@ -721,7 +714,6 @@ describe("connect help strings — Tier-1", () => {
     const desc = subCmds["received"]?.meta?.description ?? "";
     expect(desc).toContain("pending");
     expect(desc).toContain("already-handled");
-    expect(desc).toContain("specifics.shared_secret");
   });
 
   it("connect respond positional id description references connect received as source", async () => {
@@ -734,15 +726,13 @@ describe("connect help strings — Tier-1", () => {
     expect(desc).toContain("connect received");
   });
 
-  it("connect respond --shared-secret description references specifics.shared_secret from connect received", async () => {
+  it("connect respond has no --shared-secret flag (v2: accept/decline are bodyless)", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
-      { args?: Record<string, { description?: string }> }
+      { args?: Record<string, unknown> }
     >;
-    const desc = subCmds["respond"]?.args?.["shared-secret"]?.description ?? "";
-    expect(desc).toContain("specifics.shared_secret");
-    expect(desc).toContain("connect received");
+    expect(subCmds["respond"]?.args?.["shared-secret"]).toBeUndefined();
   });
 });
 
