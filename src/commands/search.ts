@@ -622,6 +622,61 @@ export async function runSearchParameters(
   }
 }
 
+// Body type derived from the real SDK signature (fromUrl merges the {url} body
+// with the top-level offset/limit/cursor query into one argument).
+type SearchFromUrlBody = Parameters<ReturnType<Curviate["account"]>["search"]["fromUrl"]>[0];
+
+/**
+ * Run `search <url>` — search.fromUrl.
+ * Runs a pasted LinkedIn search / saved-search / lead-list URL directly. Read
+ * command — rejects --preview. The response is polymorphic; --all streams it.
+ */
+export async function runSearchFromUrl(
+  client: Curviate,
+  flags: SearchFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const url = flags.url ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const verbose = flags.verbose ?? false;
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const body: Record<string, unknown> = { url };
+  if (flags.limit) body.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) body.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      // Narrow cast at the body-argument call site: fromUrl takes {url} + paging.
+      const fn = (p: Record<string, unknown>) => ns.search.fromUrl(p as SearchFromUrlBody) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, body, {
+        maxPages,
+        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
+          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
+        ),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.search.fromUrl(body as SearchFromUrlBody);
+      renderSuccess(result, { ...outOpts, verbose }, out);
+    }
+  } catch (err: unknown) {
+    const { CurviateError } = await import("@curviate/sdk");
+    if (err instanceof CurviateError) {
+      const { getExitCode } = await import("../lib/exit-codes.js");
+      renderError(err as CurviateError, outOpts, out);
+      process.exit(getExitCode(err.code));
+    }
+    renderUnexpectedError(err, out);
+    process.exit(1);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -823,7 +878,15 @@ const searchParametersCommand = defineCommand({
 });
 
 export const searchCommand = defineCommand({
-  meta: { name: "search", description: "Search people, companies, posts, and jobs." },
+  meta: { name: "search", description: "Search people, companies, posts, and jobs — or run a pasted search URL." },
+  args: {
+    ...GLOBAL_FLAGS,
+    url: {
+      type: "positional",
+      required: false,
+      description: "A pasted LinkedIn search, saved-search re-run, or lead-list URL. Runs it directly (search.fromUrl).",
+    },
+  },
   subCommands: {
     people: searchPeopleCommand,
     companies: searchCompaniesCommand,
@@ -831,14 +894,35 @@ export const searchCommand = defineCommand({
     jobs: searchJobsCommand,
     parameters: searchParametersCommand,
   },
-  async run() {
-    process.stderr.write(
-      "Usage: curviate search <subcommand>\n" +
-      "  people [--url <u>] [--keywords <k>]\n" +
-      "  companies [--keywords <k>]\n" +
-      "  posts [--keywords <k>]\n" +
-      "  jobs [--keywords <k>]\n" +
-      "  parameters --type <t> --keywords <k>\n",
-    );
+  async run({ args }) {
+    const flags = args as SearchFlags;
+
+    // Bare form: `search <url>` runs the URL directly. No url → print usage.
+    if (!flags.url) {
+      process.stderr.write(
+        "Usage: curviate search <url>\n" +
+        "       curviate search people [--url <u>] [--keywords <k>]\n" +
+        "       curviate search companies [--keywords <k>]\n" +
+        "       curviate search posts [--keywords <k>]\n" +
+        "       curviate search jobs [--keywords <k>]\n" +
+        "       curviate search parameters --type <t> --keywords <k>\n",
+      );
+      return;
+    }
+
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSearchFromUrl(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
