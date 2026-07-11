@@ -878,7 +878,7 @@ const searchParametersCommand = defineCommand({
 });
 
 export const searchCommand = defineCommand({
-  meta: { name: "search", description: "Search people, companies, posts, and jobs — or run a pasted search URL." },
+  meta: { name: "search", description: "Search people, companies, posts, and jobs. Also runs a pasted search URL directly." },
   args: {
     ...GLOBAL_FLAGS,
     url: {
