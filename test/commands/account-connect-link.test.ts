@@ -143,6 +143,33 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
     expect(client.auth.getSession).not.toHaveBeenCalled();
   });
 
+  it("the missing --session error names `account link`, not the removed `connect-link` (0.15.0 prose fix)", async () => {
+    const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    const exitSpy = makeExitSpy();
+    try {
+      await runAccountConnectSessionPoll(client as never, { json: true } as AccountFlags, out);
+      expect.fail("should have exited");
+    } catch {
+      // expected
+    } finally {
+      exitSpy.mockRestore();
+    }
+    const err = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(err).toContain("account link");
+    expect(err).not.toContain("connect-link");
+  });
+
+  it("the --session flag description names `account link`, not the removed `connect-link` (0.15.0 prose fix)", async () => {
+    const { accountCommand } = await import("../../src/commands/account.js");
+    // account connect-session poll --session
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const poll = (accountCommand as any).subCommands["connect-session"].subCommands["poll"];
+    const desc = poll.args.session.description as string;
+    expect(desc).toContain("account link");
+    expect(desc).not.toContain("connect-link");
+  });
+
   it("--preview renders the request without calling getConnectSession", async () => {
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();

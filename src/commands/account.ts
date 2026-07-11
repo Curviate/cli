@@ -645,6 +645,10 @@ export async function runAccountLink(
   const body: Record<string, unknown> = {
     seat_id: flags["seat-id"],
     ...authBody,
+    // --account-id (0.15.0): present → re-authenticate this existing account in
+    // place (reconnect); omit → connect a new account, with NO account_id key in
+    // the body at all (not undefined, not empty).
+    ...(flags["account-id"] ? { account_id: flags["account-id"] } : {}),
   };
 
   const outOpts = resolveOutputOpts(flags);
@@ -784,7 +788,7 @@ export async function runAccountConnectSessionPoll(
   io: CredentialIO = {},
 ): Promise<void> {
   if (!flags.session) {
-    out.stderr.write("error: --session is required (the session_id from `account connect-link`).\n");
+    out.stderr.write("error: --session is required (the account's acc_… id from `account link` or a checkpoint response).\n");
     process.exit(2);
   }
 
@@ -1291,6 +1295,7 @@ const accountLinkCommand = defineCommand({
     "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
     "user-agent": { type: "string", description: "Browser User-Agent to pin for this account." },
     "recruiter-contract-id": { type: "string", description: "Recruiter contract to bind to (Recruiter tier only)." },
+    "account-id": { type: "string", description: "Existing account id (acc_…) to re-authenticate IN PLACE — passing it makes this an in-place reconnect of that account. Omit to connect a NEW account into --seat-id." },
     "no-interactive": {
       type: "boolean",
       description: "Never prompt for a checkpoint code — on a checkpoint, always render the envelope and exit 12, even on a TTY.",
@@ -1327,7 +1332,7 @@ const accountConnectSessionPollCommand = defineCommand({
     ...WRITE_SINGLE_FLAGS,
     session: {
       type: "string",
-      description: "The session_id returned by `account connect-link`.",
+      description: "The account's acc_… id, returned by `account link` or a checkpoint response.",
       required: true,
     },
     wait: {

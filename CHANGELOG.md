@@ -86,6 +86,16 @@ Sales Navigator:
 
 - `sales-nav search <url>`, plus the v2 list surface: `sales-nav account-lists`, `lead-lists`, `browse-account-list`, `browse-lead-list`, `save-account`.
 
+Account:
+
+- **`account link --account-id <acc_…>`** (optional, non-breaking) — re-authenticate an existing account **in place** (reconnect): passing the id makes `account link` an in-place reconnect of that account; omit it for an ordinary fresh connect (unchanged — no `account_id` is sent). This is the reconnect path now that the hosted `account reconnect` / `account reconnect-link` commands are removed.
+
+### Fixed
+
+- **`company <id> employees` / `company <id> posts` / `company <id> jobs` (id-first form) no longer silently returns the base company profile.** The router bound `<id>` and dropped the trailing sub-resource word, so the id-first form quietly returned the company profile with exit 0. It now routes the id-first form to the sub-resource (equivalent to `company <sub> <id>`), or exits 2 with an actionable error on a genuinely unexpected extra argument — never a silent wrong result. The guard is applied uniformly across every bare-form command group.
+- **`company employees|posts|jobs <slug>` (or a company URL) now works.** The three sub-resources previously required the numeric company id and erred on a handle; they now auto-resolve a slug/URL to the numeric id the same way the bare `company <slug>` retrieve does (a numeric id still passes straight through; a genuinely unresolvable identifier surfaces the not-found error).
+- **`profile follow <slug>` / `profile unfollow <slug>` (or a member URL) now work.** The follow endpoint accepts only a provider id, so a slug returned "not found"; both commands now resolve the identifier to the member's provider id first — the same auto-resolution `profile`, `connect`, and `message` already do.
+
 ### Notes — no user action required
 
 - **`post react --as-organization`**: unchanged at the flag level; only the internal wire key was renamed, so the flag behaves exactly as before.

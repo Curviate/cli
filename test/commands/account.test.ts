@@ -558,6 +558,73 @@ describe("account link", () => {
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("auth.intent");
   });
+
+  // --account-id: the 0.15.0 in-place reconnect flag.
+
+  it("forwards --account-id as account_id in the auth.intent body (in-place reconnect)", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountLink(client as never, {
+      "seat-id": "seat_1",
+      "auth-method": "credentials",
+      email: "user@example.com",
+      password: "secret",
+      "account-id": "acc_x",
+      json: true,
+    } as AccountFlags, out);
+
+    expect(client.auth.intent).toHaveBeenCalledWith(
+      expect.objectContaining({ account_id: "acc_x" }),
+    );
+  });
+
+  it("omits account_id ENTIRELY from the body when --account-id is not passed (not undefined, not empty)", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountLink(client as never, {
+      "seat-id": "seat_1",
+      "auth-method": "credentials",
+      email: "user@example.com",
+      password: "secret",
+      json: true,
+    } as AccountFlags, out);
+
+    const body = (client.auth.intent as Mock).mock.calls[0]![0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("account_id");
+  });
+
+  it("--preview with --account-id renders the auth.intent body with account_id present", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountLink(client as never, {
+      "seat-id": "seat_1",
+      "auth-method": "credentials",
+      email: "a@b.c",
+      password: "secret",
+      "account-id": "acc_x",
+      preview: true,
+    } as AccountFlags, out);
+
+    expect(client.auth.intent).not.toHaveBeenCalled();
+    const parsed = JSON.parse((out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+    expect(parsed.method).toBe("auth.intent");
+    expect(parsed.body.account_id).toBe("acc_x");
+  });
+
+  it("--preview without --account-id renders a body with NO account_id key (control)", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const out = makeOut();
+    await runAccountLink(client as never, {
+      "seat-id": "seat_1",
+      "auth-method": "credentials",
+      email: "a@b.c",
+      password: "secret",
+      preview: true,
+    } as AccountFlags, out);
+
+    const parsed = JSON.parse((out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+    expect(parsed.body).not.toHaveProperty("account_id");
+  });
 });
 
 // ---------------------------------------------------------------------------
