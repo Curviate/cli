@@ -38,6 +38,69 @@ import { STDIN_SENTINEL } from "./lib/stdin.js";
 
 type AnyCommand = CommandDef;
 
+/**
+ * Removed/renamed commands → a one-line "did you mean" successor hint.
+ *
+ * Keyed by `<group>` → `<removed subcommand token>` → hint text. Consulted at
+ * the dispatcher's unknown-command path so an agent that reaches for the old
+ * grammar is pointed at the replacement instead of getting a bare "unknown
+ * command" (pure groups) or a confusing downstream error from the removed
+ * keyword being swallowed as a bare id (the bare-positional groups: connect,
+ * profile, company). Exit stays 2 — this only enriches the diagnostic.
+ *
+ * The tokens here are the exact removed/renamed keywords from the 0.15.0
+ * release; none is a current subcommand, and none is a plausible bare
+ * identifier (a member slug, company id, or invitation id is never literally
+ * "respond"/"connections"/"followers"), so intercepting them is safe.
+ */
+const REMOVED_COMMANDS: Record<string, Record<string, string>> = {
+  post: {
+    list: "`post list` was removed — use `post user-posts <user_id>` (accepts `me`).",
+    comment: "post comments are their own group now — use `comment add <post_id> <text>`.",
+    comments: "post comments are their own group now — use `comment list <post_id>`.",
+  },
+  connect: {
+    respond: "`connect respond` was split — use `connect accept <id>` or `connect decline <id>`.",
+  },
+  profile: {
+    connections: "`profile connections` was renamed — use `profile relations`.",
+  },
+  account: {
+    "connect-link": "`account connect-link` was removed — use `account link [--account-id <id>]`.",
+    "reconnect-link": "`account reconnect-link` was removed — use `account link [--account-id <id>]`.",
+    reconnect: "`account reconnect` was removed — use `account link [--account-id <id>]`.",
+  },
+  inbox: {
+    sync: "`inbox sync` was removed — history syncs automatically; just read `inbox messages <chat_id>`.",
+    "sync-chat": "`inbox sync-chat` was removed — history syncs automatically; just read `inbox messages <chat_id>`.",
+  },
+  recruiter: {
+    "add-candidate": "`recruiter add-candidate` was renamed — use `recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>`.",
+    "project-jobs": "`recruiter project-jobs` was renamed — use `recruiter project-job get <project_id>`.",
+    sync: "`recruiter sync` was removed — Recruiter data syncs automatically now.",
+    "add-applicant": "`recruiter add-applicant` was removed with no replacement.",
+    "reject-applicant": "`recruiter reject-applicant` was removed with no replacement.",
+  },
+  "sales-nav": {
+    sync: "`sales-nav sync` was removed — Sales Navigator data syncs automatically now.",
+  },
+  webhook: {
+    "state-diff": "`webhook state-diff` was removed with no replacement.",
+  },
+  company: {
+    followers: "`company followers` was removed with no replacement.",
+  },
+};
+
+/**
+ * The successor hint for a removed/renamed `<group> <token>`, or null when the
+ * token is a current command or a plausible identifier. Exported for direct
+ * unit coverage of the map.
+ */
+export function successorHint(group: string, token: string): string | null {
+  return REMOVED_COMMANDS[group]?.[token] ?? null;
+}
+
 /** Resolve a possibly-lazy citty value (subCommands entry, args, meta). */
 async function resolveValue<T>(input: T | (() => T) | (() => Promise<T>)): Promise<T> {
   return typeof input === "function" ? (input as () => T | Promise<T>)() : input;
@@ -210,9 +273,14 @@ function hasEmptyFields(rawArgs: string[]): boolean {
   return false;
 }
 
-/** Emit a usage diagnostic to stderr and exit 2 (CLI-side usage error). */
-function usageError(message: string): never {
+/**
+ * Emit a usage diagnostic to stderr and exit 2 (CLI-side usage error).
+ * An optional `hint` line (e.g. a removed-command successor) is written
+ * between the error and the generic help pointer.
+ */
+function usageError(message: string, hint?: string): never {
   process.stderr.write(`error: ${message}\n`);
+  if (hint) process.stderr.write(`hint: ${hint}\n`);
   process.stderr.write("Run `curviate --help` for usage.\n");
   process.exit(2);
 }
@@ -240,6 +308,17 @@ export async function resolveLeaf(
       // Token is a known subcommand keyword → descend into it ONLY.
       const sub = (await resolveValue(subCommands[token])) as AnyCommand;
       return resolveLeaf(sub, rawArgs.slice(idx + 1));
+    }
+
+    // Removed/renamed command → point at the successor BEFORE the token is
+    // either swallowed as a bare positional (connect/profile/company) or
+    // reported as a generic unknown command (pure groups). A current
+    // subcommand always won above, so this only ever fires on a stale token.
+    if (token !== undefined) {
+      const hint = successorHint(await nodeName(cmd), token);
+      if (hint) {
+        usageError(`unknown command \`${token}\``, hint);
+      }
     }
 
     if (token !== undefined && hasBarePositional) {
