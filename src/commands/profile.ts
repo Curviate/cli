@@ -9,7 +9,7 @@
  *   profile <id> --reactions                     — list reactions
  *   profile <id> --followers                     — list followers
  *   profile relations                            — list 1st-degree connections
- *   profile endorse <id> --skill <sid>           — endorse a skill (write)
+ *   profile endorse <id> --endorsement-id <id>   — endorse a skill (write)
  *
  * All subcommands are account-scoped. `<id>` passes through resolveIdentifier.
  * Read commands reject --preview (exit 2). Write commands render --preview.
@@ -53,7 +53,7 @@ type ProfileFlags = {
   reactions?: boolean;
   followers?: boolean;
   "is-company"?: boolean;
-  skill?: string;
+  "endorsement-id"?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -72,7 +72,7 @@ type ProfileFlags = {
 
 type SubFlags = {
   id?: string;
-  skill?: string;
+  "endorsement-id"?: string;
   account?: string;
   json?: boolean;
   all?: boolean;
@@ -476,7 +476,7 @@ export async function runProfileRelations(
 }
 
 /**
- * Run `profile endorse <id> --skill <endorsement_id>`.
+ * Run `profile endorse <id> --endorsement-id <endorsement_id>`.
  * Write command — supports --preview.
  * Exported for unit-testing.
  */
@@ -488,7 +488,7 @@ export async function runProfileEndorse(
   const accountId = requireAccount(flags.account, out);
   const rawId = flags.id ?? "";
   const resolvedId = resolveIdentifier(rawId);
-  const skillId = flags.skill ?? "";
+  const skillId = flags["endorsement-id"] ?? "";
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
@@ -802,7 +802,11 @@ const profileEndorseCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     id: { type: "positional", description: "Member identifier (URL, slug, or URN)." },
-    skill: { type: "string", description: "Skill endorsement ID to endorse.", required: true },
+    "endorsement-id": {
+      type: "string",
+      description: "Endorsement ID to endorse — get it from the target's skills section via `profile <id> --sections skills`.",
+      required: true,
+    },
   },
   async run({ args }) {
     const flags = args as SubFlags;
@@ -942,7 +946,7 @@ export const profileCommand = defineCommand({
         "       curviate profile followers <id> | following <id>\n" +
         "       curviate profile follow <id> | unfollow <id>\n" +
         "       curviate profile update [--headline|--bio|--first-name|--last-name|--skills|--picture]\n" +
-        "       curviate profile endorse <id> --skill <sid>\n",
+        "       curviate profile endorse <id> --endorsement-id <id>\n",
       );
       return;
     }

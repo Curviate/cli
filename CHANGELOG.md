@@ -43,6 +43,7 @@ Renames and relocations:
 - **`recruiter project-jobs`** → **`recruiter project-job get <project_id>`** (cardinality fix — a project has at most one attached posting; single-object read, no pagination).
 - **`recruiter job applicants`** → **`recruiter applicants <project_id>`** (the applicant list is project-scoped, not job-scoped; `--channel-id` still required).
 - **`profile connections`** → **`profile relations`**.
+- **`profile endorse --skill`** → **`profile endorse --endorsement-id`** — value semantics unchanged (still the target's `endorsement_id`, obtained from their skills section via `profile <id> --sections skills`); the old flag name misleadingly suggested a skill name.
 
 CLI-visible shape changes:
 
@@ -87,7 +88,6 @@ Sales Navigator:
 
 ### Notes — no user action required
 
-- **`profile endorse`**: the substrate renamed the endorsement body field; the CLI `--skill <id>` flag and its usage are unchanged.
 - **`post react --as-organization`**: unchanged at the flag level; only the internal wire key was renamed, so the flag behaves exactly as before.
 
 ## [0.14.0] - 2026-07-07

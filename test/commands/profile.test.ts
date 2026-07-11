@@ -48,7 +48,7 @@ type ProfileCommandArgs = {
   reactions?: boolean;
   followers?: boolean;
   "is-company"?: boolean;
-  skill?: string;
+  "endorsement-id"?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -67,7 +67,7 @@ type ProfileCommandArgs = {
 
 type SubCommandArgs = {
   id?: string;
-  skill?: string;
+  "endorsement-id"?: string;
   account?: string;
   json?: boolean;
   all?: boolean;
@@ -287,11 +287,11 @@ describe("profile endorse — write command", () => {
     vi.restoreAllMocks();
   });
 
-  it("endorse <id> --skill <sid> — calls endorse(id, {endorsement_id})", async () => {
+  it("endorse <id> --endorsement-id <id> — calls endorse(id, {endorsement_id})", async () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileEndorse(client as never, { id: "jdoe", skill: "skill_123", account: "acc_1", json: true } as SubCommandArgs, out);
+    await runProfileEndorse(client as never, { id: "jdoe", "endorsement-id": "skill_123", account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("jdoe", { endorsement_id: "skill_123" });
@@ -301,7 +301,7 @@ describe("profile endorse — write command", () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileEndorse(client as never, { id: "jdoe", skill: "skill_123", account: "acc_1", preview: true } as SubCommandArgs, out);
+    await runProfileEndorse(client as never, { id: "jdoe", "endorsement-id": "skill_123", account: "acc_1", preview: true } as SubCommandArgs, out);
 
     expect(accountNs.users.endorseSkill).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
@@ -313,7 +313,7 @@ describe("profile endorse — write command", () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileEndorse(client as never, { id: "https://www.linkedin.com/in/some-user/", skill: "skill_1", account: "acc_1", json: true } as SubCommandArgs, out);
+    await runProfileEndorse(client as never, { id: "https://www.linkedin.com/in/some-user/", "endorsement-id": "skill_1", account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("some-user", { endorsement_id: "skill_1" });
   });
