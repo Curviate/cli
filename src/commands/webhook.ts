@@ -21,7 +21,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { readFileSync } from "node:fs";
 import type { Curviate, CurviateError, paths } from "@curviate/sdk";
 
@@ -54,6 +54,7 @@ type WebhookFlags = {
   limit?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   json?: boolean;
   fields?: string;
   preview?: boolean;
@@ -205,6 +206,7 @@ export async function runWebhookList(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

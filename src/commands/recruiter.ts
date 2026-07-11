@@ -32,7 +32,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { slimJob } from "../lib/slim.js";
 import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
@@ -76,6 +76,7 @@ type RecruiterFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   verbose?: boolean;
   "api-key"?: string;
@@ -541,6 +542,7 @@ export async function runRecruiterSearchPeople(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -642,6 +644,7 @@ export async function runRecruiterSearchFromUrl(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -683,6 +686,7 @@ export async function runRecruiterListProjects(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -813,6 +817,7 @@ export async function runRecruiterListPipeline(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -953,6 +958,7 @@ export async function runRecruiterListJobs(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -1291,6 +1297,7 @@ export async function runRecruiterSearchTalentPool(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

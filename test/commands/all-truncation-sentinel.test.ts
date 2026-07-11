@@ -86,6 +86,24 @@ describe("--all truncation contract — structural regression guard", () => {
     }
     expect(offenders, offenders.join("\n")).toHaveLength(0);
   });
+
+  it("every streamAll(...) call site threads `pageDelayMs` (so --page-delay pacing applies to every --all command)", async () => {
+    const files = (await readdir(commandsDir)).filter((f) => f.endsWith(".ts"));
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const content = await readFile(join(commandsDir, file), "utf8");
+      const matches = [...content.matchAll(/streamAll\(/g)];
+      for (const m of matches) {
+        // The options block is small; pageDelayMs sits alongside maxPages/out.
+        const window = content.slice(m.index, m.index + 220);
+        if (!/pageDelayMs\s*:/.test(window)) {
+          offenders.push(`${file} near offset ${m.index}: streamAll(...) call site does not thread \`pageDelayMs\``);
+        }
+      }
+    }
+    expect(offenders, offenders.join("\n")).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

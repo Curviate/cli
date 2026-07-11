@@ -38,7 +38,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { slimAccountList, slimAccountListItem, slimAccountGet } from "../lib/slim.js";
 import { readlineSync } from "../lib/readline.js";
 import { defaultReadStdin } from "../lib/stdin.js";
@@ -117,6 +117,7 @@ type AccountFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   verbose?: boolean;
   "api-key"?: string;
@@ -204,6 +205,7 @@ export async function runAccountList(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         // Slim mode (default) projects each NDJSON item too; --verbose emits raw items.
         const projected = outOpts.verbose ? item : slimAccountListItem(item as Record<string, unknown>);

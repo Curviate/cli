@@ -33,7 +33,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import { slimJob } from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
@@ -87,6 +87,7 @@ type JobFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -311,6 +312,7 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
       for await (const item of streamAll(fn, base, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -370,6 +372,7 @@ export async function runJobApplicants(client: Curviate, flags: JobFlags, out: O
       for await (const item of streamAll(fn, base, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

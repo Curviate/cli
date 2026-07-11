@@ -34,7 +34,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { resolveTextOrStdin } from "../lib/stdin.js";
 import { readAttachment, AttachError, toAttachmentPayload, describeAttachment } from "../lib/attach.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
@@ -57,6 +57,7 @@ type CommentFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -170,6 +171,7 @@ export async function runCommentList(client: Curviate, flags: CommentFlags, out:
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -200,6 +202,7 @@ export async function runCommentReplies(client: Curviate, flags: CommentFlags, o
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -230,6 +233,7 @@ export async function runCommentReactions(client: Curviate, flags: CommentFlags,
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -272,6 +276,7 @@ export async function runCommentUser(client: Curviate, flags: CommentFlags, out:
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

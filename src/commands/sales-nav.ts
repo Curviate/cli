@@ -33,7 +33,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import {
   assembleFilters,
@@ -61,6 +61,7 @@ type SalesNavFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -211,6 +212,7 @@ export async function runSalesNavSearchPeople(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -274,6 +276,7 @@ export async function runSalesNavSearchCompanies(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -361,6 +364,7 @@ export async function runSalesNavSearchFromUrl(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -560,6 +564,7 @@ export async function runSalesNavAccountLists(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -600,6 +605,7 @@ export async function runSalesNavLeadLists(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -646,6 +652,7 @@ export async function runSalesNavBrowseAccountList(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -692,6 +699,7 @@ export async function runSalesNavBrowseLeadList(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

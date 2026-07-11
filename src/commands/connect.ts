@@ -28,7 +28,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type ConnectFlags = {
@@ -41,6 +41,7 @@ type ConnectFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -164,6 +165,7 @@ export async function runConnectSent(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         // streamAll yields individual items; project per-item (the envelope
         // projector slimInviteSent expects a { items } wrapper and would erase
@@ -215,6 +217,7 @@ export async function runConnectReceived(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         // streamAll yields individual items; project per-item (the envelope
         // projector slimInviteReceived expects a { items } wrapper and would

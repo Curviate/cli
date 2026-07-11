@@ -27,7 +27,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -45,6 +45,7 @@ type CompanyFlags = {
   limit?: string;
   cursor?: string;
   "max-pages"?: string;
+  "page-delay"?: string;
   "api-key"?: string;
   "base-url"?: string;
   timeout?: string;
@@ -194,6 +195,7 @@ export async function runCompanyEmployees(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -235,6 +237,7 @@ export async function runCompanyPosts(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -277,6 +280,7 @@ export async function runCompanyJobs(
       for await (const item of streamAll(fn, params, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

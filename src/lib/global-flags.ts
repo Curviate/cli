@@ -62,6 +62,11 @@ export const GLOBAL_FLAGS = {
     type: "string" as const,
     description: "Maximum number of pages to fetch when --all is used.",
   },
+  "page-delay": {
+    type: "string" as const,
+    description:
+      "Milliseconds to pause between pages when --all is used (default 400; pass 0 to disable). A modest delay keeps a long stream under the platform rate gate.",
+  },
   preview: {
     type: "boolean" as const,
     description:
@@ -87,6 +92,7 @@ export type GlobalFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   verbose?: boolean;
 };
@@ -109,7 +115,7 @@ export const WRITE_FLAGS = {
   verbose: GLOBAL_FLAGS.verbose,
 };
 
-export type WriteFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages" | "fields">;
+export type WriteFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages" | "page-delay" | "fields">;
 
 /**
  * READ_SINGLE_FLAGS: GLOBAL_FLAGS minus pagination-only flags, but keeping --fields.
@@ -131,7 +137,7 @@ export const READ_SINGLE_FLAGS = {
   verbose: GLOBAL_FLAGS.verbose,
 };
 
-export type ReadSingleFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages">;
+export type ReadSingleFlags = Omit<GlobalFlags, "limit" | "cursor" | "all" | "max-pages" | "page-delay">;
 
 /**
  * WRITE_SINGLE_FLAGS: the single-object write convention.

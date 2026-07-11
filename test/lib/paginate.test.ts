@@ -1,10 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Mock } from "vitest";
-import { streamAll, PaginateError } from "../../src/lib/paginate.js";
+import {
+  streamAll,
+  PaginateError,
+  ndjsonModeNotice,
+  pageDelayFrom,
+  DEFAULT_PAGE_DELAY_MS,
+} from "../../src/lib/paginate.js";
 
 function makeOut() {
   return { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 }
+
+// A no-op sleep so pagination-logic tests never incur a real inter-page delay.
+const noSleep = async (): Promise<void> => {};
 
 // A minimal paginatable method stub factory.
 function makePaginatedMethod(pages: Array<{ items: string[]; cursor: string | null }>) {
@@ -23,7 +32,7 @@ describe("lib/paginate — streamAll", () => {
       { items: ["c"], cursor: null },
     ]);
     const collected: string[] = [];
-    for await (const item of streamAll(method as never, {}, { maxPages: 100 })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, sleep: noSleep })) {
       collected.push(item as string);
     }
     expect(collected).toEqual(["a", "b", "c"]);
@@ -42,7 +51,7 @@ describe("lib/paginate — streamAll", () => {
     for await (const item of streamAll(
       method as never,
       {},
-      { maxPages: 2, onTruncated: (pagesFetched: number, hasMore: boolean) => truncations.push({ pagesFetched, hasMore }) },
+      { maxPages: 2, sleep: noSleep, onTruncated: (pagesFetched: number, hasMore: boolean) => truncations.push({ pagesFetched, hasMore }) },
     )) {
       collected.push(item as string);
     }
@@ -96,7 +105,7 @@ describe("lib/paginate — streamAll", () => {
     });
 
     const items: unknown[] = [];
-    for await (const item of streamAll(method as never, {}, { maxPages: 10 })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 10, sleep: noSleep })) {
       items.push(item);
     }
     expect(items).toEqual(["a", "b"]);
@@ -143,7 +152,7 @@ describe("lib/paginate — streamAll", () => {
     const out = makeOut();
 
     const collected: string[] = [];
-    for await (const item of streamAll(method as never, {}, { maxPages: 2, out })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 2, out, sleep: noSleep })) {
       collected.push(item as string);
     }
     expect(collected).toEqual(["a", "b"]);
@@ -164,7 +173,7 @@ describe("lib/paginate — streamAll", () => {
     expect(stderrText).toMatch(/truncat/i);
   });
 
-  it("with `out`: natural exhaustion (cursor null) writes neither the sentinel nor a truncation note", async () => {
+  it("with `out`: natural exhaustion (cursor null) writes no stdout sentinel and no TRUNCATION note (the NDJSON-mode notice is separate)", async () => {
     const method = makePaginatedMethod([
       { items: ["a"], cursor: "next" },
       { items: ["b"], cursor: null },
@@ -172,12 +181,16 @@ describe("lib/paginate — streamAll", () => {
     const out = makeOut();
 
     const collected: string[] = [];
-    for await (const item of streamAll(method as never, {}, { maxPages: 100, out })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, out, sleep: noSleep })) {
       collected.push(item as string);
     }
     expect(collected).toEqual(["a", "b"]);
+    // No stdout sentinel (the item stream itself is written by the call site, not here).
     expect(out.stdout.write).not.toHaveBeenCalled();
-    expect(out.stderr.write).not.toHaveBeenCalled();
+    // stderr carries the once-per-invocation NDJSON-mode notice, but NOT a truncation note.
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain(ndjsonModeNotice().trim());
+    expect(stderrText).not.toMatch(/truncat/i);
   });
 
   it("with `out`: pages_fetched in the sentinel reflects the actual truncation point (3-page stub, maxPages 2)", async () => {
@@ -188,7 +201,7 @@ describe("lib/paginate — streamAll", () => {
     ]);
     const out = makeOut();
 
-    for await (const item of streamAll(method as never, {}, { maxPages: 2, out })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 2, out, sleep: noSleep })) {
       void item;
     }
     const sentinel = JSON.parse(
@@ -205,9 +218,135 @@ describe("lib/paginate — streamAll", () => {
     const out = makeOut();
     const onTruncated = vi.fn();
 
-    for await (const item of streamAll(method as never, {}, { maxPages: 1, out, onTruncated })) {
+    for await (const item of streamAll(method as never, {}, { maxPages: 1, out, sleep: noSleep, onTruncated })) {
       void item;
     }
     expect(onTruncated).toHaveBeenCalledWith(1, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NDJSON-mode discoverability notice (once per invocation).
+// ---------------------------------------------------------------------------
+
+describe("lib/paginate — NDJSON-mode notice", () => {
+  it("emits the notice to stderr exactly once when streaming engages, before any item logic", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+      { items: ["c"], cursor: null },
+    ]);
+    const out = makeOut();
+
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, out, sleep: noSleep })) {
+      void item;
+    }
+    const noticeWrites = (out.stderr.write as Mock).mock.calls
+      .map((c) => c[0] as string)
+      .filter((s) => s.includes("NDJSON"));
+    expect(noticeWrites).toHaveLength(1);
+    expect(noticeWrites[0]).toBe(ndjsonModeNotice());
+  });
+
+  it("does NOT emit the notice when the response is non-paginatable (PaginateError first)", async () => {
+    const method = vi.fn(async () => ({ id: "not-a-list" }));
+    const out = makeOut();
+    await expect(
+      (async () => {
+        for await (const item of streamAll(method as never, {}, { maxPages: 10, out, sleep: noSleep })) {
+          void item;
+        }
+      })(),
+    ).rejects.toBeInstanceOf(PaginateError);
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).not.toContain("NDJSON");
+  });
+
+  it("does NOT touch stderr at all when `out` is omitted", async () => {
+    const method = makePaginatedMethod([{ items: ["a"], cursor: null }]);
+    // No `out` — pure-logic consumer. Must not throw trying to write a notice.
+    const collected: string[] = [];
+    for await (const item of streamAll(method as never, {}, { maxPages: 10, sleep: noSleep })) {
+      collected.push(item as string);
+    }
+    expect(collected).toEqual(["a"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --all inter-page pacing.
+// ---------------------------------------------------------------------------
+
+describe("lib/paginate — inter-page pacing", () => {
+  it("sleeps between pages by the default delay, but not before the first fetch nor after the last page", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+      { items: ["c"], cursor: null },
+    ]);
+    const sleep = vi.fn(async () => {});
+
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, sleep })) {
+      void item;
+    }
+    // 3 pages, cursor null on the last → exactly 2 inter-page gaps.
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(DEFAULT_PAGE_DELAY_MS);
+    expect(DEFAULT_PAGE_DELAY_MS).toBeGreaterThanOrEqual(300);
+    expect(DEFAULT_PAGE_DELAY_MS).toBeLessThanOrEqual(500);
+  });
+
+  it("honors an explicit pageDelayMs override", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: null },
+    ]);
+    const sleep = vi.fn(async () => {});
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, pageDelayMs: 50, sleep })) {
+      void item;
+    }
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(50);
+  });
+
+  it("pageDelayMs: 0 disables the delay entirely (no sleep call)", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: null },
+    ]);
+    const sleep = vi.fn(async () => {});
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, pageDelayMs: 0, sleep })) {
+      void item;
+    }
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("does not sleep after truncation (the truncated page is the last fetch)", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+      { items: ["c"], cursor: null },
+    ]);
+    const sleep = vi.fn(async () => {});
+    for await (const item of streamAll(method as never, {}, { maxPages: 2, sleep })) {
+      void item;
+    }
+    // page1 → sleep → page2 → truncate (no sleep after). Exactly 1 gap.
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("lib/paginate — pageDelayFrom (flag parsing)", () => {
+  it("undefined stays undefined (caller falls back to the default)", () => {
+    expect(pageDelayFrom(undefined)).toBeUndefined();
+  });
+  it("parses a non-negative integer, including 0", () => {
+    expect(pageDelayFrom("0")).toBe(0);
+    expect(pageDelayFrom("250")).toBe(250);
+  });
+  it("rejects a negative or non-numeric value (returns undefined → default applies)", () => {
+    expect(pageDelayFrom("-5")).toBeUndefined();
+    expect(pageDelayFrom("abc")).toBeUndefined();
+    expect(pageDelayFrom("")).toBeUndefined();
   });
 });

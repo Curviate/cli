@@ -23,7 +23,7 @@ import { GLOBAL_FLAGS } from "../lib/global-flags.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
-import { streamAll } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import {
   assembleFilters,
   splitCsv,
@@ -54,6 +54,7 @@ type SearchFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   account?: string;
   json?: boolean;
   verbose?: boolean;
@@ -388,6 +389,7 @@ export async function runSearchPeople(
       for await (const item of streamAll(fn, body, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         const projected = verbose ? item : slimSearchPeopleItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -439,6 +441,7 @@ export async function runSearchCompanies(
       for await (const item of streamAll(fn, body, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         const projected = verbose ? item : slimSearchCompaniesItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -490,6 +493,7 @@ export async function runSearchPosts(
       for await (const item of streamAll(fn, body, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         const projected = verbose ? item : slimSearchPostsItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -541,6 +545,7 @@ export async function runSearchJobs(
       for await (const item of streamAll(fn, body, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         const projected = verbose ? item : slimSearchJobsItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -647,6 +652,7 @@ export async function runSearchFromUrl(
       for await (const item of streamAll(fn, body, {
         maxPages,
         out,
+        pageDelayMs: pageDelayFromFlags(flags),
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

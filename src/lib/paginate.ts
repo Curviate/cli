@@ -60,6 +60,52 @@ export function truncationProseNote(pagesFetched: number): string {
   return `Streaming truncated at ${pagesFetched} page(s). Use --all --max-pages or --cursor for manual paging.\n`;
 }
 
+/**
+ * The once-per-invocation NDJSON-mode notice, written to stderr when `--all`
+ * streaming engages. Agents pattern-match the plain-mode `{items,cursor}`
+ * envelope and mis-parse the stream (observed twice in practice); this line
+ * makes the format switch explicit. Diagnostic only — the data channel
+ * (stdout) is unchanged.
+ */
+export function ndjsonModeNotice(): string {
+  return "--all streams NDJSON: one object per line; the {items,cursor} envelope is not used\n";
+}
+
+/**
+ * The default inter-page delay for `--all` streaming (milliseconds). A modest
+ * pause between page fetches keeps a well-behaved agent under the platform rate
+ * gate on a long stream. Overridable per-invocation with `--page-delay <ms>`
+ * (including 0 to disable).
+ */
+export const DEFAULT_PAGE_DELAY_MS = 400;
+
+/**
+ * Parse the `--page-delay <ms>` flag value into a delay in milliseconds.
+ * Returns `undefined` when unset or invalid (caller falls back to
+ * DEFAULT_PAGE_DELAY_MS); a valid non-negative integer (including 0) is
+ * returned as-is.
+ */
+export function pageDelayFrom(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return undefined;
+  return n;
+}
+
+/**
+ * Convenience over `pageDelayFrom` for the `--all` call sites: reads the
+ * `--page-delay` flag straight off a command's parsed flags. The structural
+ * param type means a call site passes its own `*Flags` object without that
+ * type needing to declare `page-delay` — the flag is a GLOBAL_FLAGS entry so
+ * it is present on the runtime object for every paginated command.
+ */
+export function pageDelayFromFlags(flags: { "page-delay"?: string }): number | undefined {
+  return pageDelayFrom(flags["page-delay"]);
+}
+
+/** Real timer sleep — the default injected into `streamAll`. */
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** The canonical --all truncation JSON sentinel line, including the trailing newline. */
 export function truncationSentinelLine(pagesFetched: number, hasMore: boolean): string {
   return JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n";
@@ -82,6 +128,17 @@ export interface StreamAllOptions {
    * truncation directly.
    */
   onTruncated?: (pagesFetched: number, hasMore: boolean) => void;
+  /**
+   * Inter-page delay in milliseconds. Defaults to DEFAULT_PAGE_DELAY_MS. Set 0
+   * to disable. Applied only BETWEEN page fetches — never before the first
+   * page nor after the last (or a truncated) page.
+   */
+  pageDelayMs?: number;
+  /**
+   * Injectable sleep (defaults to a real timer). Tests pass a fake to assert
+   * the pacing calls without incurring real delays.
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -98,6 +155,8 @@ export async function* streamAll<P extends Record<string, unknown>>(
   opts: StreamAllOptions = {},
 ): AsyncGenerator<unknown> {
   const maxPages = opts.maxPages ?? 100;
+  const pageDelayMs = opts.pageDelayMs ?? DEFAULT_PAGE_DELAY_MS;
+  const sleep = opts.sleep ?? realSleep;
   let cursor: string | undefined | null = undefined;
   let pageCount = 0;
   let firstPage = true;
@@ -119,7 +178,12 @@ export async function* streamAll<P extends Record<string, unknown>>(
         "Remove --all for non-list commands.",
       );
     }
-    firstPage = false;
+    if (firstPage) {
+      // Streaming has engaged and the shape is valid — announce the NDJSON
+      // format switch once, before any item is emitted.
+      if (opts.out) opts.out.stderr.write(ndjsonModeNotice());
+      firstPage = false;
+    }
 
     if (Array.isArray(items)) {
       for (const item of items) {
@@ -144,5 +208,10 @@ export async function* streamAll<P extends Record<string, unknown>>(
       }
       break;
     }
+
+    // Pace the NEXT fetch: a modest pause between pages keeps a long stream
+    // under the platform rate gate. Only reached when another page will be
+    // fetched (cursor present, not truncating) — never after the last page.
+    if (pageDelayMs > 0) await sleep(pageDelayMs);
   }
 }
