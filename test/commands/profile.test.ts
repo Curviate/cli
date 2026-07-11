@@ -648,7 +648,9 @@ describe("profile <id> — --sections passthrough", () => {
 describe("profile me — slim mode (no --verbose)", () => {
   // Real v2 UserProfile shape — provider_id sources from the top-level `id`,
   // is_premium/experience live nested under `specifics`, emails is the real
-  // plural array. occupation/organizations have no v2 source at all.
+  // plural array, headline sources from `description` (the real wire's
+  // headline slot — see lib/slim.ts JSDoc). occupation/organizations have no
+  // v2 source at all.
   const richProfile = {
     object: "user_profile",
     id: "ACoAACyJnqkBprov123",
@@ -656,6 +658,7 @@ describe("profile me — slim mode (no --verbose)", () => {
     last_name: "Doe",
     public_identifier: "johndoe",
     location: "Berlin",
+    description: "Building things at Acme",
     emails: ["john@example.com"],
     entity_urn: "urn:li:member:123",
     specifics: {
@@ -678,7 +681,7 @@ describe("profile me — slim mode (no --verbose)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has exactly the 8 fields (incl. current_position), no heavy fields", async () => {
+  it("slim output has exactly the 9 fields (incl. current_position, headline), no heavy fields", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -686,8 +689,9 @@ describe("profile me — slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(Object.keys(result)).toHaveLength(8);
+    expect(Object.keys(result)).toHaveLength(9);
     expect(result["provider_id"]).toBe("ACoAACyJnqkBprov123");
+    expect(result["headline"]).toBe("Building things at Acme");
     expect(result["emails"]).toEqual(["john@example.com"]);
     expect(result["is_premium"]).toBe(false);
     expect(result).toHaveProperty("current_position");
@@ -767,8 +771,10 @@ describe("profile me — --verbose mode", () => {
 
 describe("profile <id> — slim mode (current_position synthesis)", () => {
   // Real v2 UserProfile shape — provider_id sources from the top-level `id`,
-  // network_distance/experience live nested under `specifics`.
-  // headline/occupation have no v2 source at all (removed from slim output).
+  // network_distance/experience live nested under `specifics`, headline
+  // sources from `description` (the real wire's headline slot — see
+  // lib/slim.ts JSDoc). occupation has no v2 source at all (removed from
+  // slim output).
   const richProfile = {
     object: "user_profile",
     id: "ACoAACyJnqkBprov456",
@@ -776,6 +782,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     last_name: "Smith",
     location: "London, UK",
     public_identifier: "janesmith",
+    description: "Senior Engineer at TechCorp",
     specifics: {
       network_distance: "FIRST_DEGREE",
       experience: [
@@ -809,7 +816,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has provider_id/network_distance sourced correctly and current_position synthesized from specifics.experience[0]", async () => {
+  it("slim output has provider_id/network_distance/headline sourced correctly and current_position synthesized from specifics.experience[0]", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -823,6 +830,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result["provider_id"]).toBe("ACoAACyJnqkBprov456");
     expect(result["network_distance"]).toBe("FIRST_DEGREE");
+    expect(result["headline"]).toBe("Senior Engineer at TechCorp");
     expect(result).toHaveProperty("current_position");
     expect(result["current_position"]).toEqual({
       title: "Senior Engineer",     // ← from position
@@ -830,7 +838,6 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
       company_id: null,             // ALWAYS null
       is_current: true,             // ← end == null
     });
-    expect(result).not.toHaveProperty("headline");
     expect(result).not.toHaveProperty("occupation");
     expect(result).not.toHaveProperty("specifics");
     expect(result).not.toHaveProperty("education");

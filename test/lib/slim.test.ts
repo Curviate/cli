@@ -161,6 +161,10 @@ describe("slimProfileMe", () => {
   // `is_premium`/`network_distance` (both nested under `specifics`), no
   // plural-vs-singular `email` (the real field is `emails: string[]`), and
   // no `occupation`/`organizations` field anywhere on this resource.
+  // `description` and `bio` are BOTH real and distinct on reads: `description`
+  // carries the profile headline, `bio` carries the About-section paragraph
+  // (verified live — see slimProfileMe's JSDoc). Both are present here so the
+  // headline tests below prove the mapping reads the right one.
   const fullProfile = {
     object: "user_profile",
     id: "ACoAACyJnqkBprov123",
@@ -171,7 +175,8 @@ describe("slimProfileMe", () => {
     public_identifier: "johndoe",
     profile_url: "https://linkedin.com/in/johndoe",
     public_picture_url: "https://media.licdn.com/john.jpg",
-    description: "About me",
+    description: "Founder @ RedHire — building AI recruiting agents",
+    bio: "20 years building developer tools; ex-Google, ex-Stripe.",
     location: "Berlin, Germany",
     created_at: "2020-01-01T00:00:00.000Z",
     emails: ["john@example.com", "john.doe@work.com"],
@@ -193,14 +198,15 @@ describe("slimProfileMe", () => {
     },
   };
 
-  it("projects exactly the 8 slim fields", () => {
+  it("projects exactly the 9 slim fields", () => {
     const result = slimProfileMe(fullProfile);
-    expect(Object.keys(result)).toHaveLength(8);
+    expect(Object.keys(result)).toHaveLength(9);
     expect(Object.keys(result).sort()).toEqual(
       [
         "current_position",
         "emails",
         "first_name",
+        "headline",
         "is_premium",
         "last_name",
         "location",
@@ -213,6 +219,24 @@ describe("slimProfileMe", () => {
   it("provider_id sourced from the real id field (there is no top-level provider_id on the wire)", () => {
     const result = slimProfileMe(fullProfile);
     expect(result["provider_id"]).toBe("ACoAACyJnqkBprov123");
+  });
+
+  it("headline sourced from description — the real wire serves the profile headline in the description field on reads", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["headline"]).toBe("Founder @ RedHire — building AI recruiting agents");
+  });
+
+  it("headline does NOT source from bio — bio holds the About-section paragraph, a separate field", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["headline"]).not.toBe(fullProfile.bio);
+    expect(result).not.toHaveProperty("bio");
+  });
+
+  it("headline null when description is absent", () => {
+    const withoutDescription = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "description"),
+    );
+    expect(slimProfileMe(withoutDescription)["headline"]).toBeNull();
   });
 
   it("emails is the real plural array field (v1's singular email always projected null)", () => {
@@ -273,14 +297,17 @@ describe("slimProfileMe", () => {
     expect(result).not.toHaveProperty("organizations");
   });
 
-  it("excludes noise fields (object, type, display_name, profile_url, public_picture_url, description, created_at, phone_numbers, is_blocked, is_following, followers_count, relations_count, raw specifics)", () => {
+  it("excludes noise fields (object, type, display_name, profile_url, public_picture_url, description, bio, created_at, phone_numbers, is_blocked, is_following, followers_count, relations_count, raw specifics)", () => {
     const result = slimProfileMe(fullProfile);
     expect(result).not.toHaveProperty("object");
     expect(result).not.toHaveProperty("type");
     expect(result).not.toHaveProperty("display_name");
     expect(result).not.toHaveProperty("profile_url");
     expect(result).not.toHaveProperty("public_picture_url");
+    // the raw `description` key itself must not survive verbatim — it is
+    // remapped to `headline`, not copied through under its own name.
     expect(result).not.toHaveProperty("description");
+    expect(result).not.toHaveProperty("bio");
     expect(result).not.toHaveProperty("created_at");
     expect(result).not.toHaveProperty("phone_numbers");
     expect(result).not.toHaveProperty("is_blocked");
@@ -309,7 +336,9 @@ describe("slimProfile", () => {
   // /v1/{account_id}/users/{user_id}` response with a target member's id
   // instead of "me". `specifics.experience[0]` item shape (verified against
   // a live probe): {id, company, position, location, status,
-  // company_picture_url, skills, start, end}.
+  // company_picture_url, skills, start, end}. `description` (headline) and
+  // `bio` (About-section paragraph) are both real and distinct — see
+  // slimProfileMe's fixture comment and slimProfile's JSDoc.
   const fullProfile = {
     object: "user_profile",
     id: "ACoAACyJnqkBprov456",
@@ -319,6 +348,8 @@ describe("slimProfile", () => {
     last_name: "Smith",
     public_identifier: "janesmith",
     profile_url: "https://linkedin.com/in/janesmith",
+    description: "Senior Engineer at TechCorp | Distributed systems",
+    bio: "Building scalable backend systems for a decade.",
     location: "London, UK",
     followers_count: 900,
     relations_count: 500,
@@ -344,13 +375,14 @@ describe("slimProfile", () => {
     },
   };
 
-  it("projects exactly the 7 slim fields", () => {
+  it("projects exactly the 8 slim fields", () => {
     const result = slimProfile(fullProfile);
-    expect(Object.keys(result)).toHaveLength(7);
+    expect(Object.keys(result)).toHaveLength(8);
     expect(Object.keys(result).sort()).toEqual(
       [
         "current_position",
         "first_name",
+        "headline",
         "last_name",
         "location",
         "network_distance",
@@ -377,9 +409,25 @@ describe("slimProfile", () => {
     expect(slimProfile(withoutSpecifics)["network_distance"]).toBeNull();
   });
 
-  it("headline and occupation are entirely absent — no v2 source for either", () => {
+  it("headline sourced from description — same real wire, same mapping as slimProfileMe", () => {
     const result = slimProfile(fullProfile);
-    expect(result).not.toHaveProperty("headline");
+    expect(result["headline"]).toBe("Senior Engineer at TechCorp | Distributed systems");
+  });
+
+  it("headline does NOT source from bio — bio holds the About-section paragraph, a separate field", () => {
+    const result = slimProfile(fullProfile);
+    expect(result["headline"]).not.toBe(fullProfile.bio);
+  });
+
+  it("headline null when description is absent", () => {
+    const withoutDescription = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "description"),
+    );
+    expect(slimProfile(withoutDescription)["headline"]).toBeNull();
+  });
+
+  it("occupation is entirely absent — no v2 source", () => {
+    const result = slimProfile(fullProfile);
     expect(result).not.toHaveProperty("occupation");
   });
 
@@ -440,13 +488,17 @@ describe("slimProfile", () => {
     expect(slimProfile(withoutSpecifics)["current_position"]).toBeNull();
   });
 
-  it("excludes specifics raw object, display_name, object, type, profile_url, followers_count, relations_count", () => {
+  it("excludes specifics raw object, display_name, object, type, profile_url, description, bio, followers_count, relations_count", () => {
     const result = slimProfile(fullProfile);
     expect(result).not.toHaveProperty("specifics");
     expect(result).not.toHaveProperty("display_name");
     expect(result).not.toHaveProperty("object");
     expect(result).not.toHaveProperty("type");
     expect(result).not.toHaveProperty("profile_url");
+    // the raw `description` key itself must not survive verbatim — it is
+    // remapped to `headline`, not copied through under its own name.
+    expect(result).not.toHaveProperty("description");
+    expect(result).not.toHaveProperty("bio");
     expect(result).not.toHaveProperty("followers_count");
     expect(result).not.toHaveProperty("relations_count");
   });

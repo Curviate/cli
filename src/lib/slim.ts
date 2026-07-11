@@ -136,9 +136,9 @@ function extractExperience(specifics: Record<string, unknown> | null): unknown[]
  * as `profile <id>` (`userId: "me"` for the caller's own account) — there is
  * no separate "me" response shape.
  *
- * Exact fields returned (8):
- *   provider_id, first_name, last_name, public_identifier, location,
- *   emails (array), is_premium, current_position
+ * Exact fields returned (9):
+ *   provider_id, first_name, last_name, headline, public_identifier,
+ *   location, emails (array), is_premium, current_position
  *
  * v1-drift fixes (verified against the SDK's generated types, the wire truth):
  *   - `provider_id` ← `id` (the real wire has no `provider_id` key at all —
@@ -146,6 +146,15 @@ function extractExperience(specifics: Record<string, unknown> | null): unknown[]
  *   - `email` (singular, always null) → `emails`, the real key (`string[]`).
  *   - `is_premium` ← `specifics.is_premium` (nested — no top-level
  *     `is_premium` on the real wire).
+ *   - `headline` ← `description`. On a v2 read, LinkedIn serves the profile
+ *     headline in the `description` wire field, NOT a field literally named
+ *     `headline` — a separate `bio` field carries the About-section
+ *     paragraph. Confirmed by 3 independent live observations: a written
+ *     headline read back via `description` byte-for-byte, the same result
+ *     from the M3 matrix probe, and `--verbose` showing headline-shaped text
+ *     in `description` (About-paragraph text in `bio`) across live profiles.
+ *     Originally assumed to have no v2 source and dropped; restored once the
+ *     real source was identified.
  *   - `occupation`, `organizations`: REMOVED — no v2 source. The real
  *     user-profile response has no occupation-summary field and no
  *     administered-organizations field of any kind.
@@ -166,6 +175,9 @@ export function slimProfileMe(data: unknown): Record<string, unknown> {
     provider_id: d["id"] ?? null,
     first_name: d["first_name"] ?? null,
     last_name: d["last_name"] ?? null,
+    // LinkedIn serves the profile headline in the `description` wire field
+    // on reads, not a field named `headline` — see JSDoc above.
+    headline: d["description"] ?? null,
     public_identifier: d["public_identifier"] ?? null,
     location: d["location"] ?? null,
     emails: Array.isArray(d["emails"]) ? d["emails"] : [],
@@ -185,15 +197,17 @@ export function slimProfileMe(data: unknown): Record<string, unknown> {
  * `profile me` (see slimProfileMe) — `user_id` addresses the target member
  * instead of "me".
  *
- * Exact fields returned (7):
- *   provider_id, first_name, last_name, location, network_distance,
- *   public_identifier, current_position
+ * Exact fields returned (8):
+ *   provider_id, first_name, last_name, headline, location,
+ *   network_distance, public_identifier, current_position
  *
  * v1-drift fixes (verified against the SDK's generated types, the wire truth):
  *   - `provider_id` ← `id` (no top-level `provider_id` on the real wire).
  *   - `network_distance` ← `specifics.network_distance` (nested — no
  *     top-level `network_distance` on the real wire).
- *   - `headline`, `occupation`: REMOVED — no v2 source (see slimProfileMe).
+ *   - `headline` ← `description` (see slimProfileMe's JSDoc for the 3-way
+ *     live-verified evidence) — same real wire, same mapping.
+ *   - `occupation`: REMOVED — no v2 source (see slimProfileMe).
  *
  * `current_position` is synthesized from `specifics.experience[0]` via
  * `synthesizeCurrentPosition`. See that function for field mapping details.
@@ -211,6 +225,9 @@ export function slimProfile(data: unknown): Record<string, unknown> {
     provider_id: d["id"] ?? null,
     first_name: d["first_name"] ?? null,
     last_name: d["last_name"] ?? null,
+    // LinkedIn serves the profile headline in the `description` wire field
+    // on reads, not a field named `headline` — see slimProfileMe's JSDoc.
+    headline: d["description"] ?? null,
     location: d["location"] ?? null,
     network_distance: (specifics?.["network_distance"] as string | null | undefined) ?? null,
     public_identifier: d["public_identifier"] ?? null,
