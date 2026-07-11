@@ -90,6 +90,10 @@ Account:
 
 - **`account link --account-id <acc_…>`** (optional, non-breaking) — re-authenticate an existing account **in place** (reconnect): passing the id makes `account link` an in-place reconnect of that account; omit it for an ordinary fresh connect (unchanged — no `account_id` is sent). This is the reconnect path now that the hosted `account reconnect` / `account reconnect-link` commands are removed.
 
+Exit-code mapping:
+
+- **`ACCOUNT_ALREADY_LINKED`** and **`LINKEDIN_OPERATION_NOT_SUPPORTED`** are now present in `EXIT_CODE_MAP` (exit `8`, account / connection state — grouped with `ACCOUNT_RESTRICTED`/`RESOURCE_ACCESS_RESTRICTED`); previously `ACCOUNT_ALREADY_LINKED` was already a valid SDK `ErrorCode` but had no exit-code entry, and `LINKEDIN_OPERATION_NOT_SUPPORTED` is a new SDK code (a permanent LinkedIn platform limitation for the attempted operation, e.g. listing a non-self user's following list). Both were silently falling through to the default exit `1`; the exhaustiveness test now covers them.
+
 ### Fixed
 
 - **`company <id> employees` / `company <id> posts` / `company <id> jobs` (id-first form) no longer silently returns the base company profile.** The router bound `<id>` and dropped the trailing sub-resource word, so the id-first form quietly returned the company profile with exit 0. It now routes the id-first form to the sub-resource (equivalent to `company <sub> <id>`), or exits 2 with an actionable error on a genuinely unexpected extra argument — never a silent wrong result. The guard is applied uniformly across every bare-form command group.

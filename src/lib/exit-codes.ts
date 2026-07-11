@@ -43,6 +43,17 @@ import type { ErrorCode } from "@curviate/sdk";
  * acting account's own standing relative to a LinkedIn-side permission check
  * (e.g. not a page administrator of the target company) — a resource-scoped
  * variant of the same "this account can't do that" condition.
+ *
+ * Note: `ACCOUNT_ALREADY_LINKED` → 8 (account / connection state). A duplicate
+ * connect attempt — reconnect or adopt the existing account instead of
+ * retrying; not a transient failure. Grouped with `CONNECTION_IN_PROGRESS`
+ * (both describe the connect flow hitting an existing-account conflict).
+ *
+ * Note: `LINKEDIN_OPERATION_NOT_SUPPORTED` → 8 (account / connection state).
+ * A permanent LinkedIn platform limitation for the attempted operation (e.g.
+ * listing a non-self user's following list) — not the acting account's own
+ * restricted standing, but the same "this account can't do that against
+ * LinkedIn" shape as `RESOURCE_ACCESS_RESTRICTED`; not retryable.
  */
 export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   // Make the shape explicit so TypeScript catches literal errors in the values
@@ -83,6 +94,8 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   LINKEDIN_AUTH_FAILED: 8,
   LINKEDIN_COOKIE_INVALID: 8,
   CONNECTION_IN_PROGRESS: 8,
+  ACCOUNT_ALREADY_LINKED: 8,
+  LINKEDIN_OPERATION_NOT_SUPPORTED: 8,
 
   // Checkpoint flow (9)
   CHECKPOINT_NOT_FOUND: 9,
