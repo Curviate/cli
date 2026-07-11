@@ -9,7 +9,7 @@
  *   profile <id> --reactions                     — list reactions
  *   profile <id> --followers                     — list followers
  *   profile relations                            — list 1st-degree connections
- *   profile endorse <id> --endorsement-id <id>   — endorse a skill (write)
+ *   profile endorse <id> --endorsement-id <id>   — endorse a skill (write; slug/URL auto-resolved to provider id)
  *
  * All subcommands are account-scoped. `<id>` passes through resolveIdentifier.
  * Read commands reject --preview (exit 2). Write commands render --preview.
@@ -528,15 +528,27 @@ export async function runProfileEndorse(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const rawId = flags.id ?? "";
-  const resolvedId = resolveIdentifier(rawId);
+  const ns = client.account(accountId);
   const skillId = flags["endorsement-id"] ?? "";
   const outOpts = resolveOutputOpts(flags);
+
+  // The endorse write path accepts only a provider id — a slug/URL 404s
+  // upstream (same class as follow/unfollow, D6). Resolve to the provider id
+  // via a users.get READ (contact-safe — notifies no one, so it runs even
+  // under --preview and the preview renders the resolved id). A provider-id
+  // input passes straight through with no extra call.
+  let providerId: string;
+  try {
+    providerId = await resolveMemberProviderId(ns, flags.id ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "users.endorseSkill",
-      args: { id: resolvedId },
+      args: { id: providerId },
       body: { endorsement_id: skillId },
       account: accountId,
     });
@@ -544,20 +556,11 @@ export async function runProfileEndorse(
     return;
   }
 
-  const ns = client.account(accountId);
-
   try {
-    const result = await ns.users.endorseSkill(resolvedId, { endorsement_id: skillId });
+    const result = await ns.users.endorseSkill(providerId, { endorsement_id: skillId });
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
-    const { CurviateError } = await import("@curviate/sdk");
-    if (err instanceof CurviateError) {
-      const { getExitCode } = await import("../lib/exit-codes.js");
-      renderError(err as CurviateError, outOpts, out);
-      process.exit(getExitCode(err.code));
-    }
-    renderUnexpectedError(err, out);
-    process.exit(1);
+    await handleSdkError(err, outOpts, out);
   }
 }
 
@@ -872,7 +875,7 @@ const profileEndorseCommand = defineCommand({
   meta: { name: "endorse", description: "Endorse a skill on a member's profile." },
   args: {
     ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "Member identifier (URL, slug, or URN)." },
+    id: { type: "positional", description: "Member identifier (URL, slug, or provider id). A URL/slug is resolved to the provider id automatically (a slug is not accepted directly by the endorse endpoint)." },
     "endorsement-id": {
       type: "string",
       description: "Endorsement ID to endorse — get it from the target's skills section via `profile <id> --sections linkedin_skills`.",

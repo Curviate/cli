@@ -286,41 +286,77 @@ describe("profile endorse — write command", () => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
     (accountNs.users.endorseSkill as Mock).mockResolvedValue({ success: true });
+    // The endorse write path (like follow/unfollow) accepts only the provider
+    // id — a slug 404s upstream. users.get resolves a slug to that id.
+    (accountNs.users.get as Mock).mockResolvedValue({ id: "ACoAAresolved" });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("endorse <id> --endorsement-id <id> — calls endorse(id, {endorsement_id})", async () => {
+  it("endorse <slug> — resolves the slug to the provider id via users.get, then endorses THAT id", async () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileEndorse(client as never, { id: "jdoe", "endorsement-id": "skill_123", account: "acc_1", json: true } as SubCommandArgs, out);
+    await runProfileEndorse(client as never, { id: "raphael-redmer", "endorsement-id": "skill_123", account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("jdoe", { endorsement_id: "skill_123" });
+    // The slug is resolved via a users.get READ (contact-safe) ...
+    expect(accountNs.users.get).toHaveBeenCalledWith("raphael-redmer", {});
+    // ... and the endorse call uses the RESOLVED provider id, not the raw slug.
+    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("ACoAAresolved", { endorsement_id: "skill_123" });
   });
 
-  it("endorse --preview — renders preview without calling endorse", async () => {
+  it("endorse <provider-id> — passes through with NO extra users.get call", async () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileEndorse(client as never, { id: "jdoe", "endorsement-id": "skill_123", account: "acc_1", preview: true } as SubCommandArgs, out);
+    await runProfileEndorse(client as never, { id: "ACoAAdirect", "endorsement-id": "skill_9", account: "acc_1", json: true } as SubCommandArgs, out);
+
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("ACoAAdirect", { endorsement_id: "skill_9" });
+  });
+
+  it("endorse --preview — renders the RESOLVED provider id, no endorse call", async () => {
+    const { runProfileEndorse } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileEndorse(client as never, { id: "raphael-redmer", "endorsement-id": "skill_123", account: "acc_1", preview: true } as SubCommandArgs, out);
 
     expect(accountNs.users.endorseSkill).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("users.endorseSkill");
+    // The preview reflects the resolved id (the read runs even under --preview).
+    expect(parsed.args).toMatchObject({ id: "ACoAAresolved" });
   });
 
-  it("endorse — resolves member URL to slug", async () => {
+  it("endorse <url> — normalizes the URL then resolves it to the provider id", async () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runProfileEndorse(client as never, { id: "https://www.linkedin.com/in/some-user/", "endorsement-id": "skill_1", account: "acc_1", json: true } as SubCommandArgs, out);
 
-    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("some-user", { endorsement_id: "skill_1" });
+    expect(accountNs.users.get).toHaveBeenCalledWith("some-user", {});
+    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("ACoAAresolved", { endorsement_id: "skill_1" });
+  });
+
+  it("endorse — a users.get resolve failure surfaces (no endorse call)", async () => {
+    const { runProfileEndorse } = await import("../../src/commands/profile.js");
+    const { CurviateError } = await import("@curviate/sdk");
+    (accountNs.users.get as Mock).mockRejectedValue(
+      new CurviateError({ code: "RESOURCE_NOT_FOUND", message: "not found", userFixable: true, retryLikelyToSucceed: false }),
+    );
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+    await expect(
+      runProfileEndorse(client as never, { id: "raphael-redmer", "endorsement-id": "skill_1", account: "acc_1", json: true } as SubCommandArgs, out),
+    ).rejects.toThrow(/process\.exit/);
+    expect(accountNs.users.endorseSkill).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });
 
