@@ -284,6 +284,41 @@ describe("router — usage/routing errors exit 2", () => {
     const r = run(["webhook", "create"]);
     expect(r.status).toBe(2);
   });
+
+  it("a bare form with a non-subcommand extra positional exits 2 (never silent-swallow, D4a)", () => {
+    // `company <id> bogus` — `bogus` is neither a second positional company
+    // accepts nor a subcommand. The pre-router must NOT bind `<id>` and swallow
+    // `bogus` (which returned the base company profile, exit 0, pre-fix).
+    const r = run(["company", "1035", "bogus", "--account", "acc_x"]);
+    expect(r.status).toBe(2);
+    expect(combined(r)).toMatch(/unexpected argument `bogus`/);
+  });
+
+  it("`profile <id> bogus` exits 2 (non-subcommand extra positional, D4a)", () => {
+    const r = run(["profile", "jdoe", "bogus", "--account", "acc_x"]);
+    expect(r.status).toBe(2);
+  });
+});
+
+describe("router — id-first reroute reaches the subcommand, not the bare form (D4a)", () => {
+  // `company <id> employees` must reroute to the employees sub-resource, NOT
+  // silently return the base company retrieve. Against an unroutable base URL
+  // both network-fail, so the observable end-to-end signal here is simply that
+  // it routes to a handler (exit 1, not a routing usage error 2 / "Unknown
+  // command"); the exact reroute target is pinned in test/dispatch.test.ts.
+  for (const sub of ["employees", "posts", "jobs"] as const) {
+    it(`company <id> ${sub} routes to a handler (not exit 2 / Unknown command)`, () => {
+      const r = run([
+        "company", "112013061", sub,
+        "--account", "acc_x",
+        "--base-url", UNROUTABLE,
+        "--json",
+      ]);
+      expect(isUnknownCommand(r)).toBe(false);
+      expect(r.status).not.toBe(2);
+      expect(r.status).toBe(1);
+    });
+  }
 });
 
 describe("router — successful data commands write nothing to stderr", () => {

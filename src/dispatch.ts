@@ -62,6 +62,88 @@ async function nodeHasPositional(cmd: AnyCommand): Promise<boolean> {
   return Object.values(argsDef).some((def) => def?.type === "positional");
 }
 
+/** Count of positional arguments a node declares (the bare form's arity). */
+async function nodePositionalCount(cmd: AnyCommand): Promise<number> {
+  const argsDef = (await resolveValue(cmd.args ?? {})) as Record<
+    string,
+    { type?: string }
+  >;
+  return Object.values(argsDef).filter((def) => def?.type === "positional").length;
+}
+
+/** Names (and aliases) of a node's boolean flags — flags that take no value. */
+async function booleanFlagNames(cmd: AnyCommand): Promise<Set<string>> {
+  const names = new Set<string>();
+  const argsDef = (await resolveValue(cmd.args ?? {})) as Record<
+    string,
+    { type?: string; alias?: string | string[] }
+  >;
+  for (const [name, def] of Object.entries(argsDef)) {
+    if (def?.type !== "boolean") continue;
+    names.add(name);
+    const alias = def.alias;
+    if (typeof alias === "string") names.add(alias);
+    else if (Array.isArray(alias)) for (const a of alias) names.add(a);
+  }
+  return names;
+}
+
+/** Resolve a node's display name (meta may be lazy) for a usage diagnostic. */
+async function nodeName(cmd: AnyCommand): Promise<string> {
+  const meta = (await resolveValue(cmd.meta ?? {})) as { name?: string };
+  return meta.name ?? "this command";
+}
+
+/**
+ * The positional tokens citty/mri would leave after parsing `rawArgs` against a
+ * node's declared flags — matching mri's rule that a `--flag` consumes the
+ * FOLLOWING token as its value UNLESS the flag is declared boolean (or the value
+ * is inline `--flag=value`, or the following token is itself a flag). An unknown
+ * `--flag` consumes its follower too (mri's default), so a subcommand's own flag
+ * (e.g. `company <id> employees --keywords eng`) is classified correctly even at
+ * the parent node that never declared it.
+ *
+ * Used to detect UNEXPECTED extra positionals — tokens beyond a node's declared
+ * positional arity that citty would silently swallow into `args._` (the D4a
+ * silent-wrong-data class). Each result carries its index in `rawArgs` so a
+ * reroute can drop exactly the subcommand-naming token.
+ */
+function positionalTokens(
+  rawArgs: string[],
+  booleanFlags: Set<string>,
+): Array<{ token: string; index: number }> {
+  const out: Array<{ token: string; index: number }> = [];
+  let afterDoubleDash = false;
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i]!;
+    if (afterDoubleDash) {
+      out.push({ token: arg, index: i });
+      continue;
+    }
+    if (arg === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    // A flag: starts with "-" but is not the bare "-" stdin sentinel.
+    if (arg.startsWith("-") && arg !== "-") {
+      const body = arg.replace(/^-+/, "");
+      if (body.includes("=")) continue; // inline value — self-contained
+      const isBoolean =
+        booleanFlags.has(body) ||
+        (body.startsWith("no-") && booleanFlags.has(body.slice(3)));
+      if (isBoolean) continue; // boolean flag — consumes no following token
+      // Value-flag (declared string or unknown): consume the next token as its
+      // value when present and not itself a flag (mirrors mri).
+      const next = rawArgs[i + 1];
+      if (next !== undefined && !(next.startsWith("-") && next !== "-")) i++;
+      continue;
+    }
+    // Positional (including the bare "-" stdin sentinel).
+    out.push({ token: arg, index: i });
+  }
+  return out;
+}
+
 /** Collect the declared argument names for a node (for unknown-flag detection). */
 async function declaredArgNames(cmd: AnyCommand): Promise<Set<string>> {
   const names = new Set<string>();
@@ -141,7 +223,7 @@ function usageError(message: string): never {
  * the rawArgs that belong to it. On an unrecognized token under a pure group
  * (no bare `run`), emits a usage error and exits 2.
  */
-async function resolveLeaf(
+export async function resolveLeaf(
   cmd: AnyCommand,
   rawArgs: string[],
 ): Promise<{ leaf: AnyCommand; leafArgs: string[] }> {
@@ -161,6 +243,39 @@ async function resolveLeaf(
     }
 
     if (token !== undefined && hasBarePositional) {
+      // No keyword match but the node accepts a bare positional. Before running
+      // the bare form, guard against UNEXPECTED extra positionals: citty binds
+      // only the node's declared positionals and silently swallows the rest into
+      // `args._` — the D4a silent-wrong-data class (e.g. `company <id> employees`
+      // returning the base company profile, ignoring `employees`). Reroute an
+      // id-first ergonomic form, or fail loudly — never silently ignore.
+      const booleanFlags = await booleanFlagNames(cmd);
+      const positionals = positionalTokens(rawArgs, booleanFlags);
+      const declaredCount = await nodePositionalCount(cmd);
+      const extras = positionals.slice(declaredCount);
+      if (extras.length > 0) {
+        const first = extras[0]!;
+        // Exactly one extra positional that names a subcommand → the id-first
+        // form `<group> <id> <sub>`, equivalent to `<group> <sub> <id>`. Drop
+        // only that token and descend into the subcommand with the remaining
+        // args (the id positional + any flags, which the subcommand re-parses).
+        if (
+          extras.length === 1 &&
+          Object.prototype.hasOwnProperty.call(subCommands, first.token)
+        ) {
+          const sub = (await resolveValue(subCommands[first.token])) as AnyCommand;
+          const remaining = rawArgs.filter((_, i) => i !== first.index);
+          return resolveLeaf(sub, remaining);
+        }
+        // Otherwise it cannot be a valid reroute → actionable usage error, never
+        // a silent swallow of the extra token.
+        const name = await nodeName(cmd);
+        usageError(
+          `unexpected argument \`${first.token}\` after \`${name}\`. ` +
+            `It is neither a positional \`${name}\` accepts nor one of its subcommands. ` +
+            `Run \`curviate ${name} --help\` for the available subcommands.`,
+        );
+      }
       // No keyword match but the node accepts a bare positional → run it.
       return { leaf: cmd, leafArgs: rawArgs };
     }
