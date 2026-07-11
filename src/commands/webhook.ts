@@ -24,7 +24,17 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readFileSync } from "node:fs";
-import type { Curviate, CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError, paths } from "@curviate/sdk";
+
+/**
+ * `POST /v1/webhooks` body — a `source`-discriminated union (messaging | user
+ * | account_status), each with its own `events`/`data` enum arrays. `source`,
+ * `events`, and `data` are free-form CLI flags (comma-split strings), so
+ * proving the literal-union match statically isn't practical here — a single
+ * narrow cast at this body-argument call site stands in (FR-001 body-typing
+ * rule); the server validates the enum values on any mismatch.
+ */
+type WebhookCreateBody = paths["/v1/webhooks"]["post"]["requestBody"]["content"]["application/json"];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,7 +171,8 @@ export async function runWebhookCreate(
   }
 
   try {
-    const result = await client.webhooks.create(body);
+    // Narrow cast — see the WebhookCreateBody comment above.
+    const result = await client.webhooks.create(body as WebhookCreateBody);
     renderSuccess(result, outOpts, out);
   } catch (err) {
     await handleError(err, outOpts, out);
