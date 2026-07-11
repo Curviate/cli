@@ -4,7 +4,7 @@
  * Coverage:
  *   post list                                             → posts.list (paginated)
  *   post get <post_id>                                   → posts.get
- *   post create "<text>" [--attach…] [--video-thumbnail] → posts.create (ALWAYS multipart)
+ *   post create "<text>" [--attach…]                    → posts.create (v2: JSON only, no multipart)
  *   post comment <post_id> "<text>" [--attach <file>]   → posts.comment (multipart)
  *   post comments <post_id>                              → posts.listComments (paginated)
  *   post react <post_id> --reaction <r>                 → posts.react (body field: `reaction`)
@@ -47,7 +47,6 @@ type PostArgs = {
   text?: string;
   reaction?: string;
   attach?: string | string[];
-  "video-thumbnail"?: string;
   account?: string;
   json?: boolean;
   preview?: boolean;
@@ -220,7 +219,7 @@ describe("post create", () => {
     );
   });
 
-  it("post create '<text>' --attach <file> — reads file, passes Buffer in attachments", async () => {
+  it("post create '<text>' --attach <file> — reads file, passes base64 payload in attachments (v2: no multipart)", async () => {
     const { runPostCreate } = await import("../../src/commands/post.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -235,27 +234,13 @@ describe("post create", () => {
     } as PostArgs, out);
 
     const callArgs = (ns.posts.create as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    const attachments = callArgs["attachments"] as Buffer[];
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
     expect(Array.isArray(attachments)).toBe(true);
-    expect(attachments[0]).toBeInstanceOf(Buffer);
-  });
-
-  it("post create --video-thumbnail <file> — reads thumbnail, passes Buffer as video_thumbnail", async () => {
-    const { runPostCreate } = await import("../../src/commands/post.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const thumbPath = join(tmpDir, "thumb.jpg");
-    await writeFile(thumbPath, "thumbdata");
-
-    await runPostCreate(client as never, {
-      text: "Video post",
-      "video-thumbnail": thumbPath,
-      account: "acc_1",
-      json: true,
-    } as PostArgs, out);
-
-    const callArgs = (ns.posts.create as Mock).mock.calls[0]![0] as Record<string, unknown>;
-    expect(callArgs["video_thumbnail"]).toBeInstanceOf(Buffer);
+    expect(attachments[0]).toEqual({
+      content: Buffer.from("jpgdata").toString("base64"),
+      content_type: "image/jpeg",
+      filename: "img.jpg",
+    });
   });
 
   it("post create --attach <missing> — exits 2 before SDK call", async () => {

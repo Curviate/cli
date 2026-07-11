@@ -4,7 +4,7 @@
  * Subcommands:
  *   post list                                              — list posts (paginated)
  *   post get <post_id>                                    — get a single post (read)
- *   post create "<text>" [--attach <file>…] [--video-thumbnail <file>] — create post (write, ALWAYS multipart)
+ *   post create "<text>" [--attach <file>…]              — create post (write, JSON only in v2)
  *   post comment <post_id> "<text>" [--attach <file>]    — comment on post (write, multipart)
  *   post comments <post_id>                               — list comments (paginated, read)
  *   post react <post_id> --reaction <r>                  — react to post (write, body field: reaction)
@@ -12,6 +12,13 @@
  *
  * post_id passes through verbatim — NOT resolved via resolveIdentifier.
  * All subcommands are account-scoped.
+ *
+ * v2 (sdk/007): posts.create/posts.react are re-pointed here — --video-thumbnail
+ * has no v2 home (dropped, same class as profile's --notify) and attachments
+ * are base64 JSON objects, not multipart. --comment-id on `post react` is
+ * also dropped: comment-level reactions moved to the comments.* group
+ * (comment-id has no home on posts.react's v2 body); --as-organization now
+ * maps to the renamed `react_as` body field.
  */
 
 import { defineCommand } from "citty";
@@ -22,7 +29,7 @@ import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
-import { readAttachment, AttachError } from "../lib/attach.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
@@ -38,10 +45,8 @@ type PostFlags = {
   text?: string;
   reaction?: string;
   "reply-to"?: string;
-  "comment-id"?: string;
   "as-organization"?: string;
   attach?: string | string[];
-  "video-thumbnail"?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -189,8 +194,15 @@ export async function runPostGet(
 }
 
 /**
- * Run `post create "<text>" [--attach <file>…] [--video-thumbnail <file>]`.
- * Write command — supports --preview. ALWAYS multipart (SDK handles form building).
+ * Run `post create "<text>" [--attach <file>…]`.
+ * Write command — supports --preview.
+ *
+ * v2: pure application/json — no multipart op on the served surface, and no
+ * `video_thumbnail` field (--video-thumbnail has no v2 home and is dropped,
+ * same class of removal as profile's --notify). Attachments (images, a
+ * single PDF for a document post, etc.) travel as base64
+ * {content,content_type,filename} objects; multiple entries produce a
+ * carousel.
  */
 export async function runPostCreate(
   client: Curviate,
@@ -201,7 +213,6 @@ export async function runPostCreate(
   const accountId = requireAccount(flags.account, out);
   const rawText = flags.text ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
-  const thumbPath = flags["video-thumbnail"];
 
   // Resolve stdin sentinel: "-" reads all of stdin.
   const text = await resolveTextOrStdin(rawText, out, _readStdin);
@@ -218,31 +229,11 @@ export async function runPostCreate(
     throw err;
   }
 
-  // Load video thumbnail if provided.
-  let thumbBuffer: Buffer | undefined;
-  if (thumbPath) {
-    try {
-      thumbBuffer = await readAttachment(thumbPath);
-    } catch (err: unknown) {
-      if (err instanceof AttachError) {
-        out.stderr.write(`error: ${err.message}\n`);
-        process.exit(err.exitCode);
-      }
-      throw err;
-    }
-  }
-
   if (flags.preview) {
     const allAttachmentPreviews = attachBuffers.map((buf, i) => ({
       name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
       buffer: buf,
     }));
-    if (thumbBuffer && thumbPath) {
-      allAttachmentPreviews.push({
-        name: `video_thumbnail:${thumbPath.split("/").pop() ?? thumbPath}`,
-        buffer: thumbBuffer,
-      });
-    }
     const preview = buildPreviewOutput({
       method: "posts.create",
       args: {},
@@ -254,13 +245,11 @@ export async function runPostCreate(
     return;
   }
 
-  const body: Record<string, unknown> = { text };
-  if (attachBuffers.length > 0) {
-    body["attachments"] = attachBuffers;
-  }
-  if (thumbBuffer) {
-    body["video_thumbnail"] = thumbBuffer;
-  }
+  const attachmentPayloads = attachBuffers.map((buf, i) => toAttachmentPayload(attachPaths[i]!, buf));
+  const body = {
+    text,
+    ...(attachmentPayloads.length > 0 ? { attachments: attachmentPayloads } : {}),
+  };
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
@@ -383,11 +372,15 @@ export async function runPostComments(
 }
 
 /**
- * Run `post react <post_id> --reaction <r> [--comment-id <cmt>] [--as-organization <org>]`.
+ * Run `post react <post_id> --reaction <r> [--as-organization <org>]`.
  * Write command — supports --preview.
  * --reaction: validated against the write-side enum (lowercase only).
- * --comment-id: reacts to a specific comment within the post.
- * --as-organization: reacts on behalf of an organization page.
+ * --as-organization: reacts on behalf of an organization page (v2 body
+ * field: `react_as`).
+ *
+ * v2: `comment_id` has no home on posts.react's body (PostReactBody is just
+ * {reaction, react_as?}) — comment-level reactions moved to the comments.*
+ * group; --comment-id is dropped from this command.
  */
 export async function runPostReact(
   client: Curviate,
@@ -407,13 +400,13 @@ export async function runPostReact(
     return;
   }
 
-  const commentId = flags["comment-id"];
   const asOrganization = flags["as-organization"];
 
   // Build body shared between preview and SDK call.
-  const body: Record<string, unknown> = { reaction };
-  if (commentId) body["comment_id"] = commentId;
-  if (asOrganization) body["as_organization"] = asOrganization;
+  const body = {
+    reaction: reaction as "like" | "celebrate" | "support" | "love" | "insightful" | "funny",
+    ...(asOrganization ? { react_as: asOrganization } : {}),
+  };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
@@ -540,12 +533,8 @@ const postCreateCommand = defineCommand({
     attach: {
       type: "string",
       description:
-        "Image/video/document to attach (repeatable for images; use --video-thumbnail when attaching a video). " +
+        "Image/video/document to attach (repeatable for images; a single PDF produces a document post). " +
         "Supported: jpg, png, gif, mp4, pdf.",
-    },
-    "video-thumbnail": {
-      type: "string",
-      description: "Thumbnail image for a video attachment (required when attaching a video post).",
     },
   },
   async run({ args }) {
@@ -639,7 +628,7 @@ const postCommentsCommand = defineCommand({
 });
 
 const postReactCommand = defineCommand({
-  meta: { name: "react", description: "React to a post or comment." },
+  meta: { name: "react", description: "React to a post." },
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
@@ -647,7 +636,7 @@ const postReactCommand = defineCommand({
       type: "positional",
       description:
         "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
-        "POSTID is always the post's id; to react to a comment within the post, use --comment-id <comment_id>.",
+        "POSTID is always the post's id.",
     },
     reaction: {
       type: "string",
@@ -657,10 +646,6 @@ const postReactCommand = defineCommand({
         "Read-side vocabulary (in the value and user_reacted response fields): LIKE, PRAISE, APPRECIATION, EMPATHY, INTEREST, ENTERTAINMENT. " +
         "Confirmed write→read mappings: like=LIKE, celebrate=PRAISE, insightful=INTEREST. " +
         "(support, love, and funny are valid write values; their read-side pairings are unconfirmed.)",
-    },
-    "comment-id": {
-      type: "string",
-      description: "React to this specific comment id within the post (omit to react to the post itself).",
     },
     "as-organization": {
       type: "string",
@@ -732,10 +717,10 @@ export const postCommand = defineCommand({
       "Usage: curviate post <subcommand>\n" +
       "  list\n" +
       "  get <post_id>\n" +
-      "  create \"<text>\" [--attach <file>…] [--video-thumbnail <file>]\n" +
+      "  create \"<text>\" [--attach <file>…]\n" +
       "  comment <post_id> \"<text>\" [--attach <file>] [--reply-to <comment_id>]\n" +
       "  comments <post_id> [--reply-to <comment_id>]\n" +
-      "  react <post_id> --reaction <r> [--comment-id <comment_id>] [--as-organization <org_id>]\n" +
+      "  react <post_id> --reaction <r> [--as-organization <org_id>]\n" +
       "  reactions <post_id>\n",
     );
   },

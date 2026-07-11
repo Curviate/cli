@@ -8,7 +8,8 @@
  *
  * post comments and post get: description notes POSTID is the post's id;
  *   to target a comment within the post, use --reply-to.
- * post react: description notes to react to a comment, use --comment-id.
+ * post react: v2 has no --comment-id (comment-level reactions moved to the
+ *   comments.* group) — the description must not claim it exists.
  *
  * Note: actual URL extraction round-trip is server scope.
  * This test covers help text only.
@@ -67,9 +68,8 @@ describe("post <post_id> descriptions — URL acceptance + comment guidance", ()
     expect(postIdDesc.toLowerCase()).toMatch(/reply-to|reply to/i);
   });
 
-  it("post react — postId description guides: use --comment-id to react to a comment", async () => {
+  it("post react — has no --comment-id flag (v2: comment reactions moved to the comments.* group)", async () => {
     const subCmds = await getPostSubCmdArgs();
-    const postIdDesc = subCmds["react"]?.args?.["postId"]?.description ?? "";
-    expect(postIdDesc.toLowerCase()).toMatch(/comment-id|comment id/i);
+    expect(subCmds["react"]?.args?.["comment-id"]).toBeUndefined();
   });
 });
