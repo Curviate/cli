@@ -1,7 +1,7 @@
 /**
  * Tests for the `search` command group.
  * Key assertions: search people/companies/posts/jobs use POST body,
- * cursor/limit go to query (not body), --url seeds the body url field.
+ * cursor/limit go to query (not body); from-URL search is the bare `search <url>` form.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -120,18 +120,6 @@ describe("search people", () => {
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(accountNs.search.people).toHaveBeenCalledWith(
       expect.objectContaining({ keywords: "ai" }),
-    );
-  });
-
-  it("search people --url <url> — passes url in body", async () => {
-    const { runSearchPeople } = await import("../../src/commands/search.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const searchUrl = "https://www.linkedin.com/search/results/people/?keywords=ai";
-    await runSearchPeople(client as never, { url: searchUrl, account: "acc_1", json: true } as SearchArgs, out);
-
-    expect(accountNs.search.people).toHaveBeenCalledWith(
-      expect.objectContaining({ url: searchUrl }),
     );
   });
 
@@ -339,18 +327,6 @@ describe("search companies / posts / jobs", () => {
     );
   });
 
-  it("search companies --url <url> — passes url in body (newly declared flag)", async () => {
-    const { runSearchCompanies } = await import("../../src/commands/search.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const searchUrl = "https://www.linkedin.com/search/results/companies/?keywords=acme";
-    await runSearchCompanies(client as never, { url: searchUrl, account: "acc_1", json: true } as SearchArgs, out);
-
-    expect(accountNs.search.companies).toHaveBeenCalledWith(
-      expect.objectContaining({ url: searchUrl }),
-    );
-  });
-
   it("search companies named flags + --filters map to exact API fields", async () => {
     const { runSearchCompanies } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
@@ -384,14 +360,12 @@ describe("search companies / posts / jobs", () => {
     );
   });
 
-  it("search posts --url + named scalar flags map to exact API fields", async () => {
+  it("search posts named scalar flags map to exact API fields", async () => {
     const { runSearchPosts } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    const searchUrl = "https://www.linkedin.com/search/results/content/?keywords=ai";
     await runSearchPosts(client as never, {
       account: "acc_1",
-      url: searchUrl,
       "sort-by": "relevance",
       "date-posted": "past-week",
       "content-type": "videos",
@@ -400,7 +374,6 @@ describe("search companies / posts / jobs", () => {
 
     const body = (accountNs.search.posts as Mock).mock.calls[0]![0] as Record<string, unknown>;
     expect(body).toEqual({
-      url: searchUrl,
       sort_by: "relevance",
       date_posted: "past_week",  // hyphen → underscore normalized
       content_type: "videos",
@@ -418,14 +391,12 @@ describe("search companies / posts / jobs", () => {
     );
   });
 
-  it("search jobs --url + named flags (string arrays + scalars) map to exact API fields", async () => {
+  it("search jobs named flags (string arrays + scalars) map to exact API fields", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    const searchUrl = "https://www.linkedin.com/jobs/search/?keywords=engineer";
     await runSearchJobs(client as never, {
       account: "acc_1",
-      url: searchUrl,
       location: "103644278,90000084",
       industry: "96",
       seniority: "3",
@@ -443,7 +414,6 @@ describe("search companies / posts / jobs", () => {
     // When both --location and --region are supplied, --region wins (applied last).
     expect(body).toEqual({
       easy_apply: true,
-      url: searchUrl,
       industry: ["96"],
       seniority: ["3"],
       function: ["eng"],

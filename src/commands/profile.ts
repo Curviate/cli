@@ -3,7 +3,7 @@
  *
  * Subcommands:
  *   profile me                                   — own profile
- *   profile <id> [--notify]                      — get member profile
+ *   profile <id>                                 — get member profile
  *   profile <id> --posts [--is-company]          — list posts
  *   profile <id> --comments                      — list comments
  *   profile <id> --reactions                     — list reactions
@@ -53,7 +53,6 @@ type ProfileFlags = {
   reactions?: boolean;
   followers?: boolean;
   "is-company"?: boolean;
-  notify?: boolean;
   skill?: string;
   account?: string;
   json?: boolean;
@@ -74,7 +73,6 @@ type ProfileFlags = {
 type SubFlags = {
   id?: string;
   skill?: string;
-  notify?: boolean;
   account?: string;
   json?: boolean;
   all?: boolean;
@@ -286,7 +284,7 @@ export async function runProfileMe(
 }
 
 /**
- * Run `profile <id> [--posts|--comments|--reactions|--followers] [--notify]`.
+ * Run `profile <id> [--posts|--comments|--reactions|--followers]`.
  * Exported for unit-testing.
  */
 export async function runProfileGet(
@@ -404,9 +402,8 @@ export async function runProfileGet(
       // Default: users.get (accepts a member id/slug/URL, or the "me" sentinel).
       rejectAllOnNonPaginated(flags.all, out);
 
-      // NOTE (CLI-1): v2 users.get exposes only `linkedin_sections`; the pre-v2
-      // `notify` (signal-a-view) query has no home on this op. `--notify` is
-      // therefore not forwarded — an open re-point question for CLI-2 to settle.
+      // v2 users.get exposes only `linkedin_sections`; the pre-v2 signal-a-view
+      // request has no home on this op, so the command carries no such flag.
       const params: { linkedin_sections?: string[] } = {};
       if (flags.sections) {
         params.linkedin_sections = flags.sections
@@ -918,7 +915,6 @@ export const profileCommand = defineCommand({
     reactions: { type: "boolean", description: "List the profile's reactions.", default: false },
     followers: { type: "boolean", description: "List the profile's followers.", default: false },
     "is-company": { type: "boolean", description: "When listing posts, treat the profile as a company page.", default: false },
-    notify: { type: "boolean", description: "Signal a profile view when fetching.", default: false },
     sections: {
       type: "string",
       description: "Comma-separated LinkedIn sections to fetch (e.g. experience,education).",

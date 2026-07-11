@@ -12,7 +12,7 @@
  *   recruiter jobs [--all] [--limit] [--cursor]                                → recruiter.listJobs
  *   recruiter job create <body…>                                               → recruiter.createJob
  *   recruiter job publish <project_id> <job_id>                                → recruiter.publishJob
- *   recruiter job applicants <project_id> --channel-id <id>                    → recruiter.listApplicants
+ *   recruiter applicants <project_id> --channel-id <id>                        → recruiter.listApplicants
  *   recruiter applicant <project_id> <applicant_id>                            → recruiter.getApplicant (verbatim id)
  *   recruiter applicant resume <project_id> <applicant_id> -o <file>           → recruiter.downloadResume (binary)
  *
@@ -1790,9 +1790,9 @@ describe("recruiter talent-search", () => {
   });
 });
 
-// ─── recruiter job applicants ──────────────────────────────────────────────
+// ─── recruiter applicants ──────────────────────────────────────────────────
 
-describe("recruiter job applicants", () => {
+describe("recruiter applicants", () => {
   let ns: ReturnType<typeof makeRecruiterNs>;
   let client: ReturnType<typeof makeClient>;
 

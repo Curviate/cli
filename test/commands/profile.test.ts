@@ -49,7 +49,6 @@ type ProfileCommandArgs = {
   followers?: boolean;
   "is-company"?: boolean;
   skill?: string;
-  notify?: boolean;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -69,7 +68,6 @@ type ProfileCommandArgs = {
 type SubCommandArgs = {
   id?: string;
   skill?: string;
-  notify?: boolean;
   account?: string;
   json?: boolean;
   all?: boolean;
@@ -153,15 +151,14 @@ describe("profile command — routing", () => {
     expect(accountNs.posts.listUserPosts).not.toHaveBeenCalled();
   });
 
-  it("profile <id> --notify — notify is NOT forwarded (v2 users.get has no notify param)", async () => {
-    const { runProfileGet } = await import("../../src/commands/profile.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runProfileGet(client as never, { id: "jdoe", account: "acc_1", notify: true, json: true } as ProfileCommandArgs, out);
-
-    // CLI-1: v2 users.get only accepts linkedin_sections; --notify is dropped
-    // (open re-point question for CLI-2). Guard that it is not forwarded.
-    expect(accountNs.users.get).toHaveBeenCalledWith("jdoe", {});
+  it("profile / profile me no longer declare the removed --notify flag (v2 users.get has no notify param)", async () => {
+    const { profileCommand } = await import("../../src/commands/profile.js");
+    const cmd = profileCommand as unknown as {
+      args?: Record<string, unknown>;
+      subCommands?: { me?: { args?: Record<string, unknown> } };
+    };
+    expect(cmd.args ?? {}, "profile <id> must not declare --notify").not.toHaveProperty("notify");
+    expect(cmd.subCommands?.me?.args ?? {}, "profile me must not declare --notify").not.toHaveProperty("notify");
   });
 
   it("profile <id> --posts — calls listPosts", async () => {

@@ -12,7 +12,7 @@
  *   recruiter jobs [--all] [--limit] [--cursor]                                  — list jobs (read)
  *   recruiter job create [--body-file <path> | --body -] [--job-title <t>] [--description <d>] [--employment-type <e>] — create job draft (write; JSON body + scalar flags)
  *   recruiter job publish <project_id> <job_id> [--mode <m>]                                  — publish job (write)
- *   recruiter job applicants <project_id> --channel-id <id>                                             — list applicants (read)
+ *   recruiter applicants <project_id> --channel-id <id>                                             — list applicants (read)
  *   recruiter job get <url|id>                                                    — get a job posting via the Recruiter lens (read, any public job)
  *   recruiter applicant <project_id> <applicant_id>                                            — get applicant (read, verbatim id)
  *   recruiter applicant resume <project_id> <applicant_id> -o <file>                          — download resume (binary)
@@ -1304,13 +1304,14 @@ export async function runRecruiterSearchTalentPool(
 }
 
 /**
- * Run `recruiter job applicants <project_id> --channel-id <id>`.
+ * Run `recruiter applicants <project_id> --channel-id <id>`.
  * Read command — rejects --preview. project_id passes verbatim.
  *
- * v2: listApplicants is project-scoped, not job-scoped (the positional here
- * is repointed from job_id to project_id to match — a job_id in this slot
- * would 404 against the real v2 op) and requires `channel_id` (the
- * project's own JOB_POSTING talent-pool channel) in the body.
+ * v2: listApplicants is project-scoped, not job-scoped (a project id in the
+ * positional — a job_id here would 404 against the real v2 op) and requires
+ * `channel_id` (the project's own JOB_POSTING talent-pool channel) in the body.
+ * The command is top-level under `recruiter` (not nested under `job`) to match
+ * that project scope.
  */
 export async function runRecruiterListApplicants(
   client: Curviate,
@@ -1877,7 +1878,7 @@ const recruiterJobPublishCommand = defineCommand({
   },
 });
 
-const recruiterJobApplicantsCommand = defineCommand({
+const recruiterApplicantsCommand = defineCommand({
   meta: { name: "applicants", description: "List applicants in a Recruiter project's talent pool." },
   args: {
     ...GLOBAL_FLAGS,
@@ -1962,7 +1963,6 @@ const recruiterJobCommand = defineCommand({
     create: recruiterJobCreateCommand,
     publish: recruiterJobPublishCommand,
     close: recruiterJobCloseCommand,
-    applicants: recruiterJobApplicantsCommand,
     get: recruiterJobGetCommand,
   },
   async run() {
@@ -1970,7 +1970,6 @@ const recruiterJobCommand = defineCommand({
       "Usage: curviate recruiter job create [flags…]\n" +
       "       curviate recruiter job publish <project_id> <job_id> --mode <FREE|PROMOTED|PROMOTED_PLUS>\n" +
       "       curviate recruiter job close <project_id> <job_id>\n" +
-      "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n",
     );
   },
@@ -2236,6 +2235,7 @@ export const recruiterCommand = defineCommand({
     "project-job": recruiterProjectJobCommand,
     "talent-search": recruiterTalentSearchCommand,
     "save-candidate": recruiterSaveCandidateCommand,
+    applicants: recruiterApplicantsCommand,
     jobs: recruiterJobsCommand,
     job: recruiterJobCommand,
     applicant: recruiterApplicantCommand,
@@ -2257,11 +2257,11 @@ export const recruiterCommand = defineCommand({
       "       curviate recruiter project-job update <project_id> <job_id> [flags…]\n" +
       "       curviate recruiter talent-search <project_id> --channel-id <id>\n" +
       "       curviate recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>\n" +
+      "       curviate recruiter applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter jobs\n" +
       "       curviate recruiter job create [flags…]\n" +
       "       curviate recruiter job publish <project_id> <job_id> --mode <FREE|PROMOTED|PROMOTED_PLUS>\n" +
       "       curviate recruiter job close <project_id> <job_id>\n" +
-      "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n" +
       "       curviate recruiter applicant <project_id> <applicant_id>\n" +
       "       curviate recruiter applicant resume <project_id> <applicant_id> -o <file>\n",

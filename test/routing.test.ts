@@ -212,9 +212,9 @@ describe("router — subcommands still route after the bare-form fix", () => {
     expect(r.stdout).toMatch(/"error"/);
   });
 
-  it("recruiter job applicants <project_id> still routes correctly (job get does not shadow other job verbs)", () => {
+  it("recruiter applicants <project_id> routes to the top-level project-scoped command", () => {
     const r = run([
-      "recruiter", "job", "applicants", "proj_99",
+      "recruiter", "applicants", "proj_99",
       "--channel-id", "ch_1",
       "--account", "acc_x",
       "--base-url", UNROUTABLE,

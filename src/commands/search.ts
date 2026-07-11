@@ -2,7 +2,8 @@
  * `curviate search` — LinkedIn search operations.
  *
  * Subcommands:
- *   search people [--url <u>] [filters...]    — search people (POST body)
+ *   search <url>                              — run a pasted search URL (search.fromUrl)
+ *   search people [filters...]                — search people (POST body)
  *   search companies [filters...]             — search companies (POST body)
  *   search posts [filters...]                 — search posts (POST body)
  *   search jobs [filters...]                  — search jobs (POST body)
@@ -189,10 +190,9 @@ function resolveOutputOpts(flags: SearchFlags) {
   };
 }
 
-/** Apply the common --keywords / --url / pagination flags over a body. */
+/** Apply the common --keywords / pagination flags over a body. */
 function applyCommonSearchFlags(body: Record<string, unknown>, flags: SearchFlags): void {
   if (flags.keywords) body["keywords"] = flags.keywords;
-  if (flags.url) body["url"] = flags.url;
   // cursor + limit go as query params (SDK splits them out of the body)
   if (flags.cursor) body["cursor"] = flags.cursor;
   if (flags.limit) body["limit"] = parseInt(flags.limit, 10);
@@ -323,7 +323,7 @@ const NAMED_FLAG_MAPPERS: Record<
 };
 
 /**
- * Build the POST search body: the --filters JSON base, then --keywords / --url /
+ * Build the POST search body: the --filters JSON base, then --keywords /
  * pagination and the per-command named convenience flags merged OVER it.
  * Returns the body, or an `error` string when --filters does not parse to an
  * object, or a named flag rejects its own value (e.g. --headcount, exit 2
@@ -348,7 +348,7 @@ async function buildSearchBody(
 // ---------------------------------------------------------------------------
 
 /**
- * Run `search people [--url <u>] [filters...]`.
+ * Run `search people [filters...]`.
  * POST body search — cursor+limit passed to SDK (which splits to query).
  */
 export async function runSearchPeople(
@@ -686,7 +686,6 @@ const searchPeopleCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
-    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     industry: { type: "string", description: "Industry ids (comma-separated)." },
     location: { type: "string", description: "Location ids (comma-separated)." },
@@ -724,7 +723,6 @@ const searchCompaniesCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
-    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     industry: { type: "string", description: "Industry ids (comma-separated)." },
     location: { type: "string", description: "Location ids (comma-separated)." },
@@ -760,7 +758,6 @@ const searchPostsCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
-    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     "sort-by": { type: "string", description: "Sort order (e.g. relevance, date)." },
     "date-posted": { type: "string", description: "time window: past_day, past_week, or past_month (hyphens also accepted: past-day, past-week, past-month)" },
@@ -798,7 +795,6 @@ const searchJobsCommand = defineCommand({
   args: {
     ...GLOBAL_FLAGS,
     keywords: { type: "string", description: "Full-text keyword search." },
-    url: { type: "string", description: "Pasted LinkedIn search URL (mutually exclusive with filters)." },
     ...FILTER_FLAGS,
     // On jobs, --location maps to the geo region filter (not a location array — different API shape for jobs vs people)
     location: { type: "string", description: "geo region id (single id; resolve via search parameters --type LOCATION); maps to region filter" },
@@ -901,7 +897,7 @@ export const searchCommand = defineCommand({
     if (!flags.url) {
       process.stderr.write(
         "Usage: curviate search <url>\n" +
-        "       curviate search people [--url <u>] [--keywords <k>]\n" +
+        "       curviate search people [--keywords <k>]\n" +
         "       curviate search companies [--keywords <k>]\n" +
         "       curviate search posts [--keywords <k>]\n" +
         "       curviate search jobs [--keywords <k>]\n" +

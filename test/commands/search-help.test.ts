@@ -351,9 +351,9 @@ describe("help-text-only corrections: --type / --seniority / --job-type / --cont
 
   // Scoped to the group + 4 subcommand one-line descriptions (the actual
   // branding-rename surface), not the full flag-by-flag --help dump: the dump
-  // legitimately still carries "Pasted LinkedIn search URL" on the --url flag,
-  // which is untouched by design — only titles/one-liners are in scope, not
-  // flag prose.
+  // legitimately still carries "pasted LinkedIn search URL" on the group's bare
+  // `search <url>` positional, which is untouched by design — only titles/
+  // one-liners are in scope, not flag prose.
   it("branding rename: concat of the group + 4 subcommand one-liners has zero 'LinkedIn' matches", () => {
     const oneLiner = (text: string) => text.split("\n").find((l) => l.trim().length > 0) ?? "";
     const combined = [
