@@ -12,10 +12,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
+import { CurviateError } from "@curviate/sdk";
 
 function makeAccountNs() {
   return {
     users: {
+      get: vi.fn(),
       update: vi.fn(),
       follow: vi.fn(),
       unfollow: vi.fn(),
@@ -139,6 +141,68 @@ describe("profile follow / unfollow (bodyless)", () => {
     const preview = JSON.parse((out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
     expect(preview.method).toBe("users.follow");
     expect(preview.body).toEqual({});
+  });
+
+  // D6: slug/vanity identifiers 404 on the follow endpoint (provider-id only),
+  // while profile/connect/message auto-resolve. Wire the same id-resolution:
+  // a URL/slug is resolved to the member's provider id via a users.get read
+  // (which notifies no one) before the follow/unfollow write.
+
+  it("profile follow <slug> resolves the slug to a provider id via users.get, then follows (D6)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "ACoAA_resolved" });
+    const { runProfileFollow } = await import("../../src/commands/profile.js");
+    await runProfileFollow(client as never, { id: "raphael-redmer", account: "acc_1", json: true } as Args, makeOut());
+    expect(accountNs.users.get).toHaveBeenCalledWith("raphael-redmer", {});
+    expect(accountNs.users.follow).toHaveBeenCalledWith("ACoAA_resolved");
+  });
+
+  it("profile unfollow <slug> resolves the slug via users.get, then unfollows (D6)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "ACoAA_resolved" });
+    const { runProfileUnfollow } = await import("../../src/commands/profile.js");
+    await runProfileUnfollow(client as never, { id: "raphael-redmer", account: "acc_1", json: true } as Args, makeOut());
+    expect(accountNs.users.get).toHaveBeenCalledWith("raphael-redmer", {});
+    expect(accountNs.users.unfollow).toHaveBeenCalledWith("ACoAA_resolved");
+  });
+
+  it("profile follow <provider_id> skips the resolve call (already a provider id) (D6)", async () => {
+    const { runProfileFollow } = await import("../../src/commands/profile.js");
+    await runProfileFollow(client as never, { id: "ACoAAA_x", account: "acc_1", json: true } as Args, makeOut());
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+    expect(accountNs.users.follow).toHaveBeenCalledWith("ACoAAA_x");
+  });
+
+  it("profile follow <slug> --preview resolves via users.get (read) and renders the RESOLVED id, no follow write (D6)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "ACoAA_resolved" });
+    const { runProfileFollow } = await import("../../src/commands/profile.js");
+    const out = makeOut();
+    await runProfileFollow(client as never, { id: "raphael-redmer", account: "acc_1", preview: true, json: true } as Args, out);
+    expect(accountNs.users.get).toHaveBeenCalledWith("raphael-redmer", {});
+    expect(accountNs.users.follow).not.toHaveBeenCalled();
+    const preview = JSON.parse((out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join(""));
+    expect(preview.method).toBe("users.follow");
+    expect(preview.args).toEqual({ user_id: "ACoAA_resolved" });
+  });
+
+  it("profile follow <unresolvable-slug> surfaces users.get's 404 as exit 4, no follow write (D6)", async () => {
+    const notFound = new CurviateError({
+      code: "RESOURCE_NOT_FOUND",
+      message: "Member not found.",
+      httpStatus: 404,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.users.get as Mock).mockRejectedValue(notFound);
+    const { runProfileFollow } = await import("../../src/commands/profile.js");
+    const exitSpy = mockExit();
+    try {
+      await runProfileFollow(client as never, { id: "no-such-member", account: "acc_1", json: true } as Args, makeOut());
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.users.follow).not.toHaveBeenCalled();
   });
 });
 

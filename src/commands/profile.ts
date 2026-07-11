@@ -29,6 +29,7 @@
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
+import { resolveMemberProviderId } from "../lib/member-id.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -603,50 +604,73 @@ export async function runProfileUpdate(
   }
 }
 
-/** Run `profile follow <id>` — users.follow (bodyless write, supports --preview). */
+/**
+ * Run `profile follow <id>` — users.follow (bodyless write, supports --preview).
+ * The follow endpoint accepts only a provider id (a slug 404s, D6), so the raw
+ * identifier is resolved to a provider id via a users.get READ first — the same
+ * auto-resolution `profile`/`connect`/`message` give. The read runs even under
+ * --preview (it notifies no one) so the preview renders the resolved id.
+ */
 export async function runProfileFollow(
   client: Curviate,
   flags: SubFlags,
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const resolvedId = resolveIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  let providerId: string;
+  try {
+    providerId = await resolveMemberProviderId(ns, flags.id ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "users.follow", args: { user_id: resolvedId }, body: {}, account: accountId });
+    const preview = buildPreviewOutput({ method: "users.follow", args: { user_id: providerId }, body: {}, account: accountId });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
   try {
-    const result = await ns.users.follow(resolvedId);
+    const result = await ns.users.follow(providerId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
 }
 
-/** Run `profile unfollow <id>` — users.unfollow (bodyless write, supports --preview). */
+/**
+ * Run `profile unfollow <id>` — users.unfollow (bodyless write, supports
+ * --preview). Same provider-id resolution as `profile follow` (D6).
+ */
 export async function runProfileUnfollow(
   client: Curviate,
   flags: SubFlags,
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const resolvedId = resolveIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  let providerId: string;
+  try {
+    providerId = await resolveMemberProviderId(ns, flags.id ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "users.unfollow", args: { user_id: resolvedId }, body: {}, account: accountId });
+    const preview = buildPreviewOutput({ method: "users.unfollow", args: { user_id: providerId }, body: {}, account: accountId });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
   try {
-    const result = await ns.users.unfollow(resolvedId);
+    const result = await ns.users.unfollow(providerId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
