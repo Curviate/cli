@@ -13,6 +13,10 @@ import {
   slimProfile,
   slimCompany,
   slimJob,
+  slimInviteSentItem,
+  slimInviteSent,
+  slimInviteReceivedItem,
+  slimInviteReceived,
 } from "../../src/lib/slim.js";
 
 // ---------------------------------------------------------------------------
@@ -497,5 +501,194 @@ describe("slimJob", () => {
     const result = slimJob(null);
     expect(result["id"]).toBeNull();
     expect(result["object"]).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slimInviteSentItem / slimInviteSent (v2 shape — GET /v1/{account_id}/invites/sent)
+// ---------------------------------------------------------------------------
+
+describe("slimInviteSentItem", () => {
+  const fullSentItem = {
+    object: "invitation_sent",
+    id: "SENT_7419644944484753408",
+    created_at: "2026-01-21T10:00:00.000Z",
+    message: "Let's connect",
+    user: {
+      id: "ACoAAAfEwrwBqTunca",
+      type: "individual",
+      display_name: "Korhan Tunca",
+      first_name: "Korhan",
+      last_name: "Tunca",
+      public_picture_url: "https://media.licdn.com/korhan.jpg",
+    },
+  };
+
+  it("projects id, created_at, message, and a trimmed user sub-object", () => {
+    const result = slimInviteSentItem(fullSentItem);
+    expect(result).toEqual({
+      id: "SENT_7419644944484753408",
+      created_at: "2026-01-21T10:00:00.000Z",
+      message: "Let's connect",
+      user: {
+        id: "ACoAAAfEwrwBqTunca",
+        display_name: "Korhan Tunca",
+        first_name: "Korhan",
+        last_name: "Tunca",
+      },
+    });
+  });
+
+  it("drops user.type and user.public_picture_url (verbose-only) and the per-item object discriminator", () => {
+    const result = slimInviteSentItem(fullSentItem);
+    const user = result["user"] as Record<string, unknown>;
+    expect(user).not.toHaveProperty("type");
+    expect(user).not.toHaveProperty("public_picture_url");
+    expect(result).not.toHaveProperty("object");
+  });
+
+  it("optional top-level fields (created_at, message) project to null when absent — never undefined", () => {
+    const result = slimInviteSentItem({
+      object: "invitation_sent",
+      id: "SENT_x",
+      user: { id: "ACoAA1" },
+    });
+    expect(result["created_at"]).toBeNull();
+    expect(result["message"]).toBeNull();
+  });
+
+  it("user sub-object projects to null when the source has no user (never crashes)", () => {
+    const result = slimInviteSentItem({ object: "invitation_sent", id: "SENT_x" });
+    expect(result["user"]).toBeNull();
+  });
+
+  it("v1 legacy fields (invited_user_*, inviter, date, parsed_datetime, invitation_text, specifics) are absent — the v2 response never sends them", () => {
+    const result = slimInviteSentItem(fullSentItem);
+    expect(result).not.toHaveProperty("invited_user");
+    expect(result).not.toHaveProperty("invited_user_id");
+    expect(result).not.toHaveProperty("invited_user_public_id");
+    expect(result).not.toHaveProperty("inviter");
+    expect(result).not.toHaveProperty("date");
+    expect(result).not.toHaveProperty("parsed_datetime");
+    expect(result).not.toHaveProperty("invitation_text");
+    expect(result).not.toHaveProperty("specifics");
+  });
+});
+
+describe("slimInviteSent", () => {
+  it("projects the envelope { object, items, cursor } with each item slimmed", () => {
+    const result = slimInviteSent({
+      object: "invitation_list",
+      items: [
+        {
+          id: "SENT_1",
+          created_at: "2026-01-01T00:00:00Z",
+          user: { id: "ACoAA1", type: "individual", display_name: "A" },
+        },
+      ],
+      cursor: "next-cursor",
+    });
+    expect(result["object"]).toBe("invitation_list");
+    expect(result["cursor"]).toBe("next-cursor");
+    const items = result["items"] as Record<string, unknown>[];
+    expect(items).toHaveLength(1);
+    expect(items[0]).not.toHaveProperty("type");
+  });
+
+  it("non-object / missing items input projects to an empty-list shape (never throws)", () => {
+    expect(slimInviteSent(null)).toEqual({ object: null, items: [], cursor: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slimInviteReceivedItem / slimInviteReceived (v2 shape — GET /v1/{account_id}/invites/received)
+// ---------------------------------------------------------------------------
+
+describe("slimInviteReceivedItem", () => {
+  const fullReceivedItem = {
+    object: "invitation_received",
+    id: "RECEIVED_9",
+    created_at: "2026-07-10T00:00:00.000Z",
+    user: {
+      id: "ACoAADwav4UBConstantine",
+      type: "individual",
+      display_name: "Constantine Pinotsis",
+      first_name: "Constantine",
+      last_name: "Pinotsis",
+      public_picture_url: "https://media.licdn.com/constantine.jpg",
+      public_identifier: "constantine-pinotsis",
+      profile_url: "https://www.linkedin.com/in/constantine-pinotsis",
+      description: "Engineer",
+    },
+  };
+
+  it("projects id, created_at, and a trimmed user sub-object including public_identifier", () => {
+    const result = slimInviteReceivedItem(fullReceivedItem);
+    expect(result).toEqual({
+      id: "RECEIVED_9",
+      created_at: "2026-07-10T00:00:00.000Z",
+      user: {
+        id: "ACoAADwav4UBConstantine",
+        display_name: "Constantine Pinotsis",
+        first_name: "Constantine",
+        last_name: "Pinotsis",
+        public_identifier: "constantine-pinotsis",
+      },
+    });
+  });
+
+  it("drops user.type/public_picture_url/profile_url/description (verbose-only) and the per-item object discriminator", () => {
+    const result = slimInviteReceivedItem(fullReceivedItem);
+    const user = result["user"] as Record<string, unknown>;
+    expect(user).not.toHaveProperty("type");
+    expect(user).not.toHaveProperty("public_picture_url");
+    expect(user).not.toHaveProperty("profile_url");
+    expect(user).not.toHaveProperty("description");
+    expect(result).not.toHaveProperty("object");
+  });
+
+  it("public_identifier — the field that lets an agent safely pick which invite to accept — projects to null when the platform omits it, never undefined", () => {
+    const result = slimInviteReceivedItem({
+      object: "invitation_received",
+      id: "RECEIVED_x",
+      user: { id: "ACoAA1" },
+    });
+    const user = result["user"] as Record<string, unknown>;
+    expect(user["public_identifier"]).toBeNull();
+  });
+
+  it("v1 legacy fields (invited_user_*, inviter, date, parsed_datetime, invitation_text, specifics.shared_secret) are absent — the v2 response never sends them", () => {
+    const result = slimInviteReceivedItem(fullReceivedItem);
+    expect(result).not.toHaveProperty("invited_user");
+    expect(result).not.toHaveProperty("inviter");
+    expect(result).not.toHaveProperty("date");
+    expect(result).not.toHaveProperty("parsed_datetime");
+    expect(result).not.toHaveProperty("invitation_text");
+    expect(result).not.toHaveProperty("specifics");
+  });
+});
+
+describe("slimInviteReceived", () => {
+  it("projects the envelope { object, items, cursor } with each item slimmed", () => {
+    const result = slimInviteReceived({
+      object: "invitation_list",
+      items: [
+        {
+          id: "RECEIVED_1",
+          created_at: "2026-01-01T00:00:00Z",
+          user: { id: "ACoAA1", type: "individual", public_identifier: "a" },
+        },
+      ],
+      cursor: null,
+    });
+    expect(result["object"]).toBe("invitation_list");
+    expect(result["cursor"]).toBeNull();
+    const items = result["items"] as Record<string, unknown>[];
+    expect(items).toHaveLength(1);
+    expect(items[0]).not.toHaveProperty("type");
+  });
+
+  it("non-object / missing items input projects to an empty-list shape (never throws)", () => {
+    expect(slimInviteReceived(undefined)).toEqual({ object: null, items: [], cursor: null });
   });
 });

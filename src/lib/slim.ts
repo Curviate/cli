@@ -174,20 +174,44 @@ export function slimProfile(data: unknown): Record<string, unknown> {
 
 /**
  * Project a single sent-invitation item to the slim field set.
- * Drops: inviter (self-referential on sent), specifics (constant null shared_secret).
- * Keeps: id, invited_user, invited_user_id, invited_user_public_id,
- *         invited_user_description, date, parsed_datetime, invitation_text.
+ *
+ * v2 shape (`GET /v1/{account_id}/invites/sent`, item `object: "invitation_sent"`):
+ *   { object, id, created_at?, message?,
+ *     user: { id, type?, display_name?, first_name?, last_name?, public_picture_url? } }
+ *
+ * Drops: the per-item `object` discriminator (redundant with the envelope's
+ * own `object`); `user.type` and `user.public_picture_url` (verbose-only).
+ * Keeps: id, created_at, message, and a trimmed `user` sub-object (id,
+ * display_name, first_name, last_name) — the sent-variant's `user` carries
+ * no `public_identifier`/`profile_url`/`description` (those are
+ * received-only, per the served schema — see slimInviteReceivedItem).
+ *
+ * v1-parity note: this replaces the pre-v2 shape (`invited_user`,
+ * `invited_user_id`, `invited_user_public_id`, `invited_user_description`,
+ * `date`, `parsed_datetime`, `invitation_text`, `inviter`, `specifics`) that
+ * the v2 response never sends — the prior projection nulled every field.
  */
 export function slimInviteSentItem(item: Record<string, unknown>): Record<string, unknown> {
+  const rawUser =
+    item["user"] !== null && item["user"] !== undefined && typeof item["user"] === "object"
+      ? (item["user"] as Record<string, unknown>)
+      : null;
+
+  const user =
+    rawUser !== null
+      ? {
+          id: rawUser["id"] ?? null,
+          display_name: rawUser["display_name"] ?? null,
+          first_name: rawUser["first_name"] ?? null,
+          last_name: rawUser["last_name"] ?? null,
+        }
+      : null;
+
   return {
     id: item["id"] ?? null,
-    invited_user: item["invited_user"] ?? null,
-    invited_user_id: item["invited_user_id"] ?? null,
-    invited_user_public_id: item["invited_user_public_id"] ?? null,
-    invited_user_description: item["invited_user_description"] ?? null,
-    date: item["date"] ?? null,
-    parsed_datetime: item["parsed_datetime"] ?? null,
-    invitation_text: item["invitation_text"] ?? null,
+    created_at: item["created_at"] ?? null,
+    message: item["message"] ?? null,
+    user,
   };
 }
 
@@ -218,31 +242,46 @@ export function slimInviteSent(data: unknown): Record<string, unknown> {
 
 /**
  * Project a single received-invitation item to the slim field set.
- * Drops: invited_user* (self-referential — describes the authenticated user).
- * Projects specifics to { shared_secret } only (drops constant provider field).
- * Keeps: id, inviter (all sub-fields), date, parsed_datetime, invitation_text,
- *         specifics.shared_secret (retained from the received-invite shape).
+ *
+ * v2 shape (`GET /v1/{account_id}/invites/received`, item `object: "invitation_received"`):
+ *   { object, id, created_at?,
+ *     user: { id, type?, display_name?, first_name?, last_name?, public_picture_url?,
+ *             public_identifier?, profile_url?, description? } }
+ *
+ * Drops: the per-item `object` discriminator; `user.type`,
+ * `user.public_picture_url`, `user.profile_url`, `user.description`
+ * (verbose-only). Keeps: id, created_at, and a trimmed `user` sub-object
+ * (id, display_name, first_name, last_name, public_identifier) —
+ * `public_identifier` is the field that lets an agent safely identify which
+ * invite belongs to which sender (D2: the v1-shape projection nulled it out).
+ *
+ * v1-parity note: the v2 response has no `invited_user*` (self-referential
+ * on received, always null there anyway), no `date`/`parsed_datetime`/
+ * `invitation_text`, no `inviter`, and no `specifics.shared_secret` — none
+ * of those keys exist on this endpoint's schema; `created_at` is the actual
+ * server timestamp (not the approximate, label-derived `parsed_datetime`).
  */
 export function slimInviteReceivedItem(item: Record<string, unknown>): Record<string, unknown> {
-  const rawSpecifics =
-    item["specifics"] !== null &&
-    item["specifics"] !== undefined &&
-    typeof item["specifics"] === "object"
-      ? (item["specifics"] as Record<string, unknown>)
+  const rawUser =
+    item["user"] !== null && item["user"] !== undefined && typeof item["user"] === "object"
+      ? (item["user"] as Record<string, unknown>)
       : null;
 
-  const specifics =
-    rawSpecifics !== null
-      ? { shared_secret: rawSpecifics["shared_secret"] ?? null }
+  const user =
+    rawUser !== null
+      ? {
+          id: rawUser["id"] ?? null,
+          display_name: rawUser["display_name"] ?? null,
+          first_name: rawUser["first_name"] ?? null,
+          last_name: rawUser["last_name"] ?? null,
+          public_identifier: rawUser["public_identifier"] ?? null,
+        }
       : null;
 
   return {
     id: item["id"] ?? null,
-    inviter: item["inviter"] ?? null,
-    date: item["date"] ?? null,
-    parsed_datetime: item["parsed_datetime"] ?? null,
-    invitation_text: item["invitation_text"] ?? null,
-    specifics,
+    created_at: item["created_at"] ?? null,
+    user,
   };
 }
 

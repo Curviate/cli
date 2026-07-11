@@ -160,23 +160,25 @@ describe("connect sent / received — list reads", () => {
     expect(accountNs.invites.listSent).toHaveBeenCalled();
   });
 
-  it("connect sent --all — slim NDJSON lines carry per-item slim fields (id + invited_user kept, inviter/specifics dropped)", async () => {
+  it("connect sent --all — slim NDJSON lines carry the v2 slim fields (id/created_at/message/user kept, user.type/public_picture_url dropped)", async () => {
     const { runConnectSent } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.invites.listSent as Mock).mockResolvedValueOnce({
       items: [
         {
-          id: "s1",
-          invited_user: "Jane Doe",
-          invited_user_id: "ACoJ",
-          invited_user_public_id: "jane-doe",
-          invited_user_description: "Engineer",
-          date: "2 weeks ago",
-          parsed_datetime: "2026-06-16T00:00:00Z",
-          invitation_text: "Let's connect",
-          inviter: null,
-          specifics: { provider: "LINKEDIN", shared_secret: null },
+          object: "invitation_sent",
+          id: "SENT_s1",
+          created_at: "2026-06-16T00:00:00Z",
+          message: "Let's connect",
+          user: {
+            id: "ACoAAJaneDoe",
+            type: "individual",
+            display_name: "Jane Doe",
+            first_name: "Jane",
+            last_name: "Doe",
+            public_picture_url: "https://media.licdn.com/jane.jpg",
+          },
         },
       ],
       cursor: null,
@@ -187,11 +189,16 @@ describe("connect sent / received — list reads", () => {
     const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
     expect(lines).toHaveLength(1);
     const item = JSON.parse(lines.join("")) as Record<string, unknown>;
-    expect(item["id"]).toBe("s1");
-    expect(item["invited_user"]).toBe("Jane Doe");
-    expect(item["invitation_text"]).toBe("Let's connect");
-    expect(item["inviter"]).toBeUndefined();
-    expect(item["specifics"]).toBeUndefined();
+    expect(item["id"]).toBe("SENT_s1");
+    expect(item["created_at"]).toBe("2026-06-16T00:00:00Z");
+    expect(item["message"]).toBe("Let's connect");
+    expect(item["user"]).toEqual({
+      id: "ACoAAJaneDoe",
+      display_name: "Jane Doe",
+      first_name: "Jane",
+      last_name: "Doe",
+    });
+    expect(item).not.toHaveProperty("object");
     expect(item).not.toHaveProperty("items");
   });
 
@@ -234,20 +241,27 @@ describe("connect sent / received — list reads", () => {
     expect(ndjsonLines).toHaveLength(3);
   });
 
-  it("connect received --all — slim NDJSON lines carry per-item slim fields (id + specifics.shared_secret kept, invited_user dropped)", async () => {
+  it("connect received --all — slim NDJSON lines carry the v2 slim fields (id/created_at/user.public_identifier kept, user.profile_url/description dropped)", async () => {
     const { runConnectReceived } = await import("../../src/commands/connect.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.invites.listReceived as Mock).mockResolvedValueOnce({
       items: [
         {
-          id: "r1",
-          invited_user: "Self",
-          inviter: { inviter_name: "Sender One", inviter_id: "ACo1", inviter_public_identifier: "sender-one", inviter_description: "Head of X" },
-          date: "1 day ago",
-          parsed_datetime: "2026-06-29T00:00:00Z",
-          invitation_text: "Hi",
-          specifics: { provider: "LINKEDIN", shared_secret: "SECRET_R1" },
+          object: "invitation_received",
+          id: "RECEIVED_r1",
+          created_at: "2026-06-29T00:00:00Z",
+          user: {
+            id: "ACoAASenderOne",
+            type: "individual",
+            display_name: "Sender One",
+            first_name: "Sender",
+            last_name: "One",
+            public_picture_url: "https://media.licdn.com/sender-one.jpg",
+            public_identifier: "sender-one",
+            profile_url: "https://www.linkedin.com/in/sender-one",
+            description: "Head of X",
+          },
         },
       ],
       cursor: null,
@@ -259,11 +273,16 @@ describe("connect sent / received — list reads", () => {
     expect(lines).toHaveLength(1);
     const item = JSON.parse(lines.join("")) as Record<string, unknown>;
     // Per-item slim shape — NOT the collapsed envelope {object,items,cursor}.
-    expect(item["id"]).toBe("r1");
-    expect((item["specifics"] as Record<string, unknown>)["shared_secret"]).toBe("SECRET_R1");
-    expect((item["specifics"] as Record<string, unknown>)["provider"]).toBeUndefined();
-    expect(item["inviter"]).toBeDefined();
-    expect(item["invited_user"]).toBeUndefined();
+    expect(item["id"]).toBe("RECEIVED_r1");
+    expect(item["created_at"]).toBe("2026-06-29T00:00:00Z");
+    expect(item["user"]).toEqual({
+      id: "ACoAASenderOne",
+      display_name: "Sender One",
+      first_name: "Sender",
+      last_name: "One",
+      public_identifier: "sender-one",
+    });
+    expect(item).not.toHaveProperty("object");
     expect(item).not.toHaveProperty("items");
   });
 
@@ -272,7 +291,13 @@ describe("connect sent / received — list reads", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.invites.listReceived as Mock).mockResolvedValueOnce({
-      items: [{ id: "r1", invited_user: "Self", specifics: { provider: "LINKEDIN", shared_secret: "S" } }],
+      items: [
+        {
+          object: "invitation_received",
+          id: "RECEIVED_r1",
+          user: { id: "ACoAASenderOne", type: "individual", public_identifier: "sender-one" },
+        },
+      ],
       cursor: null,
     });
 
@@ -280,8 +305,8 @@ describe("connect sent / received — list reads", () => {
 
     const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((l) => l.trim().startsWith("{"));
     const item = JSON.parse(lines.join("")) as Record<string, unknown>;
-    expect(item["invited_user"]).toBe("Self");
-    expect((item["specifics"] as Record<string, unknown>)["provider"]).toBe("LINKEDIN");
+    expect(item["object"]).toBe("invitation_received");
+    expect((item["user"] as Record<string, unknown>)["type"]).toBe("individual");
   });
 });
 
@@ -489,28 +514,25 @@ const SENT_STUB = {
   object: "invitation_list",
   items: [
     {
-      id: "inv_1",
-      invited_user: "jdoe",
-      invited_user_id: "123",
-      invited_user_public_id: "jdoe",
-      invited_user_description: "Engineer",
-      date: "2026-01-01",
-      parsed_datetime: "2026-01-01T00:00:00Z",
-      invitation_text: "Hi!",
-      inviter: {
-        inviter_name: "Raph",
-        inviter_id: "789",
-        inviter_public_identifier: "raphael-redmer",
-        inviter_description: null,
+      object: "invitation_sent",
+      id: "SENT_inv_1",
+      created_at: "2026-01-01T00:00:00Z",
+      message: "Hi!",
+      user: {
+        id: "ACoAAJdoe",
+        type: "individual",
+        display_name: "Jane Doe",
+        first_name: "Jane",
+        last_name: "Doe",
+        public_picture_url: "https://media.licdn.com/jdoe.jpg",
       },
-      specifics: { provider: "LINKEDIN", shared_secret: null },
     },
   ],
   cursor: null,
 };
 
 describe("connect sent slim default", () => {
-  it("slim mode drops inviter and specifics, keeps required fields", async () => {
+  it("slim mode drops user.type and user.public_picture_url, keeps required v2 fields", async () => {
     const { runConnectSent } = await import("../../src/commands/connect.js");
     const ns = {
       invites: {
@@ -531,19 +553,19 @@ describe("connect sent slim default", () => {
     const result = JSON.parse(written) as { items: Record<string, unknown>[] };
     const item = result.items[0]!;
 
-    expect(item).toHaveProperty("id", "inv_1");
-    expect(item).toHaveProperty("invited_user", "jdoe");
-    expect(item).toHaveProperty("invited_user_id", "123");
-    expect(item).toHaveProperty("invited_user_public_id", "jdoe");
-    expect(item).toHaveProperty("invited_user_description", "Engineer");
-    expect(item).toHaveProperty("date", "2026-01-01");
-    expect(item).toHaveProperty("parsed_datetime", "2026-01-01T00:00:00Z");
-    expect(item).toHaveProperty("invitation_text", "Hi!");
-    expect(item).not.toHaveProperty("inviter");
-    expect(item).not.toHaveProperty("specifics");
+    expect(item).toHaveProperty("id", "SENT_inv_1");
+    expect(item).toHaveProperty("created_at", "2026-01-01T00:00:00Z");
+    expect(item).toHaveProperty("message", "Hi!");
+    expect(item["user"]).toEqual({
+      id: "ACoAAJdoe",
+      display_name: "Jane Doe",
+      first_name: "Jane",
+      last_name: "Doe",
+    });
+    expect(item).not.toHaveProperty("object");
   });
 
-  it("--verbose restores inviter and specifics to full server response", async () => {
+  it("--verbose restores user.type and user.public_picture_url to the full server response", async () => {
     const { runConnectSent } = await import("../../src/commands/connect.js");
     const ns = {
       invites: {
@@ -568,13 +590,10 @@ describe("connect sent slim default", () => {
     const result = JSON.parse(written) as { items: Record<string, unknown>[] };
     const item = result.items[0]!;
 
-    expect(item).toHaveProperty("inviter");
-    const inviter = item["inviter"] as Record<string, unknown>;
-    expect(inviter["inviter_name"]).toBe("Raph");
-    expect(item).toHaveProperty("specifics");
-    const specifics = item["specifics"] as Record<string, unknown>;
-    expect(specifics["provider"]).toBe("LINKEDIN");
-    expect(specifics["shared_secret"]).toBeNull();
+    expect(item).toHaveProperty("object", "invitation_sent");
+    const user = item["user"] as Record<string, unknown>;
+    expect(user["type"]).toBe("individual");
+    expect(user["public_picture_url"]).toBe("https://media.licdn.com/jdoe.jpg");
   });
 });
 
@@ -586,28 +605,27 @@ const RECEIVED_STUB = {
   object: "invitation_list",
   items: [
     {
-      id: "inv_2",
-      invited_user: "me",
-      invited_user_id: "self_123",
-      invited_user_public_id: "raphael-redmer",
-      invited_user_description: null,
-      date: "2026-01-01",
-      parsed_datetime: "2026-01-01T00:00:00Z",
-      invitation_text: "Let's connect!",
-      inviter: {
-        inviter_name: "Jane",
-        inviter_id: "456",
-        inviter_public_identifier: "jane-doe",
-        inviter_description: "Engineer",
+      object: "invitation_received",
+      id: "RECEIVED_inv_2",
+      created_at: "2026-01-01T00:00:00Z",
+      user: {
+        id: "ACoAAJaneDoe",
+        type: "individual",
+        display_name: "Jane Doe",
+        first_name: "Jane",
+        last_name: "Doe",
+        public_picture_url: "https://media.licdn.com/jane-doe.jpg",
+        public_identifier: "jane-doe",
+        profile_url: "https://www.linkedin.com/in/jane-doe",
+        description: "Engineer",
       },
-      specifics: { provider: "LINKEDIN", shared_secret: "SEC_123" },
     },
   ],
   cursor: null,
 };
 
 describe("connect received slim default", () => {
-  it("slim mode drops self-referential invited_user fields, projects specifics to shared_secret only", async () => {
+  it("slim mode drops user.type/public_picture_url/profile_url/description, keeps identity fields", async () => {
     const { runConnectReceived } = await import("../../src/commands/connect.js");
     const ns = {
       invites: {
@@ -632,25 +650,23 @@ describe("connect received slim default", () => {
     const result = JSON.parse(written) as { items: Record<string, unknown>[] };
     const item = result.items[0]!;
 
-    expect(item).not.toHaveProperty("invited_user");
-    expect(item).not.toHaveProperty("invited_user_id");
-    expect(item).not.toHaveProperty("invited_user_public_id");
-    expect(item).not.toHaveProperty("invited_user_description");
+    expect(item).toHaveProperty("id", "RECEIVED_inv_2");
+    expect(item).toHaveProperty("created_at", "2026-01-01T00:00:00Z");
+    expect(item).not.toHaveProperty("object");
 
-    expect(item).toHaveProperty("id", "inv_2");
-    const inviter = item["inviter"] as Record<string, unknown>;
-    expect(inviter["inviter_name"]).toBe("Jane");
-    expect(inviter["inviter_id"]).toBe("456");
-    expect(inviter["inviter_public_identifier"]).toBe("jane-doe");
-    expect(inviter["inviter_description"]).toBe("Engineer");
-
-    expect(item).toHaveProperty("specifics");
-    const specifics = item["specifics"] as Record<string, unknown>;
-    expect(specifics["shared_secret"]).toBe("SEC_123");
-    expect(specifics).not.toHaveProperty("provider");
+    const user = item["user"] as Record<string, unknown>;
+    expect(user["id"]).toBe("ACoAAJaneDoe");
+    expect(user["display_name"]).toBe("Jane Doe");
+    expect(user["first_name"]).toBe("Jane");
+    expect(user["last_name"]).toBe("Doe");
+    expect(user["public_identifier"]).toBe("jane-doe");
+    expect(user).not.toHaveProperty("type");
+    expect(user).not.toHaveProperty("public_picture_url");
+    expect(user).not.toHaveProperty("profile_url");
+    expect(user).not.toHaveProperty("description");
   });
 
-  it("--verbose restores invited_user fields and full specifics including provider", async () => {
+  it("--verbose restores user.type/public_picture_url/profile_url/description to the full server response", async () => {
     const { runConnectReceived } = await import("../../src/commands/connect.js");
     const ns = {
       invites: {
@@ -675,9 +691,11 @@ describe("connect received slim default", () => {
     const result = JSON.parse(written) as { items: Record<string, unknown>[] };
     const item = result.items[0]!;
 
-    expect(item["invited_user"]).toBe("me");
-    const specifics = item["specifics"] as Record<string, unknown>;
-    expect(specifics["provider"]).toBe("LINKEDIN");
+    expect(item["object"]).toBe("invitation_received");
+    const user = item["user"] as Record<string, unknown>;
+    expect(user["type"]).toBe("individual");
+    expect(user["profile_url"]).toBe("https://www.linkedin.com/in/jane-doe");
+    expect(user["description"]).toBe("Engineer");
   });
 });
 
@@ -758,15 +776,15 @@ describe("connect help strings — Tier-1", () => {
 // ---------------------------------------------------------------------------
 
 describe("connect help strings — Tier-2 additional doc strings", () => {
-  it("connect sent description contains parsed_datetime with approximation caveat", async () => {
+  it("connect sent description contains created_at and identifies the v2 recipient field", async () => {
     const { connectCommand } = await import("../../src/commands/connect.js");
     const subCmds = (connectCommand as Record<string, unknown>).subCommands as Record<
       string,
       { meta?: { description?: string } }
     >;
     const desc = subCmds["sent"]?.meta?.description ?? "";
-    expect(desc).toContain("parsed_datetime");
-    expect(desc.toLowerCase()).toMatch(/approximate|derived from/);
+    expect(desc).toContain("created_at");
+    expect(desc).toContain("user.id");
   });
 
   it("connect sent description contains no-total-count workaround hint", async () => {

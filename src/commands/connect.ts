@@ -376,8 +376,8 @@ const connectSentCommand = defineCommand({
     name: "sent",
     description:
       "Returns pending sent invitations only — accepted and declined invitations are not returned (LinkedIn API limitation). " +
-      "Use `id` with `connect cancel`; use `invited_user_public_id` or `invited_user_id` with `curviate profile`. " +
-      "`parsed_datetime` is approximate — derived from LinkedIn's relative date label; invitations sharing a label get the same computed time. " +
+      "Use `id` with `connect cancel`; use `user.id` (native member URN — the sent-variant carries no public slug) to identify the recipient. " +
+      "`created_at` is the platform's own ISO-8601 timestamp (not an approximation). " +
       "No total count is available; use `connect sent --all` and count client-side.",
   },
   args: { ...GLOBAL_FLAGS },
@@ -405,7 +405,8 @@ const connectReceivedCommand = defineCommand({
     name: "received",
     description:
       "Returns pending received invitations only — already-handled invitations are not returned. " +
-      "The `inviter.*` fields identify who sent the request. Use the `id` field with `connect accept` or `connect decline`.",
+      "The `user.*` fields (`public_identifier`, `display_name`, `first_name`, `last_name`) identify who sent the request. " +
+      "Use the `id` field with `connect accept` or `connect decline`.",
   },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
