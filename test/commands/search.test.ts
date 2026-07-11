@@ -815,10 +815,13 @@ describe("search posts --date-posted normalization (hyphen to underscore)", () =
 });
 
 // ---------------------------------------------------------------------------
-// --all truncation: JSON sentinel to stdout, not prose to stderr
+// --all truncation: JSON sentinel to stdout AND prose note to stderr —
+// unified across all four search entities (D11 — search previously wrote
+// the stdout sentinel but silently dropped the stderr prose that every
+// other --all command emits; both channels are now mandatory everywhere).
 // ---------------------------------------------------------------------------
 
-describe("--all truncation: JSON object written to stdout", () => {
+describe("--all truncation: JSON sentinel on stdout AND prose note on stderr", () => {
   let accountNs: ReturnType<typeof makeAccountNs>;
   let client: ReturnType<typeof makeClient>;
 
@@ -852,11 +855,55 @@ describe("--all truncation: JSON object written to stdout", () => {
     expect(parsed["object"]).toBe("stream_truncated");
     expect(parsed["pages_fetched"]).toBe(1);
     expect(parsed["has_more"]).toBe(true);
-    // Nothing on stderr about truncation (no prose)
-    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).includes("truncated"))).toBe(false);
+    // Complementary, not exclusive: a human-readable note also goes to stderr
+    // (previously search silently dropped this while every other --all
+    // command emitted it — D11's "inverse" finding, now unified).
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).match(/truncat/i))).toBe(true);
   });
 
-  it("search jobs --all truncated → last stdout line is stream_truncated JSON", async () => {
+  it("search companies --all truncated → last stdout line is stream_truncated JSON, stderr gets the prose note", async () => {
+    const { runSearchCompanies } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.companies as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "co1" }], cursor: "c1" })
+      .mockResolvedValueOnce({ items: [{ id: "co2" }], cursor: null });
+
+    await runSearchCompanies(client as never, {
+      account: "acc_1",
+      all: true,
+      "max-pages": "1",
+    } as SearchArgs, out);
+
+    const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    const lastLine = writtenLines[writtenLines.length - 1]!.trim();
+    const parsed = JSON.parse(lastLine) as Record<string, unknown>;
+    expect(parsed).toEqual({ object: "stream_truncated", pages_fetched: 1, has_more: true });
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).match(/truncat/i))).toBe(true);
+  });
+
+  it("search posts --all truncated → last stdout line is stream_truncated JSON, stderr gets the prose note", async () => {
+    const { runSearchPosts } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.posts as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "post1" }], cursor: "c1" })
+      .mockResolvedValueOnce({ items: [{ id: "post2" }], cursor: null });
+
+    await runSearchPosts(client as never, {
+      account: "acc_1",
+      all: true,
+      "max-pages": "1",
+    } as SearchArgs, out);
+
+    const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    const lastLine = writtenLines[writtenLines.length - 1]!.trim();
+    const parsed = JSON.parse(lastLine) as Record<string, unknown>;
+    expect(parsed).toEqual({ object: "stream_truncated", pages_fetched: 1, has_more: true });
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).match(/truncat/i))).toBe(true);
+  });
+
+  it("search jobs --all truncated → last stdout line is stream_truncated JSON, stderr gets the prose note", async () => {
     const { runSearchJobs } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -876,6 +923,26 @@ describe("--all truncation: JSON object written to stdout", () => {
     expect(parsed["object"]).toBe("stream_truncated");
     expect(parsed["pages_fetched"]).toBe(1);
     expect(parsed["has_more"]).toBe(true);
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).match(/truncat/i))).toBe(true);
+  });
+
+  it("search people --all with natural exhaustion (cursor null) → no truncation line on stdout or stderr", async () => {
+    const { runSearchPeople } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    (accountNs.search.people as Mock)
+      .mockResolvedValueOnce({ items: [{ id: "p1" }], cursor: "c1" })
+      .mockResolvedValueOnce({ items: [{ id: "p2" }], cursor: null });
+
+    await runSearchPeople(client as never, {
+      account: "acc_1",
+      all: true,
+      // no --max-pages cap hit: default maxPages(100) never reached before natural exhaustion
+    } as SearchArgs, out);
+
+    const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(writtenLines.some((l) => l.includes("stream_truncated"))).toBe(false);
+    expect((out.stderr.write as Mock).mock.calls.some((c) => String(c[0]).match(/truncat/i))).toBe(false);
   });
 });
 

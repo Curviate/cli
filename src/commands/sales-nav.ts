@@ -210,7 +210,7 @@ export async function runSalesNavSearchPeople(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -273,7 +273,7 @@ export async function runSalesNavSearchCompanies(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -360,7 +360,7 @@ export async function runSalesNavSearchFromUrl(
       };
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -559,7 +559,7 @@ export async function runSalesNavAccountLists(
         ns.salesNavigator.accountLists(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -599,7 +599,7 @@ export async function runSalesNavLeadLists(
         ns.salesNavigator.leadLists(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -645,7 +645,7 @@ export async function runSalesNavBrowseAccountList(
         ns.salesNavigator.browseAccountList(listId, body, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -691,7 +691,7 @@ export async function runSalesNavBrowseLeadList(
         ns.salesNavigator.browseLeadList(listId, body, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

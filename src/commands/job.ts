@@ -239,7 +239,7 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
       const fn = (p: typeof base) => ns.jobs.list(p as JobListQuery);
       for await (const item of streamAll(fn, base, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -294,7 +294,7 @@ export async function runJobApplicants(client: Curviate, flags: JobFlags, out: O
       const fn = (p: Record<string, unknown>) => ns.jobs.listApplicants(jobId, p as ListApplicantsParams);
       for await (const item of streamAll(fn, base, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

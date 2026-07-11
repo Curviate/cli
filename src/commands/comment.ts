@@ -169,7 +169,7 @@ export async function runCommentList(client: Curviate, flags: CommentFlags, out:
       const fn = (p: ListQuery) => ns.posts.listComments(postId, p);
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -199,7 +199,7 @@ export async function runCommentReplies(client: Curviate, flags: CommentFlags, o
       const fn = (p: ListQuery) => ns.comments.listReplies(postId, commentId, p);
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -229,7 +229,7 @@ export async function runCommentReactions(client: Curviate, flags: CommentFlags,
       const fn = (p: ListQuery) => ns.comments.listReactions(postId, commentId, p);
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -271,7 +271,7 @@ export async function runCommentUser(client: Curviate, flags: CommentFlags, out:
       const fn = (p: ListQuery) => ns.comments.listUserComments(userId, p);
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

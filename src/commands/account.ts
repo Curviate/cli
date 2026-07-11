@@ -203,7 +203,7 @@ export async function runAccountList(
         client.accounts.list(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         // Slim mode (default) projects each NDJSON item too; --verbose emits raw items.
         const projected = outOpts.verbose ? item : slimAccountListItem(item as Record<string, unknown>);

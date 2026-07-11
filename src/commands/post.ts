@@ -313,7 +313,7 @@ export async function runPostReactions(
         ns.posts.listReactions(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -431,7 +431,7 @@ export async function runPostUserPosts(
         ns.posts.listUserPosts(userId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }
@@ -478,7 +478,7 @@ export async function runPostUserReactions(
         ns.posts.listUserReactions(userId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

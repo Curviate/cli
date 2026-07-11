@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import type { Mock } from "vitest";
 import { streamAll, PaginateError } from "../../src/lib/paginate.js";
+
+function makeOut() {
+  return { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+}
 
 // A minimal paginatable method stub factory.
 function makePaginatedMethod(pages: Array<{ items: string[]; cursor: string | null }>) {
@@ -120,5 +125,89 @@ describe("lib/paginate — streamAll", () => {
         }
       })(),
     ).rejects.toBeInstanceOf(PaginateError);
+  });
+
+  // ---------------------------------------------------------------------------
+  // The `out` option is the single source of truth for the --all truncation
+  // contract: BOTH the machine-readable JSON sentinel on stdout AND the
+  // human-readable prose note on stderr, on every
+  // command, with no per-call-site divergence.
+  // ---------------------------------------------------------------------------
+
+  it("with `out`: truncation writes the stream_truncated JSON sentinel to stdout AND a prose note to stderr", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+      { items: ["c"], cursor: null },
+    ]);
+    const out = makeOut();
+
+    const collected: string[] = [];
+    for await (const item of streamAll(method as never, {}, { maxPages: 2, out })) {
+      collected.push(item as string);
+    }
+    expect(collected).toEqual(["a", "b"]);
+
+    // Exactly one stdout write for the sentinel; it is the last thing written
+    // and it is a bare, valid JSON line — never mixed into the item stream.
+    const stdoutLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stdoutLines).toHaveLength(1);
+    const sentinel = JSON.parse(stdoutLines[0]!.trim()) as Record<string, unknown>;
+    expect(sentinel).toEqual({ object: "stream_truncated", pages_fetched: 2, has_more: true });
+    expect(Object.keys(sentinel).sort()).toEqual(["has_more", "object", "pages_fetched"]);
+    expect(typeof sentinel["object"]).toBe("string");
+    expect(Number.isInteger(sentinel["pages_fetched"])).toBe(true);
+    expect(typeof sentinel["has_more"]).toBe("boolean");
+
+    // Complementary, not exclusive: stderr also gets a human-readable note.
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toMatch(/truncat/i);
+  });
+
+  it("with `out`: natural exhaustion (cursor null) writes neither the sentinel nor a truncation note", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: null },
+    ]);
+    const out = makeOut();
+
+    const collected: string[] = [];
+    for await (const item of streamAll(method as never, {}, { maxPages: 100, out })) {
+      collected.push(item as string);
+    }
+    expect(collected).toEqual(["a", "b"]);
+    expect(out.stdout.write).not.toHaveBeenCalled();
+    expect(out.stderr.write).not.toHaveBeenCalled();
+  });
+
+  it("with `out`: pages_fetched in the sentinel reflects the actual truncation point (3-page stub, maxPages 2)", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+      { items: ["c"], cursor: null },
+    ]);
+    const out = makeOut();
+
+    for await (const item of streamAll(method as never, {}, { maxPages: 2, out })) {
+      void item;
+    }
+    const sentinel = JSON.parse(
+      (out.stdout.write as Mock).mock.calls[0]![0] as string,
+    ) as Record<string, unknown>;
+    expect(sentinel["pages_fetched"]).toBe(2);
+  });
+
+  it("`onTruncated` still fires alongside `out` (back-compat escape hatch, e.g. for telemetry/tests)", async () => {
+    const method = makePaginatedMethod([
+      { items: ["a"], cursor: "next" },
+      { items: ["b"], cursor: "next2" },
+    ]);
+    const out = makeOut();
+    const onTruncated = vi.fn();
+
+    for await (const item of streamAll(method as never, {}, { maxPages: 1, out, onTruncated })) {
+      void item;
+    }
+    expect(onTruncated).toHaveBeenCalledWith(1, true);
   });
 });

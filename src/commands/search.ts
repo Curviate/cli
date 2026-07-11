@@ -387,10 +387,7 @@ export async function runSearchPeople(
       const fn = (p: Record<string, unknown>) => ns.search.people(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        // Write JSON truncation sentinel to stdout as the last NDJSON line
-        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
-          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
-        ),
+        out,
       })) {
         const projected = verbose ? item : slimSearchPeopleItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -441,9 +438,7 @@ export async function runSearchCompanies(
       const fn = (p: Record<string, unknown>) => ns.search.companies(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
-          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
-        ),
+        out,
       })) {
         const projected = verbose ? item : slimSearchCompaniesItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -494,9 +489,7 @@ export async function runSearchPosts(
       const fn = (p: Record<string, unknown>) => ns.search.posts(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
-          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
-        ),
+        out,
       })) {
         const projected = verbose ? item : slimSearchPostsItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -547,9 +540,7 @@ export async function runSearchJobs(
       const fn = (p: Record<string, unknown>) => ns.search.jobs(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
-          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
-        ),
+        out,
       })) {
         const projected = verbose ? item : slimSearchJobsItem(item as Record<string, unknown>);
         out.stdout.write(JSON.stringify(projected) + "\n");
@@ -655,9 +646,7 @@ export async function runSearchFromUrl(
       const fn = (p: Record<string, unknown>) => ns.search.fromUrl(p as SearchFromUrlBody) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, body, {
         maxPages,
-        onTruncated: (pagesFetched, hasMore) => out.stdout.write(
-          JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n",
-        ),
+        out,
       })) {
         out.stdout.write(JSON.stringify(item) + "\n");
       }

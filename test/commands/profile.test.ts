@@ -255,7 +255,7 @@ describe("profile command — routing", () => {
     expect(JSON.parse(ndjsonLines[2]!)).toEqual({ id: "C" });
   });
 
-  it("profile relations --all --max-pages 1 — truncates and notes stderr", async () => {
+  it("profile relations --all --max-pages 1 — truncates, sentinel on stdout, prose on stderr", async () => {
     const { runProfileRelations } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -266,7 +266,12 @@ describe("profile command — routing", () => {
 
     const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
     const ndjsonLines = writtenLines.filter((l) => l.trim().startsWith("{"));
-    expect(ndjsonLines).toHaveLength(2);
+    // 2 items + the stream_truncated sentinel as the last stdout line (D11 — the
+    // shared paginate helper now emits this on every --all command, not just search).
+    expect(ndjsonLines).toHaveLength(3);
+    expect(JSON.parse(ndjsonLines[0]!)).toEqual({ id: "A" });
+    expect(JSON.parse(ndjsonLines[1]!)).toEqual({ id: "B" });
+    expect(JSON.parse(ndjsonLines[2]!)).toEqual({ object: "stream_truncated", pages_fetched: 1, has_more: true });
 
     const stderrCalls = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrCalls).toMatch(/truncat/i);

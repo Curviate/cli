@@ -163,7 +163,7 @@ export async function runConnectSent(
       const fn = (p: Record<string, unknown>) => ns.invites.listSent(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         // streamAll yields individual items; project per-item (the envelope
         // projector slimInviteSent expects a { items } wrapper and would erase
@@ -214,7 +214,7 @@ export async function runConnectReceived(
       const fn = (p: Record<string, unknown>) => ns.invites.listReceived(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
       for await (const item of streamAll(fn, params, {
         maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+        out,
       })) {
         // streamAll yields individual items; project per-item (the envelope
         // projector slimInviteReceived expects a { items } wrapper and would
