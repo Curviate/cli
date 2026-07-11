@@ -25,7 +25,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
-import { resolveIdentifier } from "../lib/identifier.js";
+import { resolveMemberOrMeProviderId } from "../lib/member-id.js";
 import { resolveTextOrStdin } from "../lib/stdin.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -398,8 +398,10 @@ export async function runPostUnreact(
 
 /**
  * Run `post user-posts <user_id> [--all] [--limit] [--cursor]` — posts.listUserPosts.
- * Read command — rejects --preview. user_id passes through resolveIdentifier
- * (URL/slug/provider id, or the "me" sentinel).
+ * Read command — rejects --preview. user_id is the "me" sentinel or a
+ * provider id, forwarded straight through with no extra call; a URL/slug
+ * 400s this endpoint (D7) and is first resolved to the provider id via a
+ * users.get READ (contact-safe — notifies no one).
  */
 export async function runPostUserPosts(
   client: Curviate,
@@ -408,9 +410,17 @@ export async function runPostUserPosts(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
-  const userId = resolveIdentifier(flags.userId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+
+  let userId: string;
+  try {
+    userId = await resolveMemberOrMeProviderId(ns, flags.userId ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
+
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
@@ -436,7 +446,9 @@ export async function runPostUserPosts(
 
 /**
  * Run `post user-reactions <user_id> [--all] [--limit] [--cursor]` — posts.listUserReactions.
- * Read command — rejects --preview. user_id passes through resolveIdentifier.
+ * Read command — rejects --preview. Same D7 provider-id resolution as
+ * `post user-posts` (see its docstring): "me" or a provider id pass
+ * through unchanged; a URL/slug resolves via a users.get READ first.
  */
 export async function runPostUserReactions(
   client: Curviate,
@@ -445,9 +457,17 @@ export async function runPostUserReactions(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
-  const userId = resolveIdentifier(flags.userId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+
+  let userId: string;
+  try {
+    userId = await resolveMemberOrMeProviderId(ns, flags.userId ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
+
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);

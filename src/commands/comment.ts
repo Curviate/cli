@@ -29,7 +29,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
-import { resolveIdentifier } from "../lib/identifier.js";
+import { resolveMemberOrMeProviderId } from "../lib/member-id.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -242,13 +242,26 @@ export async function runCommentReactions(client: Curviate, flags: CommentFlags,
   }
 }
 
-/** Run `comment user <user_id>` — comments.listUserComments (paginated read). */
+/**
+ * Run `comment user <user_id>` — comments.listUserComments (paginated read).
+ * user_id is the "me" sentinel or a provider id, forwarded straight through;
+ * a URL/slug 400s this endpoint (D7) and is first resolved to the provider
+ * id via a users.get READ (contact-safe — notifies no one).
+ */
 export async function runCommentUser(client: Curviate, flags: CommentFlags, out: OutputStreams): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
-  const userId = resolveIdentifier(flags.userId ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
+
+  let userId: string;
+  try {
+    userId = await resolveMemberOrMeProviderId(ns, flags.userId ?? "");
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+    return; // unreachable: handleSdkError always exits
+  }
+
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildListQuery(flags);

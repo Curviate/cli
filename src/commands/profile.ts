@@ -29,7 +29,7 @@
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
-import { resolveMemberProviderId } from "../lib/member-id.js";
+import { resolveMemberProviderId, resolveMemberOrMeProviderId } from "../lib/member-id.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -413,7 +413,14 @@ export async function runProfileGet(
           .filter(Boolean);
       }
 
-      const result = await ns.users.get(resolvedId, params);
+      // D7: the sections-enriched users.get call 400s on a raw slug/URL,
+      // unlike the plain profile fetch — resolve to the provider id first
+      // when --sections is set. "me"/provider-id inputs pass straight
+      // through with zero extra calls; the plain (no-sections) fetch is
+      // untouched (resolvedId, as before) since that form already works.
+      const getId = flags.sections ? await resolveMemberOrMeProviderId(ns, rawId) : resolvedId;
+
+      const result = await ns.users.get(getId, params);
       const getOutOpts = { ...outOpts, slim: slimProfile };
       renderSuccess(result, getOutOpts, out);
     }

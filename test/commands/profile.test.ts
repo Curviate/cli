@@ -462,6 +462,114 @@ describe("profile <id> — --sections passthrough", () => {
     }
     expect(accountNs.users.get).not.toHaveBeenCalled();
   });
+
+  // D7: the sections-enriched users.get call 400s on a raw slug (only "me" +
+  // a provider id route) — resolve a slug/URL to the provider id via a
+  // users.get READ first, same pattern as the D6/D7 fixes elsewhere.
+
+  it("profile <slug> --sections resolves the slug to a provider id via users.get, then fetches sections (D7)", async () => {
+    (accountNs.users.get as Mock)
+      .mockResolvedValueOnce({ object: "user_profile", id: "ACoAA_resolved" }) // resolution call
+      .mockResolvedValueOnce({ object: "user_profile", id: "ACoAA_resolved", first_name: "Raphael" }); // sections fetch
+    const { runProfileGet } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileGet(
+      client as never,
+      { id: "raphael-redmer", account: "acc_1", json: true, sections: "linkedin_experience" } as ProfileCommandArgs,
+      out,
+    );
+
+    expect(accountNs.users.get).toHaveBeenNthCalledWith(1, "raphael-redmer", {});
+    expect(accountNs.users.get).toHaveBeenNthCalledWith(
+      2,
+      "ACoAA_resolved",
+      expect.objectContaining({ linkedin_sections: ["linkedin_experience"] }),
+    );
+    expect(accountNs.users.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("profile <provider_id> --sections skips the resolve call (already a provider id) (D7)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "ACoAAA_x" });
+    const { runProfileGet } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileGet(
+      client as never,
+      { id: "ACoAAA_x", account: "acc_1", json: true, sections: "linkedin_experience" } as ProfileCommandArgs,
+      out,
+    );
+
+    expect(accountNs.users.get).toHaveBeenCalledTimes(1);
+    expect(accountNs.users.get).toHaveBeenCalledWith(
+      "ACoAAA_x",
+      expect.objectContaining({ linkedin_sections: ["linkedin_experience"] }),
+    );
+  });
+
+  it("profile me --sections is unaffected — 'me' passes straight through with a single call (D7 regression guard)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "me" });
+    const { runProfileMe } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileMe(
+      client as never,
+      { account: "acc_1", json: true, sections: "linkedin_experience" } as ProfileCommandArgs,
+      out,
+    );
+
+    expect(accountNs.users.get).toHaveBeenCalledTimes(1);
+    expect(accountNs.users.get).toHaveBeenCalledWith(
+      "me",
+      expect.objectContaining({ linkedin_sections: ["linkedin_experience"] }),
+    );
+  });
+
+  it("profile <slug> WITHOUT --sections is unaffected — no resolve call, single get with the raw resolved id (D7 regression guard)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "jdoe" });
+    const { runProfileGet } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runProfileGet(
+      client as never,
+      { id: "jdoe", account: "acc_1", json: true } as ProfileCommandArgs,
+      out,
+    );
+
+    expect(accountNs.users.get).toHaveBeenCalledTimes(1);
+    expect(accountNs.users.get).toHaveBeenCalledWith("jdoe", {});
+  });
+
+  it("profile <unresolvable-slug> --sections surfaces users.get's 404 as exit 4, no sections fetch (D7)", async () => {
+    const { CurviateError } = await import("@curviate/sdk");
+    const notFound = new CurviateError({
+      code: "RESOURCE_NOT_FOUND",
+      message: "Member not found.",
+      httpStatus: 404,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.users.get as Mock).mockRejectedValueOnce(notFound);
+    const { runProfileGet } = await import("../../src/commands/profile.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(
+      (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
+    );
+    try {
+      await runProfileGet(
+        client as never,
+        { id: "no-such-member", account: "acc_1", json: true, sections: "linkedin_experience" } as ProfileCommandArgs,
+        out,
+      );
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.users.get).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

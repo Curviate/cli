@@ -40,6 +40,9 @@ function makeAccountNs() {
       removeReaction: vi.fn(),
       listUserComments: vi.fn(),
     },
+    users: {
+      get: vi.fn(),
+    },
   };
 }
 
@@ -122,6 +125,49 @@ describe("comment reads — method + args", () => {
     const { runCommentUser } = await import("../../src/commands/comment.js");
     await runCommentUser(client as never, { userId: "me", account: "acc_1", json: true } as Args, makeOut());
     expect(accountNs.comments.listUserComments).toHaveBeenCalledWith("me", {});
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+  });
+
+  // D7: comment user 400s on a raw slug (only "me" + a provider id route) —
+  // resolve a slug/URL to the provider id via a users.get READ first, same
+  // pattern as the D6 follow/unfollow fix.
+
+  it("comment user <slug> resolves the slug to a provider id via users.get, then lists (D7)", async () => {
+    (accountNs.users.get as Mock).mockResolvedValue({ object: "user_profile", id: "ACoAA_resolved" });
+    const { runCommentUser } = await import("../../src/commands/comment.js");
+    await runCommentUser(client as never, { userId: "raphael-redmer", account: "acc_1", json: true } as Args, makeOut());
+    expect(accountNs.users.get).toHaveBeenCalledWith("raphael-redmer", {});
+    expect(accountNs.comments.listUserComments).toHaveBeenCalledWith("ACoAA_resolved", {});
+  });
+
+  it("comment user <provider_id> skips the resolve call (already a provider id) (D7)", async () => {
+    const { runCommentUser } = await import("../../src/commands/comment.js");
+    await runCommentUser(client as never, { userId: "ACoAAA_x", account: "acc_1", json: true } as Args, makeOut());
+    expect(accountNs.users.get).not.toHaveBeenCalled();
+    expect(accountNs.comments.listUserComments).toHaveBeenCalledWith("ACoAAA_x", {});
+  });
+
+  it("comment user <unresolvable-slug> surfaces users.get's 404 as exit 4, no list call (D7)", async () => {
+    const { CurviateError } = await import("@curviate/sdk");
+    const notFound = new CurviateError({
+      code: "RESOURCE_NOT_FOUND",
+      message: "Member not found.",
+      httpStatus: 404,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.users.get as Mock).mockRejectedValue(notFound);
+    const { runCommentUser } = await import("../../src/commands/comment.js");
+    const exitSpy = mockExit();
+    try {
+      await runCommentUser(client as never, { userId: "no-such-member", account: "acc_1", json: true } as Args, makeOut());
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.comments.listUserComments).not.toHaveBeenCalled();
   });
 
   it("a read command rejects --preview with exit 2 and makes no SDK call", async () => {
