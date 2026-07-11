@@ -364,7 +364,7 @@ const inboxMarkReadCommand = defineCommand({
 });
 
 const inboxMessagesCommand = defineCommand({
-  meta: { name: "messages", description: "List messages in a chat." },
+  meta: { name: "messages", description: "List messages in a chat. A very recent send/delete may take a few minutes to appear or clear here (LinkedIn-side indexing); `message get <chat_id> <message_id>` reflects it immediately." },
   args: {
     ...GLOBAL_FLAGS,
     chatId: { type: "positional", description: "Chat ID." },

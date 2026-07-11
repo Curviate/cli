@@ -690,7 +690,7 @@ const postUnreactCommand = defineCommand({
 });
 
 const postUserPostsCommand = defineCommand({
-  meta: { name: "user-posts", description: "List a member's own posts (accepts 'me')." },
+  meta: { name: "user-posts", description: "List a member's own posts (accepts 'me'). A very recent create/delete may take a few minutes to appear or clear here (LinkedIn-side indexing); `post get <post_id>` reflects it immediately." },
   args: {
     ...GLOBAL_FLAGS,
     userId: { type: "positional", description: "Member identifier (URL, slug, provider id, or 'me')." },

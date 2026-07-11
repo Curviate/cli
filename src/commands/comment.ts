@@ -562,7 +562,7 @@ async function withClient(
 }
 
 const commentListCommand = defineCommand({
-  meta: { name: "list", description: "List the comments on a post." },
+  meta: { name: "list", description: "List the comments on a post. A very recent add/delete may take a few minutes to appear or clear here (LinkedIn-side indexing)." },
   args: {
     ...GLOBAL_FLAGS,
     postId: { type: "positional", description: "Post id (or share URN) to list comments for." },
