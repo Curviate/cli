@@ -1849,16 +1849,19 @@ describe("recruiter applicants", () => {
 
 // ─── recruiter job get ────────────────────────────────────────────────────
 
+// Real Recruiter `recruiter_job_posting` v2 shape: `company` is a nested
+// object (no top-level company_id), the applicant count is
+// `applications_count`, and `published_at` (unlike the Core job_posting
+// shape) IS a real field here — see the D13-sweep note on slimJob.
 const richRecruiterJob = {
-  object: "job_posting",
+  object: "recruiter_job_posting",
   id: "4428113858",
   title: "Founders Associate",
-  company: "LEAGUES",
-  company_id: "67756343",
+  company: { id: "67756343", name: "LEAGUES" },
   state: "active",
   location: "Stuttgart, Baden-Württemberg, Germany",
   cost: 0,
-  applicants_counter: 75,
+  applications_count: 75,
   description: "Über deine Rolle: build the founding team.",
   created_at: "2026-06-12T10:07:09.000Z",
   published_at: "2026-06-12T10:08:03.000Z",
@@ -1942,6 +1945,24 @@ describe("recruiter job get", () => {
     expect(result).not.toHaveProperty("hiring_team");
     expect(result).not.toHaveProperty("cost");
     expect(result["description"]).toBe(richRecruiterJob.description);
+  });
+
+  it("D13 sweep: company_id is synthesized from the nested company.id, applications_count surfaces, published_at is real and used directly (unaffected by the Core-shape created_at fallback)", async () => {
+    const { runRecruiterGetJob } = await import("../../src/commands/recruiter.js");
+    const out = makeOut();
+
+    await runRecruiterGetJob(client as never, {
+      account: "acc_1",
+      jobId: "4428113858",
+      json: true,
+    }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["company_id"]).toBe("67756343");
+    expect(result["applications_count"]).toBe(75);
+    expect(result["published_at"]).toBe("2026-06-12T10:08:03.000Z");
+    expect(result).not.toHaveProperty("applicants_counter");
   });
 
   it("--verbose returns the full SDK response including hiring_team, cost, created_at", async () => {

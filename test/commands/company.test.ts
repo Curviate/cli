@@ -471,7 +471,7 @@ describe("company posts command", () => {
     client = makeClient(accountNs);
     (accountNs.companies.posts as Mock).mockResolvedValue({
       object: "company_post_list",
-      items: [{ post_urn: "urn:li:activity:1", text: "We are hiring!", reaction_count: 1, comment_count: 0, author: { name: "Acme" } }],
+      items: [{ id: "urn:li:activity:1", text: "We are hiring!", reaction_count: 1, comment_count: 0, author: { name: "Acme" } }],
       paging: { total_count: 1 },
       cursor: "cur_1",
     });
@@ -500,6 +500,36 @@ describe("company posts command", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     const items = result["items"] as Array<Record<string, unknown>>;
     expect(items[0]?.["text"]).toBe("We are hiring!");
+  });
+
+  it("D13: item.id surfaces in slim --json output (the v2 wire's only identifier field — not post_urn, which was never real)", async () => {
+    const { runCompanyPosts } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyPosts(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    const items = result["items"] as Array<Record<string, unknown>>;
+    expect(items[0]?.["id"]).toBe("urn:li:activity:1");
+    expect(items[0]).not.toHaveProperty("post_urn");
+    expect(items[0]).not.toHaveProperty("posted_at");
+  });
+
+  it("D13: --fields id,author.name projects the real v2 keys (not the v1 post_urn)", async () => {
+    const { runCompanyPosts } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyPosts(
+      client as never,
+      { id: "112013061", account: "acc_1", json: true, fields: "id,author.name" } as CompanyArgs,
+      out,
+    );
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    const items = result["items"] as Array<Record<string, unknown>>;
+    expect(items[0]).toEqual({ id: "urn:li:activity:1", "author.name": "Acme" });
   });
 
   it("company posts <slug> resolves the slug to the numeric id via companies.get, then lists (D4b)", async () => {

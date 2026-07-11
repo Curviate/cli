@@ -53,19 +53,21 @@ function mockExit() {
   });
 }
 
+// Real Core `job_posting` v2 shape: `company` is a nested object (no
+// top-level company_id), the applicant count is `applications_count`, and
+// the only timestamp is `created_at` (no `published_at` on this shape at
+// all — see the D13-sweep note on slimJob).
 const richJob = {
   object: "job_posting",
   id: "4428113858",
   title: "Founders Associate",
-  company: "LEAGUES",
-  company_id: "67756343",
-  state: "active",
+  company: { id: "67756343", name: "LEAGUES", public_identifier: "leagues" },
+  state: "LISTED",
   location: "Stuttgart, Baden-Württemberg, Germany",
   cost: 0,
-  applicants_counter: 75,
+  applications_count: 75,
   description: "Über deine Rolle: build the founding team.",
   created_at: "2026-06-12T10:07:09.000Z",
-  published_at: "2026-06-12T10:08:03.000Z",
   hiring_team: [],
 };
 
@@ -217,6 +219,20 @@ describe("job get — slim mode (default, no --verbose)", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result).not.toHaveProperty("hiring_team");
     expect(result).not.toHaveProperty("cost");
+  });
+
+  it("D13 sweep: company_id is synthesized from the nested company.id, applications_count surfaces, published_at falls back to created_at (Core shape has no published_at)", async () => {
+    const { runJobGet } = await import("../../src/commands/job.js");
+    const out = makeOut();
+
+    await runJobGet(client as never, { id: "4428113858", account: "acc_1", json: true } as JobArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["company_id"]).toBe("67756343");
+    expect(result["applications_count"]).toBe(75);
+    expect(result["published_at"]).toBe("2026-06-12T10:07:09.000Z");
+    expect(result).not.toHaveProperty("applicants_counter");
   });
 
   it("--json is emitted by default when stdout is not a TTY (agent-first pipe behavior)", async () => {

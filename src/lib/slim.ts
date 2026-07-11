@@ -428,15 +428,32 @@ export function slimSearchJobs(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// search posts
+// search posts / company posts (shared item schema)
 // ---------------------------------------------------------------------------
 
 /**
- * Slim-default projection for a single `search posts` item.
+ * Slim-default projection for a single post item — shared by `search posts`
+ * (`POST /v1/{account_id}/search/posts`) and `company posts`
+ * (`GET /v1/{account_id}/companies/{identifier}/posts`), which return the
+ * identical item schema.
  *
- * Exact fields: post_urn, posted_at, author ({name} only), text (truncated
- * to 200 chars; null preserved), reaction_count, comment_count.
- * Verbose-only: share_url, repost_count, impressions_count, full author object.
+ * v2 shape (both endpoints):
+ *   { id, share_url?, text?, author?: {id?, name?, is_company?, public_identifier?},
+ *     permissions?, is_repost?, attachments?, reactions?, reaction_count,
+ *     comment_count, repost_count }
+ *
+ * Exact fields: id, author ({name} only), text (truncated to 200 chars; null
+ * preserved), reaction_count, comment_count.
+ * Verbose-only: share_url, repost_count, is_repost, attachments, reactions,
+ * permissions, full author object.
+ *
+ * v1-parity note (D13): this replaces the pre-v2 shape (`post_urn`,
+ * `posted_at`) that neither endpoint's response ever sends — `post_urn` was
+ * never a real key (the wire's identifier field is `id`), and there is no
+ * timestamp field on this resource at all, so `posted_at` has no v2
+ * replacement and is dropped rather than kept as a permanently-null decoy.
+ * The prior projection nulled both keys forever and never surfaced the
+ * post's own `id` in slim output.
  */
 export function slimSearchPostsItem(item: Record<string, unknown>): Record<string, unknown> {
   // Project author to {name} only
@@ -457,8 +474,7 @@ export function slimSearchPostsItem(item: Record<string, unknown>): Record<strin
   }
 
   return {
-    post_urn: item["post_urn"] ?? null,
-    posted_at: item["posted_at"] ?? null,
+    id: item["id"] ?? null,
     author,
     text,
     reaction_count: item["reaction_count"] ?? null,
@@ -467,7 +483,9 @@ export function slimSearchPostsItem(item: Record<string, unknown>): Record<strin
 }
 
 /**
- * Slim-default projection for the `search posts` list envelope.
+ * Slim-default projection for the `search posts` / `company posts` list
+ * envelope. Projects each item via slimSearchPostsItem; preserves envelope
+ * shape (`object`, `paging`, `cursor` pass through — only `items` is mapped).
  */
 export function slimSearchPosts(data: unknown): Record<string, unknown> {
   const d = (data !== null && data !== undefined && typeof data === "object"
@@ -550,37 +568,63 @@ export function slimAccountGet(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// job get / recruiter job get (shared projection — both endpoints return the
-// same job-posting shape, Core vs. Recruiter lens)
+// job get / recruiter job get (shared projection over two DIFFERENT v2
+// shapes — Core job_posting vs. Recruiter recruiter_job_posting)
 // ---------------------------------------------------------------------------
 
 /**
- * Slim-default projection for `job get` and `recruiter job get`.
+ * Slim-default projection for `job get` and `recruiter job get` — two
+ * commands sharing one projection even though the underlying v2 shapes
+ * differ: Core `job_posting` (`GET /v1/{account_id}/jobs/{job_id}`) vs.
+ * Recruiter `recruiter_job_posting`
+ * (`GET /v1/{account_id}/recruiter/jobs/{job_id}`). (`recruiter
+ * project-job get` — `.../recruiter/projects/{project_id}/jobs/{job_id}` —
+ * is a separate command that does NOT use this projector; it renders the
+ * raw SDK response with no slim/verbose split.)
  *
  * Exact fields returned (10):
  *   object, id, title, company, company_id, location, state,
- *   applicants_counter, published_at, description
+ *   applications_count, published_at, description
  *
  * `description` stays in the slim projection — retrieving a job's full
  * description is the point of this command. Excludes `hiring_team` and
- * `cost` (verbose-only) and `created_at` (verbose-only). `--verbose` returns
- * the full SDK response.
+ * `cost` (verbose-only).
+ *
+ * v1-drift fixes (D13 sweep — neither shape ever sent these keys):
+ *   - `company_id`: never a top-level key on either shape — `company` is
+ *     always a nested object (`{id, name, ...}`). Synthesized from
+ *     `company.id` instead of read from a flat key that doesn't exist.
+ *   - `applicants_counter` → `applications_count` (renamed): the real key on
+ *     both shapes is `applications_count`; `applicants_counter` was never
+ *     real and always projected null.
+ *   - `published_at`: real (optional) on the Recruiter shape, but the Core
+ *     shape has no `published_at` at all — its equivalent is `created_at`.
+ *     Falls back to `created_at` so `job get` (Core) surfaces a real
+ *     timestamp instead of a permanent null; unaffected when the real
+ *     `published_at` is present (Recruiter).
  */
 export function slimJob(data: unknown): Record<string, unknown> {
   const d = (data !== null && data !== undefined && typeof data === "object"
     ? data
     : {}) as Record<string, unknown>;
 
+  // company is a nested object on both shapes; there is no top-level
+  // company_id on either — synthesize it from company.id.
+  const rawCompany = (d["company"] !== null && d["company"] !== undefined && typeof d["company"] === "object")
+    ? (d["company"] as Record<string, unknown>)
+    : null;
+  const companyId = (rawCompany?.["id"] as string | null | undefined) ?? null;
+
   return {
     object: d["object"] ?? null,
     id: d["id"] ?? null,
     title: d["title"] ?? null,
     company: d["company"] ?? null,
-    company_id: d["company_id"] ?? null,
+    company_id: companyId,
     location: d["location"] ?? null,
     state: d["state"] ?? null,
-    applicants_counter: d["applicants_counter"] ?? null,
-    published_at: d["published_at"] ?? null,
+    applications_count: d["applications_count"] ?? null,
+    published_at: d["published_at"] ?? d["created_at"] ?? null,
     description: d["description"] ?? null,
   };
 }

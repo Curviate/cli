@@ -1239,15 +1239,14 @@ describe("search posts slim: text truncation and author projection", () => {
 
     (accountNs.search.posts as Mock).mockResolvedValue({
       items: [{
-        post_urn: "urn:li:activity:123",
-        posted_at: "2026-01-01T00:00:00Z",
-        author: { name: "Bob", member_urn: "urn:li:member:456", linkedin_urn: "urn:li:member:456" },
+        id: "urn:li:activity:123",
+        author: { name: "Bob", id: "urn:li:member:456", is_company: false, public_identifier: "bob" },
         text: "A".repeat(300),
         reaction_count: 42,
         comment_count: 7,
         share_url: "https://linkedin.com/posts/bob_1",
         repost_count: 1,
-        impressions_count: 500,
+        is_repost: false,
       }],
       cursor: null,
     });
@@ -1258,9 +1257,9 @@ describe("search posts slim: text truncation and author projection", () => {
     const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
     const item = result.items[0]!;
 
-    // Expected slim fields
-    expect(item["post_urn"]).toBe("urn:li:activity:123");
-    expect(item["posted_at"]).toBe("2026-01-01T00:00:00Z");
+    // Expected slim fields (D13: id is the real wire identifier — post_urn
+    // and posted_at were never real keys on this v2 response)
+    expect(item["id"]).toBe("urn:li:activity:123");
     expect(item["author"]).toEqual({ name: "Bob" });  // only name sub-field
     expect((item["text"] as string).length).toBe(200);
     expect(item["text"]).toBe("A".repeat(200));
@@ -1270,9 +1269,13 @@ describe("search posts slim: text truncation and author projection", () => {
     // Excluded verbose-only fields
     expect(item["share_url"]).toBeUndefined();
     expect(item["repost_count"]).toBeUndefined();
-    expect(item["impressions_count"]).toBeUndefined();
+    expect(item["is_repost"]).toBeUndefined();
+    expect(item["post_urn"]).toBeUndefined();
+    expect(item["posted_at"]).toBeUndefined();
     // author sub-fields beyond name excluded
-    expect((item["author"] as Record<string, unknown>)["member_urn"]).toBeUndefined();
+    expect((item["author"] as Record<string, unknown>)["id"]).toBeUndefined();
+    expect((item["author"] as Record<string, unknown>)["is_company"]).toBeUndefined();
+    expect((item["author"] as Record<string, unknown>)["public_identifier"]).toBeUndefined();
   });
 
   it("text <=200 chars not truncated", async () => {
@@ -1280,7 +1283,7 @@ describe("search posts slim: text truncation and author projection", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.search.posts as Mock).mockResolvedValue({
-      items: [{ post_urn: "urn:li:activity:124", author: { name: "Alice" }, text: "Short post", reaction_count: 1, comment_count: 0 }],
+      items: [{ id: "urn:li:activity:124", author: { name: "Alice" }, text: "Short post", reaction_count: 1, comment_count: 0 }],
       cursor: null,
     });
 
@@ -1296,7 +1299,7 @@ describe("search posts slim: text truncation and author projection", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.search.posts as Mock).mockResolvedValue({
-      items: [{ post_urn: "urn:li:activity:125", author: { name: "Carl" }, text: null, reaction_count: 0, comment_count: 0 }],
+      items: [{ id: "urn:li:activity:125", author: { name: "Carl" }, text: null, reaction_count: 0, comment_count: 0 }],
       cursor: null,
     });
 
@@ -1312,10 +1315,10 @@ describe("search posts slim: text truncation and author projection", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     const longText = "A".repeat(300);
-    (accountNs.search.posts as Mock).mockResolvedValue({  // eslint-disable-line @typescript-eslint/no-unsafe-assignment
+    (accountNs.search.posts as Mock).mockResolvedValue({
       items: [{
-        post_urn: "urn:li:activity:123",
-        author: { name: "Bob", member_urn: "urn:li:member:456" },
+        id: "urn:li:activity:123",
+        author: { name: "Bob", id: "urn:li:member:456" },
         text: longText,
         reaction_count: 42,
         comment_count: 7,
@@ -1331,7 +1334,7 @@ describe("search posts slim: text truncation and author projection", () => {
     const result = JSON.parse(written) as { items: Array<Record<string, unknown>> };
     const item = result.items[0]!;
     expect(item["text"]).toBe(longText);
-    expect((item["author"] as Record<string, unknown>)["member_urn"]).toBe("urn:li:member:456");
+    expect((item["author"] as Record<string, unknown>)["id"]).toBe("urn:li:member:456");
     expect(item["share_url"]).toBe("https://linkedin.com/posts/bob_1");
     expect(item["repost_count"]).toBe(1);
   });

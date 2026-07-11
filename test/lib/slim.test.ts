@@ -17,6 +17,8 @@ import {
   slimInviteSent,
   slimInviteReceivedItem,
   slimInviteReceived,
+  slimSearchPostsItem,
+  slimSearchPosts,
 } from "../../src/lib/slim.js";
 
 // ---------------------------------------------------------------------------
@@ -428,27 +430,51 @@ describe("slimCompany", () => {
 // ---------------------------------------------------------------------------
 
 describe("slimJob", () => {
-  const fullJob = {
+  // Core `job_posting` shape (GET /v1/{account_id}/jobs/{job_id}): the real
+  // timestamp field is `created_at` — there is no `published_at` at all on
+  // this shape. `company` is a nested object; there is no top-level
+  // `company_id`. The applicant-count field is `applications_count`.
+  const coreJob = {
     object: "job_posting",
     id: "4428113858",
     title: "Founders Associate",
-    company: "LEAGUES",
-    company_id: "67756343",
-    state: "active",
+    company: { id: "67756343", name: "LEAGUES", public_identifier: "leagues" },
+    state: "LISTED",
     location: "Stuttgart, Baden-Württemberg, Germany",
-    cost: 0,
-    applicants_counter: 75,
-    description: "Über deine Rolle: build the founding team.",
+    is_repost: false,
+    is_application_limit_reached: false,
     created_at: "2026-06-12T10:07:09.000Z",
+    applications_count: 75,
+    description: "Über deine Rolle: build the founding team.",
+    workplace_type: "HYBRID",
+    employment_status: "FULL_TIME",
+    hiring_team: [],
+  };
+
+  // Recruiter `recruiter_job_posting` shape (GET .../recruiter/jobs/{job_id}
+  // and .../recruiter/projects/{project_id}/jobs/{job_id}): the opposite —
+  // `published_at` IS real here (optional) and there is no `created_at` at
+  // all. Still a nested `company` (no top-level `company_id`), still
+  // `applications_count`.
+  const recruiterJob = {
+    object: "recruiter_job_posting",
+    id: "4428113858",
+    project_id: "proj_1",
+    title: "Founders Associate",
+    company: { id: "67756343", name: "LEAGUES" },
+    state: "LISTED",
+    location: "Stuttgart, Baden-Württemberg, Germany",
+    applications_count: 75,
     published_at: "2026-06-12T10:08:03.000Z",
+    description: "Über deine Rolle: build the founding team.",
     hiring_team: [],
   };
 
   it("returns exactly the 10 documented slim fields", () => {
-    const result = slimJob(fullJob);
+    const result = slimJob(coreJob);
     expect(Object.keys(result).sort()).toEqual(
       [
-        "applicants_counter",
+        "applications_count",
         "company",
         "company_id",
         "description",
@@ -463,38 +489,64 @@ describe("slimJob", () => {
   });
 
   it("keeps description non-empty (the point of the fetch)", () => {
-    const result = slimJob(fullJob);
-    expect(result["description"]).toBe(fullJob.description);
+    const result = slimJob(coreJob);
+    expect(result["description"]).toBe(coreJob.description);
   });
 
-  it("excludes hiring_team and cost", () => {
-    const result = slimJob(fullJob);
+  it("excludes hiring_team (verbose-only)", () => {
+    const result = slimJob(coreJob);
     expect(result).not.toHaveProperty("hiring_team");
-    expect(result).not.toHaveProperty("cost");
   });
 
-  it("excludes created_at (verbose-only)", () => {
-    const result = slimJob(fullJob);
-    expect(result).not.toHaveProperty("created_at");
+  it("v1 legacy field (applicants_counter) is absent — the real key on both shapes is applications_count", () => {
+    const result = slimJob(coreJob);
+    expect(result).not.toHaveProperty("applicants_counter");
   });
 
-  it("passes id, title, company, company_id, location, state, applicants_counter, published_at through verbatim", () => {
-    const result = slimJob(fullJob);
+  it("Core shape: passes id, title, company (nested, verbatim), location, state, description through; applications_count maps directly", () => {
+    const result = slimJob(coreJob);
     expect(result["id"]).toBe("4428113858");
     expect(result["title"]).toBe("Founders Associate");
-    expect(result["company"]).toBe("LEAGUES");
+    expect(result["company"]).toEqual({ id: "67756343", name: "LEAGUES", public_identifier: "leagues" });
+    expect(result["location"]).toBe(coreJob.location);
+    expect(result["state"]).toBe("LISTED");
+    expect(result["applications_count"]).toBe(75);
+    expect(result["description"]).toBe(coreJob.description);
+  });
+
+  it("Core shape: company_id is synthesized from company.id (no top-level company_id exists on the real wire)", () => {
+    const result = slimJob(coreJob);
     expect(result["company_id"]).toBe("67756343");
-    expect(result["location"]).toBe(fullJob.location);
-    expect(result["state"]).toBe("active");
-    expect(result["applicants_counter"]).toBe(75);
-    expect(result["published_at"]).toBe(fullJob.published_at);
+  });
+
+  it("company_id ignores a stray flat company_id key — company.id is always the source of truth", () => {
+    const result = slimJob({ ...coreJob, company_id: "DECOY_SHOULD_BE_IGNORED" });
+    expect(result["company_id"]).toBe("67756343");
+  });
+
+  it("Core shape: published_at falls back to created_at (the Core wire has no published_at field at all)", () => {
+    const result = slimJob(coreJob);
+    expect(result["published_at"]).toBe("2026-06-12T10:07:09.000Z");
+  });
+
+  it("Recruiter shape: published_at is real and used directly", () => {
+    const result = slimJob(recruiterJob);
+    expect(result["published_at"]).toBe("2026-06-12T10:08:03.000Z");
+  });
+
+  it("Recruiter shape: company_id and applications_count resolve the same way as Core", () => {
+    const result = slimJob(recruiterJob);
+    expect(result["company_id"]).toBe("67756343");
+    expect(result["applications_count"]).toBe(75);
   });
 
   it("nullable fields project to null when absent", () => {
     const result = slimJob({ object: "job_posting", id: "1" });
     expect(result["location"]).toBeNull();
     expect(result["published_at"]).toBeNull();
-    expect(result["applicants_counter"]).toBeNull();
+    expect(result["applications_count"]).toBeNull();
+    expect(result["company_id"]).toBeNull();
+    expect(result["company"]).toBeNull();
   });
 
   it("non-object input projects to an all-null shape (never throws)", () => {
@@ -690,5 +742,118 @@ describe("slimInviteReceived", () => {
 
   it("non-object / missing items input projects to an empty-list shape (never throws)", () => {
     expect(slimInviteReceived(undefined)).toEqual({ object: null, items: [], cursor: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slimSearchPostsItem / slimSearchPosts — shared by `search posts` and
+// `company posts` (D13): both endpoints' v2 responses use the identical item
+// schema (GET /v1/{account_id}/companies/{identifier}/posts and
+// POST /v1/{account_id}/search/posts). Neither ever sends `post_urn` or
+// `posted_at` — `id` is the only identifier field, and it's required.
+// ---------------------------------------------------------------------------
+
+describe("slimSearchPostsItem", () => {
+  const fullPostItem = {
+    id: "urn_activity_7419644944484753408",
+    share_url: "https://linkedin.com/posts/acme_1",
+    text: "We are hiring!",
+    author: {
+      id: "urn_company_112013061",
+      name: "Acme",
+      is_company: true,
+      public_identifier: "acme",
+    },
+    permissions: { can_react: true, can_share: true, can_post_comments: true },
+    is_repost: false,
+    attachments: [{ type: "image" }],
+    reactions: [{ type: "like", count: 10 }],
+    reaction_count: 10,
+    comment_count: 2,
+    repost_count: 1,
+  };
+
+  it("projects id, author.name, text, reaction_count, comment_count", () => {
+    const result = slimSearchPostsItem(fullPostItem);
+    expect(result).toEqual({
+      id: "urn_activity_7419644944484753408",
+      author: { name: "Acme" },
+      text: "We are hiring!",
+      reaction_count: 10,
+      comment_count: 2,
+    });
+  });
+
+  it("drops share_url, repost_count, is_repost, attachments, reactions, permissions, and author sub-fields beyond name (verbose-only)", () => {
+    const result = slimSearchPostsItem(fullPostItem);
+    expect(result).not.toHaveProperty("share_url");
+    expect(result).not.toHaveProperty("repost_count");
+    expect(result).not.toHaveProperty("is_repost");
+    expect(result).not.toHaveProperty("attachments");
+    expect(result).not.toHaveProperty("reactions");
+    expect(result).not.toHaveProperty("permissions");
+    const author = result["author"] as Record<string, unknown>;
+    expect(author).not.toHaveProperty("id");
+    expect(author).not.toHaveProperty("is_company");
+    expect(author).not.toHaveProperty("public_identifier");
+  });
+
+  it("v1 legacy fields (post_urn, posted_at) are absent — neither v2 endpoint's response ever sends them", () => {
+    const result = slimSearchPostsItem(fullPostItem);
+    expect(result).not.toHaveProperty("post_urn");
+    expect(result).not.toHaveProperty("posted_at");
+  });
+
+  it("text >200 chars truncated to 200; <=200 chars passed through; null preserved", () => {
+    const long = slimSearchPostsItem({ ...fullPostItem, text: "A".repeat(300) });
+    expect((long["text"] as string).length).toBe(200);
+    expect(long["text"]).toBe("A".repeat(200));
+
+    const short = slimSearchPostsItem({ ...fullPostItem, text: "Short post" });
+    expect(short["text"]).toBe("Short post");
+
+    const nullText = slimSearchPostsItem({ ...fullPostItem, text: null });
+    expect(nullText["text"]).toBeNull();
+  });
+
+  it("author projects to null when the source has no author (never crashes)", () => {
+    const withoutAuthor = { ...fullPostItem };
+    delete (withoutAuthor as { author?: unknown }).author;
+    const result = slimSearchPostsItem(withoutAuthor);
+    expect(result["author"]).toBeNull();
+  });
+
+  it("id projects to null when absent — defensive, even though the v2 schema marks it required (never undefined)", () => {
+    const result = slimSearchPostsItem({ text: "no id here", reaction_count: 0, comment_count: 0 });
+    expect(result["id"]).toBeNull();
+  });
+});
+
+describe("slimSearchPosts", () => {
+  it("projects the envelope's items array with each item slimmed; cursor passes through", () => {
+    const result = slimSearchPosts({
+      object: "company_post_list",
+      items: [
+        { id: "p1", author: { name: "Acme" }, text: "Hi", reaction_count: 1, comment_count: 0 },
+      ],
+      cursor: "cur_1",
+      paging: { total_count: 1 },
+    });
+    const items = result["items"] as Record<string, unknown>[];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({
+      id: "p1",
+      author: { name: "Acme" },
+      text: "Hi",
+      reaction_count: 1,
+      comment_count: 0,
+    });
+    expect(result["cursor"]).toBe("cur_1");
+  });
+
+  it("non-object / missing items input projects to an empty-list-safe shape (never throws)", () => {
+    expect(() => slimSearchPosts(undefined)).not.toThrow();
+    const result = slimSearchPosts(undefined) as Record<string, unknown>;
+    expect(result["items"]).toEqual([]);
   });
 });
