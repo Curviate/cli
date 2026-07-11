@@ -147,7 +147,7 @@ const PARITY_MANIFEST: Record<string, string> = {
   "recruiter job publish":         "recruiter.publishJob",
   "recruiter job close":           "recruiter.closeJob",
   "recruiter job get":             "recruiter.getJob",
-  "recruiter applicant get":       "recruiter.getApplicant",
+  "recruiter applicant":           "recruiter.getApplicant",
   "recruiter applicant resume":    "recruiter.downloadResume",
 
   // jobs (10)

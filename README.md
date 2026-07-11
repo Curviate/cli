@@ -80,14 +80,16 @@ These examples show how coding agents compose the CLI in real workflows.
 Search for matching profiles, preview the invitations, then send them once satisfied:
 
 ```bash
-# Preview first — see who would be targeted
+# Look first — a search is a read, so it just runs (no --preview on reads)
 curviate search people \
   --keywords "AI engineer" \
   --location "Berlin" \
   --limit 10 \
-  --preview
+  --json
 
-# Pipe IDs into connect — one request per person
+# Preview a single write before sending, then pipe IDs into connect — one request per person
+curviate connect "$SOME_ID" --note "Hi, I'd love to connect." --preview
+
 curviate search people --keywords "AI engineer" --location "Berlin" --all \
   | jq -r '.id' \
   | head -5 \
@@ -112,7 +114,7 @@ PROFILE_URL="https://www.linkedin.com/in/example"
 
 curviate profile "$PROFILE_URL" --posts --fields post_id --json \
   | jq -r '.[].post_id' \
-  | xargs -I{} curviate post react {} --type LIKE
+  | xargs -I{} curviate post react {} --reaction like
 ```
 
 ### 4. Check tier entitlement before a Sales Navigator sweep
@@ -191,16 +193,6 @@ curviate company t-systems --account acc_1 --json | jq -r '.id' \
 ```bash
 curviate company posts 112013061 --limit 5 --account acc_1 --json
 curviate company jobs 112013061 --all --account acc_1 --json   # streams every page
-```
-
-### 3. List a company's followers (page admins only)
-
-Followers are only retrievable for a company page the acting account **administers** — a
-non-administered company returns a `RESOURCE_NOT_FOUND` error (exit code `4`), the same shape as
-an unknown company.
-
-```bash
-curviate company followers 112013061 --limit 25 --account acc_1 --json
 ```
 
 ## Sales Navigator
@@ -297,9 +289,10 @@ curviate sales-nav save-account 112013061 --account acc_1 --list 987654
 
 Recruiter commands (`curviate recruiter ...`) require an account with the Recruiter add-on tier
 attached. A call against an account without it fails with **exit code `5`** and a `TIER_NOT_ACTIVE`
-error body naming the required tier (`recruiter`). Write commands (`add-candidate`,
-`add-applicant`, `reject-applicant`, `job create`/`publish`/`checkpoint`, `message new`) accept
-`--preview` to render the request without sending it.
+error body naming the required tier (`recruiter`). The surface is project-centric: most
+operations are scoped to a hiring project id. Write commands (`save-candidate`, `project update`,
+`project-job create`/`update`, `job create`/`publish`/`close`, `message new`) accept `--preview`
+to render the request without sending it.
 
 ### 1. List hiring projects
 
@@ -308,65 +301,62 @@ curviate recruiter projects --account acc_1 --limit 20 --json \
   | jq -r '.items[] | "\(.id)\t\(.name)"'
 ```
 
-### 2. Create a job posting draft, then publish it (with the checkpoint flow)
+### 2. Inspect a project, its pipeline, and its attached job posting
 
-Publishing can return a verification checkpoint instead of a published job — solve it with the
-`job_id` from the publish response, then retry:
+`recruiter project-job get` returns the single job posting attached to a project (a
+`RESOURCE_NOT_FOUND` / exit `4` when none is attached).
+
+```bash
+curviate recruiter project "$PROJECT_ID" --account acc_1 --json
+curviate recruiter pipeline "$PROJECT_ID" --account acc_1 --json
+curviate recruiter project-job get "$PROJECT_ID" --account acc_1 --json
+```
+
+### 3. Create a job posting draft, then publish it
+
+`recruiter job create` requires `--project-name` (the hiring project the posting opens) and takes
+the v2 job body. `recruiter job publish` is project-scoped and requires `--mode`
+(`FREE | PROMOTED | PROMOTED_PLUS`); the paid modes also require the full `--budget-*` triple.
 
 ```bash
 curviate recruiter job create \
   --account acc_1 \
+  --project-name "Backend Hiring — 2026" \
   --job-title "Senior Backend Engineer" \
   --description "Remote-first team building the core platform." \
-  --employment-type FULL_TIME \
-  --json > draft.json
+  --employment-status FULL_TIME \
+  --json
 
-JOB_ID=$(jq -r '.job_id' draft.json)
-
-curviate recruiter job publish "$JOB_ID" --account acc_1 --mode FREE --json > publish.json
-
-# If publish returns a checkpoint object instead of a published job, solve it:
-if [ "$(jq -r '.object // empty' publish.json)" = "job_posting_checkpoint" ]; then
-  curviate recruiter job checkpoint "$JOB_ID" --account acc_1 --input "123456"
-fi
+curviate recruiter job publish "$PROJECT_ID" "$JOB_ID" --account acc_1 --mode FREE --json
 ```
 
-### 3. List applicants for a job, then get one applicant's detail
+### 4. List applicants in a project, then get one applicant's detail
+
+`recruiter applicants` is project-scoped and requires `--channel-id` (the project's own
+JOB_POSTING talent-pool channel). Applicant detail and résumé are also project-scoped.
 
 ```bash
-curviate recruiter job applicants "$JOB_ID" --account acc_1 --limit 10 --json \
+curviate recruiter applicants "$PROJECT_ID" --channel-id "$CHANNEL_ID" --account acc_1 --limit 10 --json \
   | jq -r '.items[0].id' \
-  | xargs -I{} curviate recruiter applicant {} --account acc_1
+  | xargs -I{} curviate recruiter applicant "$PROJECT_ID" {} --account acc_1
 ```
 
-### 4. Download an applicant's resume
+### 5. Download an applicant's resume
 
 ```bash
-curviate recruiter applicant resume APPLICANT_ID --account acc_1 -o resume.pdf
+curviate recruiter applicant resume "$PROJECT_ID" APPLICANT_ID --account acc_1 -o resume.pdf
 ```
 
-### 5. Reject an applicant, optionally notifying them
-
-The applicant is only notified when `--message` is given; omit it to reject silently.
-`--notify-at` (a UNIX-ms timestamp to schedule the notification) requires `--message`.
+### 6. Save a candidate to a project pipeline stage
 
 ```bash
-# Silent rejection — no notification sent
-curviate recruiter reject-applicant AEM789 \
+curviate recruiter save-candidate "$PROJECT_ID" \
   --account acc_1 \
-  --hiring-project-id proj_abc \
-  --reason NOT_MEET_BASIC_QUALIFICATIONS
-
-# Rejection with a notification to the applicant
-curviate recruiter reject-applicant AEM789 \
-  --account acc_1 \
-  --hiring-project-id proj_abc \
-  --reason NOT_MEET_BASIC_QUALIFICATIONS \
-  --message "Thanks for applying — we've decided to move forward with other candidates." \
-  --preview
+  --stage-id "$STAGE_ID" \
+  --candidate-id AEM789
 ```
 
-### 6. Search Recruiter people
+### 7. Search Recruiter people
 
 ```bash
 curviate recruiter search people \
@@ -374,33 +364,14 @@ curviate recruiter search people \
   --account acc_1 \
   --limit 5 --json \
   | jq -r '.items[] | "\(.id)\t\(.full_name // .headline)"'
+
+# A pasted Recruiter search / talent-pool URL runs directly:
+curviate recruiter search "https://www.linkedin.com/talent/search?..." --account acc_1 --json
 ```
 
-### 7. Add a candidate to a hiring project, then promote them to applicant
+### 8. Get a Recruiter-enriched profile, then start a chat with them
 
-```bash
-curviate recruiter add-candidate AEM789 \
-  --account acc_1 \
-  --hiring-project-id proj_abc \
-  --stage UNCONTACTED
-
-# Once they've applied, move them to the applicant pool:
-curviate recruiter add-applicant AEM789 \
-  --account acc_1 \
-  --hiring-project-id proj_abc \
-  --stage CONTACTED
-```
-
-### 8. Inspect a single hiring project, then list its job postings
-
-```bash
-curviate recruiter project proj_abc --account acc_1 --json
-
-curviate recruiter jobs --account acc_1 --limit 10 --json \
-  | jq -r '.items[] | "\(.id)\t\(.title)\t\(.state)"'
-```
-
-### 9. Get a Recruiter-enriched profile, then start a chat with them
+`recruiter message new` is JSON-only and requires `--subject` and `--signature`.
 
 ```bash
 curviate recruiter profile "https://www.linkedin.com/in/example" --account acc_1 --json
@@ -408,20 +379,22 @@ curviate recruiter profile "https://www.linkedin.com/in/example" --account acc_1
 curviate recruiter message new \
   --to AEM789 \
   --account acc_1 \
+  --subject "A role you'd be a great fit for" \
+  --signature "— Alex, Talent Team" \
   "Hi — I came across your profile and think you'd be a great fit for a role we're hiring for."
 ```
 
-### 10. Get any public job posting through the Recruiter lens
+### 9. List your postings, and get any public job posting through the Recruiter lens
 
 Unlike `recruiter jobs` (which lists postings you manage), `recruiter job get` retrieves the full
 detail of *any* public LinkedIn job posting — the Recruiter-seated counterpart to the top-level
 `job get` command:
 
 ```bash
-curviate recruiter job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1 --json
+curviate recruiter jobs --account acc_1 --limit 10 --json \
+  | jq -r '.items[] | "\(.id)\t\(.title)\t\(.state)"'
 
-# Bare numeric id works identically:
-curviate recruiter job get 4428113858 --account acc_1 --verbose
+curviate recruiter job get "https://www.linkedin.com/jobs/view/4428113858" --account acc_1 --json
 ```
 
 ## Exit codes
