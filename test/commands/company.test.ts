@@ -378,24 +378,83 @@ describe("company employees command", () => {
     }
   });
 
-  it("wrong usage: a non-numeric identifier — the server's 400 INVALID_REQUEST surfaces as exit 2", async () => {
-    (accountNs.companies.employees as Mock).mockRejectedValue(makeInvalidRequestError());
+  it("company employees <slug> resolves the slug to the numeric id via companies.get, then lists (D4b)", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061", object: "company_profile" });
+
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyEmployees(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+
+    // Slug is resolved to the numeric provider_id first (mirrors bare `company <slug>`),
+    // then the sub-resource is called with the numeric id — not the raw slug.
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.employees).toHaveBeenCalledWith("112013061", {});
+  });
+
+  it("company employees <url> normalizes the URL to a slug, resolves it, then lists (D4b)", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyEmployees(client as never, { id: "https://www.linkedin.com/company/t-systems/about/", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.employees).toHaveBeenCalledWith("112013061", {});
+  });
+
+  it("company employees <numeric-id> passes through with NO extra companies.get call (D4b)", async () => {
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyEmployees(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+    expect(accountNs.companies.employees).toHaveBeenCalledWith("112013061", {});
+  });
+
+  it("an unresolvable identifier surfaces companies.get's 404 as exit 4, no employees call (D4b)", async () => {
+    const notFound = new CurviateError({
+      code: "RESOURCE_NOT_FOUND",
+      message: "Company not found.",
+      httpStatus: 404,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.get as Mock).mockRejectedValue(notFound);
 
     const { runCompanyEmployees } = await import("../../src/commands/company.js");
     const out = makeOut();
     const exitSpy = mockExit();
 
     try {
-      await runCompanyEmployees(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+      await runCompanyEmployees(client as never, { id: "no-such-company", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(4)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.employees).not.toHaveBeenCalled();
+  });
+
+  it("a genuinely invalid identifier surfaces companies.get's 400 INVALID_REQUEST as exit 2 (D4b)", async () => {
+    (accountNs.companies.get as Mock).mockRejectedValue(makeInvalidRequestError());
+
+    const { runCompanyEmployees } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyEmployees(client as never, { id: "@@bad@@", account: "acc_1", json: true } as CompanyArgs, out);
       expect.fail("Should have exited");
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(2)");
     } finally {
       exitSpy.mockRestore();
     }
-    // The CLI does not duplicate the server-side numeric guard — it forwarded
-    // the raw identifier and let the server's 400 come back.
-    expect(accountNs.companies.employees).toHaveBeenCalledWith("t-systems", {});
+    expect(accountNs.companies.employees).not.toHaveBeenCalled();
   });
 });
 
@@ -441,6 +500,18 @@ describe("company posts command", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     const items = result["items"] as Array<Record<string, unknown>>;
     expect(items[0]?.["text"]).toBe("We are hiring!");
+  });
+
+  it("company posts <slug> resolves the slug to the numeric id via companies.get, then lists (D4b)", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyPosts } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyPosts(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.posts).toHaveBeenCalledWith("112013061", {});
   });
 });
 
@@ -488,6 +559,18 @@ describe("company jobs command", () => {
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result["items"]).toEqual([]);
     expect(result["paging"]).toEqual({ total_count: 0 });
+  });
+
+  it("company jobs <slug> resolves the slug to the numeric id via companies.get, then lists (D4b)", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyJobs } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyJobs(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.jobs).toHaveBeenCalledWith("112013061", {});
   });
 });
 

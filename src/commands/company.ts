@@ -10,11 +10,13 @@
  * All four are read commands: --preview is a usage error (exit 2).
  *
  * Retrieve keeps its broader identifier contract (URL, slug, or numeric id —
- * `resolveIdentifier` handles company URLs). The three sub-resource commands
- * require the company's NUMERIC provider_id (the `id` field the retrieve
- * response returns) — a handle or URN is rejected server-side (400
- * INVALID_REQUEST) before any upstream call; the CLI does not duplicate that
- * validation client-side, it just surfaces the resulting CurviateError.
+ * `resolveIdentifier` handles company URLs). The three sub-resource endpoints
+ * require the company's NUMERIC provider_id, but the CLI accepts the same
+ * broad identifier as the bare retrieve: a URL/slug is normalized then resolved
+ * to the numeric id via `companies.get` (the `id` field the retrieve returns)
+ * before the sub-resource call, so `company employees <slug>` works the same as
+ * `company <slug>`. A numeric id passes straight through with no extra call; a
+ * genuinely unresolvable identifier surfaces `companies.get`'s CurviateError.
  *
  * citty 0.1.6 cannot express a node that mixes a bare positional (`company
  * <id>`) with `subCommands` — see src/dispatch.ts for the pre-router that
@@ -89,6 +91,26 @@ function resolveOutputOpts(flags: CompanyFlags) {
   };
 }
 
+/**
+ * Resolve a company identifier to the numeric provider_id the sub-resource
+ * endpoints (employees/posts/jobs) require. A bare numeric id passes through
+ * with no extra call; a URL/slug/URN is normalized then resolved via
+ * `companies.get` — mirroring how the bare `company <slug>` retrieve
+ * auto-resolves, so `company employees acme` works the same as `company acme`.
+ * A genuinely unresolvable identifier surfaces `companies.get`'s own
+ * CurviateError (404 → exit 4, 400 → exit 2) to the caller, which routes it
+ * through `handleSdkError`. Must be called inside the handler's try block.
+ */
+async function resolveCompanyId(
+  ns: ReturnType<Curviate["account"]>,
+  raw: string,
+): Promise<string> {
+  const normalized = resolveIdentifier(raw);
+  if (/^\d+$/.test(normalized)) return normalized;
+  const company = await ns.companies.get(normalized);
+  return String(company.id);
+}
+
 async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
   const { CurviateError } = await import("@curviate/sdk");
   if (err instanceof CurviateError) {
@@ -143,8 +165,8 @@ export async function runCompanyGet(
 /**
  * Run `company employees <id> [--keywords] [--location] [--limit] [--cursor] [--all]`.
  * A facade over people search with the company filter applied.
- * `<id>` must be the company's numeric provider_id (not validated
- * client-side — the server 400s a non-numeric value before any upstream call).
+ * `<id>` accepts a URL/slug/numeric id — a URL/slug is resolved to the
+ * numeric provider_id via companies.get before the sub-resource call.
  */
 export async function runCompanyEmployees(
   client: Curviate,
@@ -154,7 +176,6 @@ export async function runCompanyEmployees(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
-  const identifier = flags.id ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -165,6 +186,7 @@ export async function runCompanyEmployees(
   if (flags.location) params["location"] = flags.location;
 
   try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
     if (flags.all) {
       const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
       const fn = (p: Record<string, unknown>) =>
@@ -197,7 +219,6 @@ export async function runCompanyPosts(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
-  const identifier = flags.id ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -206,6 +227,7 @@ export async function runCompanyPosts(
   if (flags.cursor) params["cursor"] = flags.cursor;
 
   try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
     if (flags.all) {
       const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
       const fn = (p: Record<string, unknown>) =>
@@ -238,7 +260,6 @@ export async function runCompanyJobs(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
-  const identifier = flags.id ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -248,6 +269,7 @@ export async function runCompanyJobs(
   if (flags.keywords) params["keywords"] = flags.keywords;
 
   try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
     if (flags.all) {
       const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
       const fn = (p: Record<string, unknown>) =>
@@ -275,7 +297,7 @@ const companyEmployeesCommand = defineCommand({
   meta: { name: "employees", description: "List people who currently work at the company." },
   args: {
     ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "The company's numeric provider_id (the id field of `company <id>`)." },
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
     keywords: { type: "string", description: "Free-text keyword filter across employee profile fields." },
     location: { type: "string", description: "Opaque location id from `search parameters --type LOCATION`." },
   },
@@ -302,7 +324,7 @@ const companyPostsCommand = defineCommand({
   meta: { name: "posts", description: "List the company's posts." },
   args: {
     ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "The company's numeric provider_id (the id field of `company <id>`)." },
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
   },
   async run({ args }) {
     const flags = args as CompanyFlags;
@@ -327,7 +349,7 @@ const companyJobsCommand = defineCommand({
   meta: { name: "jobs", description: "List the company's open job postings." },
   args: {
     ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "The company's numeric provider_id (the id field of `company <id>`)." },
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
     keywords: { type: "string", description: "Free-text keyword filter across job postings." },
   },
   async run({ args }) {
