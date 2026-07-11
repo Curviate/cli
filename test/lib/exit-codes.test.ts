@@ -5,6 +5,16 @@ import { EXIT_CODE_MAP, getExitCode } from "../../src/lib/exit-codes.js";
 // The complete set of ErrorCode values — copied from the SDK's type definition.
 // This list must exactly match the SDK's ErrorCode union. If the SDK adds a
 // new code and this list is not updated, the exhaustiveness test below fails.
+//
+// Deliberately hand-copied, not derived: the SDK's internal `ERROR_CODES`
+// runtime array (dist/index.js) backs `KNOWN_ERROR_CODES` but is NOT part of
+// the package's public export surface — only the `ErrorCode` *type* is
+// exported (dist/index.d.ts `export { ... type ErrorCode ... }`), and a type
+// has no runtime representation to iterate. Re-checked on the 0.15.0 tarball
+// refresh (sha256 b1671559…): `Object.keys(await import("@curviate/sdk"))` is
+// `[Curviate, CurviateError, WebhookSignatureError, constructEvent,
+// isCurviateError]` — no `ERROR_CODES`. If a future SDK release adds it to
+// the export map, this list can switch to importing it directly.
 const ALL_ERROR_CODES: ErrorCode[] = [
   "UNAUTHORIZED",
   "INVALID_REQUEST",
@@ -20,6 +30,7 @@ const ALL_ERROR_CODES: ErrorCode[] = [
   "RATE_LIMIT_ACCOUNT",
   "RATE_LIMIT_TENANT",
   "PLATFORM_RATE_LIMIT",
+  "RATE_LIMITED",
   "PLATFORM_ERROR",
   "PLATFORM_NOT_IMPLEMENTED",
   "LINKEDIN_OPERATION_NOT_SUPPORTED",
@@ -36,6 +47,7 @@ const ALL_ERROR_CODES: ErrorCode[] = [
   "LINKEDIN_SERVICE_UNAVAILABLE",
   "MESSAGE_WINDOW_EXPIRED",
   "RECIPIENT_UNREACHABLE",
+  "CONNECTION_REQUEST_CONFLICT",
   "PAYMENT_REQUIRED",
   "PAYMENT_FAILED",
   "SUBSCRIPTION_BUSY",
@@ -80,12 +92,14 @@ describe("lib/exit-codes — spot checks (per spec)", () => {
     ["LINKEDIN_FEATURE_NOT_SUBSCRIBED", 5],
     ["RATE_LIMIT_ACCOUNT", 6],
     ["LINKEDIN_RATE_LIMITED", 6],
+    ["RATE_LIMITED", 6],
     ["PLATFORM_ERROR", 7],
     ["PLATFORM_NOT_IMPLEMENTED", 1],
     ["ACCOUNT_RESTRICTED", 8],
     ["RESOURCE_ACCESS_RESTRICTED", 8],
     ["ACCOUNT_ALREADY_LINKED", 8],
     ["LINKEDIN_OPERATION_NOT_SUPPORTED", 8],
+    ["CONNECTION_REQUEST_CONFLICT", 8],
     ["CHECKPOINT_EXPIRED", 9],
     ["MESSAGE_WINDOW_EXPIRED", 10],
     ["RECIPIENT_UNREACHABLE", 10],

@@ -40,7 +40,7 @@ importers:
 packages:
 
   '@curviate/sdk@file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz':
-    resolution: {integrity: sha512-IZnW6qoqRXD3Ik8pp/kjryY7YOewt+8klemC8uCcfv76AI9UFe9Gl6xb1plhvs+y+4m4GBvtASOXvT9LofR/Rg==, tarball: file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz}
+    resolution: {integrity: sha512-6LarsQ3ivLUeW7/00WeVATsOY49b/VAhfphGn9CwCyagGSzELqsvdwFR1UgSJnmmeo2dobiUlEbBp0PvHkcckg==, tarball: file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz}
     version: 0.15.0
     engines: {node: '>=18'}
 

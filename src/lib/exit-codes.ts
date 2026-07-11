@@ -54,6 +54,19 @@ import type { ErrorCode } from "@curviate/sdk";
  * listing a non-self user's following list) — not the acting account's own
  * restricted standing, but the same "this account can't do that against
  * LinkedIn" shape as `RESOURCE_ACCESS_RESTRICTED`; not retryable.
+ *
+ * Note: `CONNECTION_REQUEST_CONFLICT` → 8 (account / connection state). The
+ * documented contract for "already invited or already connected" — a
+ * `connect` retry against a pair that's already mid-flow or already linked.
+ * Grouped with `ACCOUNT_ALREADY_LINKED` / `CONNECTION_IN_PROGRESS` (same
+ * "this pair is already in that state" shape); not retryable by resending,
+ * the caller should check current status instead.
+ *
+ * Note: `RATE_LIMITED` → 6 (rate-limited), alongside `RATE_LIMIT_ACCOUNT`,
+ * `RATE_LIMIT_TENANT`, `PLATFORM_RATE_LIMIT`, and `LINKEDIN_RATE_LIMITED`.
+ * A general/unscoped rate-limit signal distinct from the account-, tenant-,
+ * and platform-scoped variants above, but the same "back off and retry"
+ * contract — same exit bucket.
  */
 export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   // Make the shape explicit so TypeScript catches literal errors in the values
@@ -83,6 +96,7 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   RATE_LIMIT_TENANT: 6,
   PLATFORM_RATE_LIMIT: 6,
   LINKEDIN_RATE_LIMITED: 6,
+  RATE_LIMITED: 6,
 
   // Transient platform (7)
   PLATFORM_ERROR: 7,
@@ -96,6 +110,7 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   CONNECTION_IN_PROGRESS: 8,
   ACCOUNT_ALREADY_LINKED: 8,
   LINKEDIN_OPERATION_NOT_SUPPORTED: 8,
+  CONNECTION_REQUEST_CONFLICT: 8,
 
   // Checkpoint flow (9)
   CHECKPOINT_NOT_FOUND: 9,

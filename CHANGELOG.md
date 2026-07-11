@@ -93,6 +93,7 @@ Account:
 Exit-code mapping:
 
 - **`ACCOUNT_ALREADY_LINKED`** and **`LINKEDIN_OPERATION_NOT_SUPPORTED`** are now present in `EXIT_CODE_MAP` (exit `8`, account / connection state — grouped with `ACCOUNT_RESTRICTED`/`RESOURCE_ACCESS_RESTRICTED`); previously `ACCOUNT_ALREADY_LINKED` was already a valid SDK `ErrorCode` but had no exit-code entry, and `LINKEDIN_OPERATION_NOT_SUPPORTED` is a new SDK code (a permanent LinkedIn platform limitation for the attempted operation, e.g. listing a non-self user's following list). Both were silently falling through to the default exit `1`; the exhaustiveness test now covers them.
+- **`CONNECTION_REQUEST_CONFLICT`** (exit `8`, account / connection state — the documented "already invited or already connected" contract on a `connect` retry) and **`RATE_LIMITED`** (exit `6`, rate-limited — a general/unscoped rate-limit signal alongside `RATE_LIMIT_ACCOUNT`/`RATE_LIMIT_TENANT`/`PLATFORM_RATE_LIMIT`/`LINKEDIN_RATE_LIMITED`) are new SDK error codes, both now present in `EXIT_CODE_MAP`. Picked up via the refreshed `@curviate/sdk` 0.15.0 tarball dependency (pnpm-lock.yaml integrity hash only).
 
 ### Fixed
 
