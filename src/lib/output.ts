@@ -104,6 +104,51 @@ function applyProjection(
 }
 
 /**
+ * The single object a `--fields` projection is applied against (for key
+ * discovery), or null when there is no concrete object to inspect (empty list,
+ * primitive, or an empty array). Mirrors `applyProjection`'s target selection:
+ * a bare array → its first element; an `{ items: [...] }` envelope → the first
+ * item; a single object → itself.
+ */
+function firstProjectableItem(data: unknown): Record<string, unknown> | null {
+  const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  if (Array.isArray(data)) {
+    return data.length > 0 && isPlainObject(data[0]) ? data[0] : null;
+  }
+  if (isPlainObject(data)) {
+    const items = data["items"];
+    if (Array.isArray(items)) {
+      return items.length > 0 && isPlainObject(items[0]) ? items[0] : null;
+    }
+    return data;
+  }
+  return null;
+}
+
+/**
+ * Which requested `--fields` match nothing on the response, plus the keys that
+ * ARE available. A field is "unknown" when its top-level path segment is absent
+ * from the first projectable item. Returns null when there is nothing to check
+ * (no concrete item) or every field matches — i.e. no warning is warranted.
+ */
+export function detectUnknownFields(
+  data: unknown,
+  fields: string[],
+): { unknown: string[]; available: string[] } | null {
+  if (fields.length === 0) return null;
+  const first = firstProjectableItem(data);
+  if (first === null) return null;
+  const available = Object.keys(first);
+  const unknown = fields.filter((f) => {
+    const topKey = f.split(".")[0]!;
+    return !Object.prototype.hasOwnProperty.call(first, topKey);
+  });
+  return unknown.length > 0 ? { unknown, available } : null;
+}
+
+/**
  * Render a successful command response to the output streams.
  *
  * JSON mode: prints `JSON.stringify(data)` (verbatim SDK response) to stdout.
@@ -129,6 +174,19 @@ export function renderSuccess(
 
   // Apply slim projection first (before --fields), unless --verbose
   const slimmed = (!opts.verbose && opts.slim) ? opts.slim(data) : data;
+
+  // Warn (diagnostics channel) when a requested field matches nothing on the
+  // response the projection actually runs over (the slim output, if any).
+  // Output is unaffected — the known fields still project; this only saves an
+  // agent from silently receiving {} and guessing why.
+  const unknownFields = detectUnknownFields(slimmed, fields);
+  if (unknownFields) {
+    out.stderr.write(
+      `warning: --fields not present on the response: ${unknownFields.unknown.join(", ")}. ` +
+        `Available keys: ${unknownFields.available.join(", ")}.\n`,
+    );
+  }
+
   const projected = applyProjection(slimmed, fields);
 
   if (json) {

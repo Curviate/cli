@@ -97,6 +97,95 @@ describe("lib/output — renderSuccess (JSON mode)", () => {
   });
 });
 
+describe("lib/output — renderSuccess --fields unknown-field warning", () => {
+  let stdoutLines: string[];
+  let stderrLines: string[];
+
+  beforeEach(() => {
+    stdoutLines = [];
+    stderrLines = [];
+  });
+
+  const mockOut = {
+    stdout: { write: (s: string) => { stdoutLines.push(s); } },
+    stderr: { write: (s: string) => { stderrLines.push(s); } },
+  };
+
+  it("warns (stderr) when EVERY requested field is unknown on a single object, naming them + the available keys", () => {
+    // The observed live case: relations item keys are member_id/first_name,
+    // but the agent asked for id,full_name.
+    const data = { member_id: "ACo1", first_name: "Ada" };
+    renderSuccess(data, { json: true, isTTY: false, fields: "id,full_name" }, mockOut as never);
+    const stderr = stderrLines.join("");
+    expect(stderr).toMatch(/fields/i);
+    expect(stderr).toContain("id");
+    expect(stderr).toContain("full_name");
+    // Available keys are listed to guide the next attempt.
+    expect(stderr).toContain("member_id");
+    expect(stderr).toContain("first_name");
+    // stdout is unaffected: projection still runs (nothing matched → {}).
+    expect(JSON.parse(stdoutLines.join(""))).toEqual({});
+  });
+
+  it("checks the FIRST item of an { items: [...] } envelope", () => {
+    const data = { items: [{ member_id: "ACo1", first_name: "Ada" }], cursor: null };
+    renderSuccess(data, { json: true, isTTY: false, fields: "id" }, mockOut as never);
+    const stderr = stderrLines.join("");
+    expect(stderr).toContain("id");
+    expect(stderr).toContain("member_id");
+  });
+
+  it("checks the first element of a bare array response", () => {
+    const data = [{ member_id: "ACo1" }, { member_id: "ACo2" }];
+    renderSuccess(data, { json: true, isTTY: false, fields: "bogus" }, mockOut as never);
+    expect(stderrLines.join("")).toContain("bogus");
+  });
+
+  it("warns about ONLY the unknown subset when some fields match", () => {
+    const data = { member_id: "ACo1", first_name: "Ada" };
+    renderSuccess(data, { json: true, isTTY: false, fields: "member_id,bogus" }, mockOut as never);
+    const stderr = stderrLines.join("");
+    expect(stderr).toContain("bogus");
+    // The matched field must NOT be reported as unknown.
+    expect(stderr).not.toMatch(/unknown[^\n]*member_id/i);
+    // stdout still projects the known field.
+    expect(JSON.parse(stdoutLines.join(""))).toEqual({ member_id: "ACo1" });
+  });
+
+  it("does NOT warn when every requested field matches", () => {
+    const data = { id: "p_1", name: "Alice", extra: 1 };
+    renderSuccess(data, { json: true, isTTY: false, fields: "id,name" }, mockOut as never);
+    expect(stderrLines.join("")).toBe("");
+  });
+
+  it("a dot-path whose TOP-LEVEL key exists is NOT flagged", () => {
+    const data = { id: "p_1", profile: { headline: "Eng" } };
+    renderSuccess(data, { json: true, isTTY: false, fields: "profile.headline" }, mockOut as never);
+    expect(stderrLines.join("")).toBe("");
+  });
+
+  it("does NOT warn on an empty list (no first item to compare against)", () => {
+    const data = { items: [], cursor: null };
+    renderSuccess(data, { json: true, isTTY: false, fields: "id" }, mockOut as never);
+    expect(stderrLines.join("")).toBe("");
+  });
+
+  it("does NOT warn when no --fields is requested", () => {
+    const data = { member_id: "ACo1" };
+    renderSuccess(data, { json: true, isTTY: false, fields: undefined }, mockOut as never);
+    expect(stderrLines.join("")).toBe("");
+  });
+
+  it("the warning is checked against the SLIM projection when a slimmer is applied (not the raw response)", () => {
+    // slim exposes member_id; the raw (pre-slim) had a nested user.id. A field
+    // that exists only pre-slim is correctly flagged as unknown on the output.
+    const raw = { user: { id: "ACo1" }, member_id: "ACo1" };
+    const slim = (d: unknown) => ({ member_id: (d as { member_id: string }).member_id });
+    renderSuccess(raw, { json: true, isTTY: false, fields: "user.id", slim }, mockOut as never);
+    expect(stderrLines.join("")).toContain("user.id");
+  });
+});
+
 describe("lib/output — renderError", () => {
   let stdoutLines: string[];
   let stderrLines: string[];
