@@ -504,6 +504,25 @@ describe("search parameters — GET, not paginated", () => {
     );
   });
 
+  it("search parameters — missing --keywords exits 2 before any SDK call (v2: keywords always required)", async () => {
+    const { runSearchParameters } = await import("../../src/commands/search.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => { throw new Error(`process.exit(${code})`); });
+    try {
+      await runSearchParameters(client as never, {
+        type: "EMPLOYMENT_TYPE",
+        account: "acc_1",
+      } as SearchArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.search.getParameters).not.toHaveBeenCalled();
+  });
+
   it("search parameters --preview → usage error exit 2", async () => {
     const { runSearchParameters } = await import("../../src/commands/search.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };

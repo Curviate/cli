@@ -6,7 +6,7 @@
  *   search companies [filters...]             — search companies (POST body)
  *   search posts [filters...]                 — search posts (POST body)
  *   search jobs [filters...]                  — search jobs (POST body)
- *   search parameters --type <t> [--keywords] — resolve filter IDs (GET)
+ *   search parameters --type <t> --keywords <k> — resolve filter IDs (GET)
  *
  * SDK reality: people/companies/posts/jobs are HTTP POST; cursor+limit go on
  * the query, not the body (the SDK splits them out). The CLI passes cursor+limit
@@ -40,7 +40,10 @@ import {
   slimSearchPosts,
   slimSearchPostsItem,
 } from "../lib/slim.js";
-import type { Curviate, CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError, paths } from "@curviate/sdk";
+
+/** `GET /v1/{account_id}/search/parameters` query — `type`+`keywords` both required in v2. */
+type SearchParametersQuery = paths["/v1/{account_id}/search/parameters"]["get"]["parameters"]["query"];
 
 type SearchFlags = {
   keywords?: string;
@@ -568,8 +571,11 @@ export async function runSearchJobs(
 }
 
 /**
- * Run `search parameters --type <t> [--keywords <k>]`.
+ * Run `search parameters --type <t> --keywords <k>`.
  * GET — not paginated; rejects --all (exit 2).
+ * v2: keywords is required for every type, including EMPLOYMENT_TYPE
+ * (the pre-v2 API allowed omitting it there) — now an actionable exit 2
+ * instead of a server-side 400.
  */
 export async function runSearchParameters(
   client: Curviate,
@@ -579,14 +585,27 @@ export async function runSearchParameters(
   rejectPreviewOnRead(flags.preview, out);
   rejectAllOnNonPaginated(flags.all, out);
 
+  if (!flags.type) {
+    out.stderr.write("error: --type is required.\n");
+    process.exit(2);
+  }
+  if (!flags.keywords) {
+    out.stderr.write("error: --keywords is required (v2: required for every --type).\n");
+    process.exit(2);
+  }
+
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
-  const query: Record<string, unknown> = {};
-  if (flags.type) query["type"] = flags.type;
-  if (flags.keywords) query["keywords"] = flags.keywords;
-  if (flags.limit) query["limit"] = parseInt(flags.limit, 10);
+  // `type` is a free-form CLI string flag validated against the served enum
+  // server-side — a narrow cast here is the pragmatic alternative to
+  // hand-duplicating the enum union client-side (FR-001 body-typing rule).
+  const query: SearchParametersQuery = {
+    type: flags.type as SearchParametersQuery["type"],
+    keywords: flags.keywords,
+  };
+  if (flags.limit) query.limit = parseInt(flags.limit, 10);
 
   try {
     const result = await ns.search.getParameters(query);
@@ -782,7 +801,7 @@ const searchParametersCommand = defineCommand({
         "Parameter type: LOCATION, PEOPLE, CONNECTIONS, COMPANY, SCHOOL, INDUSTRY, SERVICE, JOB_FUNCTION, JOB_TITLE, EMPLOYMENT_TYPE, SKILL.",
       required: true,
     },
-    keywords: { type: "string", description: "Human term to resolve (not required for EMPLOYMENT_TYPE)." },
+    keywords: { type: "string", description: "Human term to resolve (required for every --type, incl. EMPLOYMENT_TYPE).", required: true },
   },
   async run({ args }) {
     const flags = args as SearchFlags;
@@ -819,7 +838,7 @@ export const searchCommand = defineCommand({
       "  companies [--keywords <k>]\n" +
       "  posts [--keywords <k>]\n" +
       "  jobs [--keywords <k>]\n" +
-      "  parameters --type <t> [--keywords <k>]\n",
+      "  parameters --type <t> --keywords <k>\n",
     );
   },
 });
