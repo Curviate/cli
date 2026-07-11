@@ -22,7 +22,8 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS, WRITE_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveTextOrStdin } from "../lib/stdin.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -42,6 +43,7 @@ const VALID_REACTIONS = new Set(["like", "celebrate", "support", "love", "insigh
 
 type PostFlags = {
   postId?: string;
+  userId?: string;
   text?: string;
   reaction?: string;
   "reply-to"?: string;
@@ -468,6 +470,151 @@ export async function runPostReactions(
   }
 }
 
+/**
+ * Run `post delete <post_id>` — posts.delete (bodyless, 204).
+ * Write command — supports --preview. post_id passes verbatim.
+ */
+export async function runPostDelete(
+  client: Curviate,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "posts.delete", args: { post_id: postId }, body: {}, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.posts.delete(postId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post unreact <post_id> <reaction>` — posts.unreact.
+ * Write command — supports --preview. DELETE-with-body: the reaction value
+ * travels in the JSON body, not the path. post_id passes verbatim.
+ */
+export async function runPostUnreact(
+  client: Curviate,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const postId = flags.postId ?? "";
+  const reaction = flags.reaction ?? "";
+
+  if (!VALID_REACTIONS.has(reaction)) {
+    out.stderr.write(
+      `error: reaction must be one of: like, celebrate, support, love, insightful, funny. Got: "${reaction}"\n`,
+    );
+    process.exit(2);
+    return;
+  }
+
+  const body = {
+    reaction: reaction as "like" | "celebrate" | "support" | "love" | "insightful" | "funny",
+  };
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "posts.unreact", args: { post_id: postId }, body, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.posts.unreact(postId, body);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post user-posts <user_id> [--all] [--limit] [--cursor]` — posts.listUserPosts.
+ * Read command — rejects --preview. user_id passes through resolveIdentifier
+ * (URL/slug/provider id, or the "me" sentinel).
+ */
+export async function runPostUserPosts(
+  client: Curviate,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const userId = resolveIdentifier(flags.userId ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params = buildPaginationParams(flags);
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.posts.listUserPosts(userId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.posts.listUserPosts(userId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `post user-reactions <user_id> [--all] [--limit] [--cursor]` — posts.listUserReactions.
+ * Read command — rejects --preview. user_id passes through resolveIdentifier.
+ */
+export async function runPostUserReactions(
+  client: Curviate,
+  flags: PostFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const userId = resolveIdentifier(flags.userId ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params = buildPaginationParams(flags);
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) =>
+        ns.posts.listUserReactions(userId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.posts.listUserReactions(userId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -701,6 +848,72 @@ const postReactionsCommand = defineCommand({
   },
 });
 
+/** Shared config/client boilerplate for a subcommand's run(). */
+async function withClient(
+  flags: PostFlags,
+  fn: (client: Curviate, flags: PostFlags, out: OutputStreams) => Promise<void>,
+): Promise<void> {
+  const cfg = await resolveEffectiveConfig({
+    apiKey: flags["api-key"],
+    baseUrl: flags["base-url"],
+    timeout: flags.timeout,
+    account: flags.account,
+    profile: flags.profile,
+  });
+  if (!cfg.apiKey) {
+    process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+    process.exit(3);
+  }
+  const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+  const out = buildOutputStreams();
+  await fn(client, { ...flags, account: flags.account ?? cfg.account }, out);
+}
+
+const postDeleteCommand = defineCommand({
+  meta: { name: "delete", description: "Delete a post you own." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    postId: { type: "positional", description: "Post id, urn:li:activity:N, or full share URL." },
+  },
+  async run({ args }) {
+    await withClient(args as PostFlags, runPostDelete);
+  },
+});
+
+const postUnreactCommand = defineCommand({
+  meta: { name: "unreact", description: "Remove your reaction from a post." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    postId: { type: "positional", description: "Post id, urn:li:activity:N, or full share URL." },
+    reaction: { type: "positional", description: "Reaction to remove: like|celebrate|support|love|insightful|funny." },
+  },
+  async run({ args }) {
+    await withClient(args as PostFlags, runPostUnreact);
+  },
+});
+
+const postUserPostsCommand = defineCommand({
+  meta: { name: "user-posts", description: "List a member's own posts (accepts 'me')." },
+  args: {
+    ...GLOBAL_FLAGS,
+    userId: { type: "positional", description: "Member identifier (URL, slug, provider id, or 'me')." },
+  },
+  async run({ args }) {
+    await withClient(args as PostFlags, runPostUserPosts);
+  },
+});
+
+const postUserReactionsCommand = defineCommand({
+  meta: { name: "user-reactions", description: "List a member's own reactions (accepts 'me')." },
+  args: {
+    ...GLOBAL_FLAGS,
+    userId: { type: "positional", description: "Member identifier (URL, slug, provider id, or 'me')." },
+  },
+  async run({ args }) {
+    await withClient(args as PostFlags, runPostUserReactions);
+  },
+});
+
 export const postCommand = defineCommand({
   meta: { name: "post", description: "Create and manage LinkedIn posts." },
   subCommands: {
@@ -711,6 +924,10 @@ export const postCommand = defineCommand({
     comments: postCommentsCommand,
     react: postReactCommand,
     reactions: postReactionsCommand,
+    delete: postDeleteCommand,
+    unreact: postUnreactCommand,
+    "user-posts": postUserPostsCommand,
+    "user-reactions": postUserReactionsCommand,
   },
   async run() {
     process.stderr.write(
@@ -721,7 +938,11 @@ export const postCommand = defineCommand({
       "  comment <post_id> \"<text>\" [--attach <file>] [--reply-to <comment_id>]\n" +
       "  comments <post_id> [--reply-to <comment_id>]\n" +
       "  react <post_id> --reaction <r> [--as-organization <org_id>]\n" +
-      "  reactions <post_id>\n",
+      "  reactions <post_id>\n" +
+      "  delete <post_id>\n" +
+      "  unreact <post_id> <reaction>\n" +
+      "  user-posts <user_id>\n" +
+      "  user-reactions <user_id>\n",
     );
   },
 });
