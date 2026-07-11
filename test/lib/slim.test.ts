@@ -131,54 +131,93 @@ describe("synthesizeHeadquarters", () => {
 // ---------------------------------------------------------------------------
 
 describe("slimProfileMe", () => {
+  // Real v2 UserProfile shape (`GET /v1/{account_id}/users/{user_id}`, per
+  // the SDK's generated types) — `profile me` and `profile <id>` are backed
+  // by the IDENTICAL response (userId "me" vs. a target member). There is no
+  // top-level `provider_id` (the real identifier is `id`), no top-level
+  // `is_premium`/`network_distance` (both nested under `specifics`), no
+  // plural-vs-singular `email` (the real field is `emails: string[]`), and
+  // no `occupation`/`organizations` field anywhere on this resource.
   const fullProfile = {
-    provider_id: "prov_123",
+    object: "user_profile",
+    id: "ACoAACyJnqkBprov123",
+    type: "individual",
+    display_name: "John Doe",
     first_name: "John",
     last_name: "Doe",
     public_identifier: "johndoe",
+    profile_url: "https://linkedin.com/in/johndoe",
+    public_picture_url: "https://media.licdn.com/john.jpg",
+    description: "About me",
     location: "Berlin, Germany",
-    email: "john@example.com",
-    occupation: "Engineer",
-    is_premium: true,
-    organizations: [
-      {
-        id: "org_1",
-        mailbox_id: "mb_1",
-        name: "Acme Corp",
-        logo_url: "https://logo.example.com",
-        extra_field: "hidden",
-      },
-    ],
-    entity_urn: "urn:li:member:123",
-    object_urn: "urn:li:fs_profile:ACoAAA",
-    work_experience: [{ position: "Engineer", company: "Acme", end: null }],
-    education: [{ school: "MIT" }],
-    viewer_permissions: { can_send_inmail: true },
-    throttled_sections: ["experience"],
-    profile_picture_url: "https://example.com/photo.jpg",
-    is_open_profile: false,
+    created_at: "2020-01-01T00:00:00.000Z",
+    emails: ["john@example.com", "john.doe@work.com"],
+    phone_numbers: ["+49123456789"],
+    is_blocked: false,
+    is_following: true,
+    followers_count: 42,
+    relations_count: 300,
+    specifics: {
+      network_distance: "SELF",
+      member_id: "member_1",
+      can_send_inmail: false,
+      is_open_profile: false,
+      is_premium: true,
+      is_influencer: false,
+      experience: [{ position: "Engineer", company: "Acme", end: null }],
+      education: [{ school: "MIT" }],
+      throttled_sections: ["experience"],
+    },
   };
 
-  it("projects exactly the 10 slim fields", () => {
+  it("projects exactly the 8 slim fields", () => {
     const result = slimProfileMe(fullProfile);
-    expect(Object.keys(result)).toHaveLength(10);
+    expect(Object.keys(result)).toHaveLength(8);
     expect(Object.keys(result).sort()).toEqual(
       [
-        "email",
+        "current_position",
+        "emails",
         "first_name",
         "is_premium",
         "last_name",
         "location",
-        "occupation",
-        "organizations",
         "provider_id",
         "public_identifier",
-        "current_position",
       ].sort(),
     );
   });
 
-  it("current_position synthesized from work_experience[0] (parity with profile <id>)", () => {
+  it("provider_id sourced from the real id field (there is no top-level provider_id on the wire)", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["provider_id"]).toBe("ACoAACyJnqkBprov123");
+  });
+
+  it("emails is the real plural array field (v1's singular email always projected null)", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["emails"]).toEqual(["john@example.com", "john.doe@work.com"]);
+    expect(result).not.toHaveProperty("email");
+  });
+
+  it("emails defaults to an empty array when absent, never null", () => {
+    const withoutEmails = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "emails"),
+    );
+    expect(slimProfileMe(withoutEmails)["emails"]).toEqual([]);
+  });
+
+  it("is_premium sourced from specifics.is_premium (nested — no top-level is_premium on the wire)", () => {
+    const result = slimProfileMe(fullProfile);
+    expect(result["is_premium"]).toBe(true);
+  });
+
+  it("is_premium null when specifics is absent", () => {
+    const withoutSpecifics = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "specifics"),
+    );
+    expect(slimProfileMe(withoutSpecifics)["is_premium"]).toBeNull();
+  });
+
+  it("current_position synthesized from specifics.experience[0] (parity with profile <id>)", () => {
     const result = slimProfileMe(fullProfile);
     expect(result["current_position"]).toEqual({
       title: "Engineer",
@@ -188,54 +227,52 @@ describe("slimProfileMe", () => {
     });
   });
 
-  it("current_position is null when work_experience absent (no --sections enrichment)", () => {
-    const noWE = Object.fromEntries(
-      Object.entries(fullProfile).filter(([k]) => k !== "work_experience"),
+  it("current_position is null when specifics.experience absent (no linkedin_sections enrichment)", () => {
+    const noExperience = {
+      ...fullProfile,
+      specifics: Object.fromEntries(
+        Object.entries(fullProfile.specifics).filter(([k]) => k !== "experience"),
+      ),
+    };
+    expect(slimProfileMe(noExperience)["current_position"]).toBeNull();
+  });
+
+  it("current_position is null when specifics itself is absent", () => {
+    const withoutSpecifics = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "specifics"),
     );
-    expect(slimProfileMe(noWE)["current_position"]).toBeNull();
+    expect(slimProfileMe(withoutSpecifics)["current_position"]).toBeNull();
   });
 
-  it("excludes heavy fields (entity_urn, object_urn, work_experience, education, is_open_profile, etc.)", () => {
+  it("occupation and organizations are entirely absent — no v2 source for either", () => {
     const result = slimProfileMe(fullProfile);
-    expect(result).not.toHaveProperty("entity_urn");
-    expect(result).not.toHaveProperty("object_urn");
-    expect(result).not.toHaveProperty("work_experience");
-    expect(result).not.toHaveProperty("education");
-    expect(result).not.toHaveProperty("viewer_permissions");
-    expect(result).not.toHaveProperty("throttled_sections");
-    expect(result).not.toHaveProperty("profile_picture_url");
-    expect(result).not.toHaveProperty("is_open_profile");
+    expect(result).not.toHaveProperty("occupation");
+    expect(result).not.toHaveProperty("organizations");
   });
 
-  it("organizations maps only id/mailbox_id/name sub-fields", () => {
+  it("excludes noise fields (object, type, display_name, profile_url, public_picture_url, description, created_at, phone_numbers, is_blocked, is_following, followers_count, relations_count, raw specifics)", () => {
     const result = slimProfileMe(fullProfile);
-    const orgs = result["organizations"] as Array<Record<string, unknown>>;
-    expect(orgs).toHaveLength(1);
-    const org = orgs[0]!;
-    expect(Object.keys(org).sort()).toEqual(["id", "mailbox_id", "name"].sort());
-    expect(org["id"]).toBe("org_1");
-    expect(org["mailbox_id"]).toBe("mb_1");
-    expect(org["name"]).toBe("Acme Corp");
-    expect(org["logo_url"]).toBeUndefined();
-    expect(org["extra_field"]).toBeUndefined();
+    expect(result).not.toHaveProperty("object");
+    expect(result).not.toHaveProperty("type");
+    expect(result).not.toHaveProperty("display_name");
+    expect(result).not.toHaveProperty("profile_url");
+    expect(result).not.toHaveProperty("public_picture_url");
+    expect(result).not.toHaveProperty("description");
+    expect(result).not.toHaveProperty("created_at");
+    expect(result).not.toHaveProperty("phone_numbers");
+    expect(result).not.toHaveProperty("is_blocked");
+    expect(result).not.toHaveProperty("is_following");
+    expect(result).not.toHaveProperty("followers_count");
+    expect(result).not.toHaveProperty("relations_count");
+    expect(result).not.toHaveProperty("specifics");
   });
 
-  it("returns empty organizations array when missing", () => {
-    const profileWithoutOrgs = Object.fromEntries(
-      Object.entries(fullProfile).filter(([k]) => k !== "organizations"),
-    );
-    const result = slimProfileMe(profileWithoutOrgs);
-    expect(result["organizations"]).toEqual([]);
-  });
-
-  it("location/email/occupation null when absent", () => {
+  it("location null when absent", () => {
     const sparse = Object.fromEntries(
-      Object.entries(fullProfile).filter(([k]) => !["location", "email", "occupation"].includes(k)),
+      Object.entries(fullProfile).filter(([k]) => k !== "location"),
     );
     const result = slimProfileMe(sparse);
     expect(result["location"]).toBeNull();
-    expect(result["email"]).toBeNull();
-    expect(result["occupation"]).toBeNull();
   });
 });
 
@@ -244,54 +281,86 @@ describe("slimProfileMe", () => {
 // ---------------------------------------------------------------------------
 
 describe("slimProfile", () => {
-  // Real substrate work_experience shape: {id, company, position, location, status,
-  // company_picture_url, skills, start, end}
+  // Same real v2 UserProfile shape as slimProfileMe (see that block) — this
+  // is `profile <id>`, backed by the identical `GET
+  // /v1/{account_id}/users/{user_id}` response with a target member's id
+  // instead of "me". `specifics.experience[0]` item shape (verified against
+  // a live probe): {id, company, position, location, status,
+  // company_picture_url, skills, start, end}.
   const fullProfile = {
-    provider_id: "prov_456",
+    object: "user_profile",
+    id: "ACoAACyJnqkBprov456",
+    type: "individual",
+    display_name: "Jane Smith",
     first_name: "Jane",
     last_name: "Smith",
-    headline: "Senior Engineer",
-    location: "London, UK",
-    occupation: "Engineer",
-    network_distance: "DISTANCE_1",
     public_identifier: "janesmith",
-    work_experience: [
-      {
-        id: "exp_1",
-        position: "Senior Engineer",
-        company: "TechCorp",
-        location: "London",
-        status: null,
-        company_picture_url: null,
-        skills: [],
-        start: { month: 1, year: 2020 },
-        end: null,
-      },
-    ],
-    education: [{ school: "Oxford" }],
-    viewer_permissions: { can_send_inmail: false },
-    throttled_sections: ["experience"],
+    profile_url: "https://linkedin.com/in/janesmith",
+    location: "London, UK",
+    followers_count: 900,
+    relations_count: 500,
+    specifics: {
+      network_distance: "FIRST_DEGREE",
+      is_premium: false,
+      is_open_to_work: false,
+      experience: [
+        {
+          id: "exp_1",
+          position: "Senior Engineer",
+          company: "TechCorp",
+          location: "London",
+          status: null,
+          company_picture_url: null,
+          skills: [],
+          start: { month: 1, year: 2020 },
+          end: null,
+        },
+      ],
+      education: [{ school: "Oxford" }],
+      throttled_sections: ["experience"],
+    },
   };
 
-  it("projects exactly the 9 slim fields", () => {
+  it("projects exactly the 7 slim fields", () => {
     const result = slimProfile(fullProfile);
-    expect(Object.keys(result)).toHaveLength(9);
+    expect(Object.keys(result)).toHaveLength(7);
     expect(Object.keys(result).sort()).toEqual(
       [
         "current_position",
         "first_name",
-        "headline",
         "last_name",
         "location",
         "network_distance",
-        "occupation",
         "provider_id",
         "public_identifier",
       ].sort(),
     );
   });
 
-  it("current_position synthesized from work_experience[0] with correct field mapping", () => {
+  it("provider_id sourced from the real id field (there is no top-level provider_id on the wire)", () => {
+    const result = slimProfile(fullProfile);
+    expect(result["provider_id"]).toBe("ACoAACyJnqkBprov456");
+  });
+
+  it("network_distance sourced from specifics.network_distance (nested — no top-level network_distance on the wire)", () => {
+    const result = slimProfile(fullProfile);
+    expect(result["network_distance"]).toBe("FIRST_DEGREE");
+  });
+
+  it("network_distance null when specifics is absent", () => {
+    const withoutSpecifics = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "specifics"),
+    );
+    expect(slimProfile(withoutSpecifics)["network_distance"]).toBeNull();
+  });
+
+  it("headline and occupation are entirely absent — no v2 source for either", () => {
+    const result = slimProfile(fullProfile);
+    expect(result).not.toHaveProperty("headline");
+    expect(result).not.toHaveProperty("occupation");
+  });
+
+  it("current_position synthesized from specifics.experience[0] with correct field mapping", () => {
     const result = slimProfile(fullProfile);
     expect(result["current_position"]).toEqual({
       title: "Senior Engineer",     // ← from position
@@ -311,33 +380,52 @@ describe("slimProfile", () => {
   it("is_current false when end is non-null", () => {
     const result = slimProfile({
       ...fullProfile,
-      work_experience: [
-        { id: "exp_2", position: "Intern", company: "OldCo", end: { year: 2019, month: 6 } },
-      ],
+      specifics: {
+        ...fullProfile.specifics,
+        experience: [
+          { id: "exp_2", position: "Intern", company: "OldCo", end: { year: 2019, month: 6 } },
+        ],
+      },
     });
     const pos = result["current_position"] as Record<string, unknown>;
     expect(pos["is_current"]).toBe(false);
   });
 
-  it("current_position is null when work_experience is empty", () => {
-    const result = slimProfile({ ...fullProfile, work_experience: [] });
+  it("current_position is null when specifics.experience is empty", () => {
+    const result = slimProfile({
+      ...fullProfile,
+      specifics: { ...fullProfile.specifics, experience: [] },
+    });
     expect(result["current_position"]).toBeNull();
   });
 
-  it("current_position is null when work_experience is absent", () => {
-    const withoutWE = Object.fromEntries(
-      Object.entries(fullProfile).filter(([k]) => k !== "work_experience"),
+  it("current_position is null when specifics.experience is absent", () => {
+    const noExperience = {
+      ...fullProfile,
+      specifics: Object.fromEntries(
+        Object.entries(fullProfile.specifics).filter(([k]) => k !== "experience"),
+      ),
+    };
+    const result = slimProfile(noExperience);
+    expect(result["current_position"]).toBeNull();
+  });
+
+  it("current_position is null when specifics itself is absent", () => {
+    const withoutSpecifics = Object.fromEntries(
+      Object.entries(fullProfile).filter(([k]) => k !== "specifics"),
     );
-    const result = slimProfile(withoutWE);
-    expect(result["current_position"]).toBeNull();
+    expect(slimProfile(withoutSpecifics)["current_position"]).toBeNull();
   });
 
-  it("excludes work_experience, education, viewer_permissions, throttled_sections", () => {
+  it("excludes specifics raw object, display_name, object, type, profile_url, followers_count, relations_count", () => {
     const result = slimProfile(fullProfile);
-    expect(result).not.toHaveProperty("work_experience");
-    expect(result).not.toHaveProperty("education");
-    expect(result).not.toHaveProperty("viewer_permissions");
-    expect(result).not.toHaveProperty("throttled_sections");
+    expect(result).not.toHaveProperty("specifics");
+    expect(result).not.toHaveProperty("display_name");
+    expect(result).not.toHaveProperty("object");
+    expect(result).not.toHaveProperty("type");
+    expect(result).not.toHaveProperty("profile_url");
+    expect(result).not.toHaveProperty("followers_count");
+    expect(result).not.toHaveProperty("relations_count");
   });
 });
 

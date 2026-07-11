@@ -12,7 +12,9 @@
  *   - Array projections that synthesize a scalar (`current_position`,
  *     `headquarters`) set the value to `null` when the source is empty or absent.
  *
- * Real substrate work_experience item shape:
+ * Real substrate `specifics.experience[]` item shape (v2 UserProfile — the
+ * array itself is nested under `specifics`, not a top-level `work_experience`
+ * field; see slimProfile/slimProfileMe):
  *   { id, company, position, location, status, company_picture_url, skills, start, end }
  * Mapping into CurrentPosition:
  *   title        ← position
@@ -33,7 +35,9 @@ export type CurrentPosition = {
 };
 
 /**
- * Synthesize a `current_position` scalar from the `work_experience` array.
+ * Synthesize a `current_position` scalar from an experience-entries array
+ * (the real wire's `specifics.experience` — callers extract that nested
+ * array before calling this; see slimProfile/slimProfileMe).
  *
  * Uses the first entry in the array (index 0).
  * Input item shape (real substrate): `{ id, company, position, end, ... }`
@@ -86,50 +90,79 @@ export function synthesizeHeadquarters(
 }
 
 // ---------------------------------------------------------------------------
+// shared: real v2 UserProfile `specifics` sub-object access
+// (`profile me` and `profile <id>` are both backed by the identical
+// `GET /v1/{account_id}/users/{user_id}` response — see slimProfileMe/
+// slimProfile below.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Narrow the real v2 UserProfile response's `specifics` sub-object — the
+ * home of `network_distance`, `is_premium`, and the `linkedin_sections`-gated
+ * arrays (`experience`, `education`, etc.). Returns null when absent/not an
+ * object (defensive — `specifics` is technically required on the real
+ * schema, but never trust the wire blindly).
+ */
+function getSpecifics(d: Record<string, unknown>): Record<string, unknown> | null {
+  return d["specifics"] !== null && d["specifics"] !== undefined && typeof d["specifics"] === "object"
+    ? (d["specifics"] as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Extract the `specifics.experience` array (present only when
+ * `linkedin_sections=linkedin_experience` was requested). There is no
+ * top-level `work_experience` field on the real wire — it lives nested here.
+ */
+function extractExperience(specifics: Record<string, unknown> | null): unknown[] {
+  return Array.isArray(specifics?.["experience"]) ? (specifics!["experience"] as unknown[]) : [];
+}
+
+// ---------------------------------------------------------------------------
 // profile me
 // ---------------------------------------------------------------------------
 
 /**
  * Slim-default projection for `profile me`.
  *
- * Exact fields returned (9):
+ * Backed by the same real v2 `GET /v1/{account_id}/users/{user_id}` response
+ * as `profile <id>` (`userId: "me"` for the caller's own account) — there is
+ * no separate "me" response shape.
+ *
+ * Exact fields returned (8):
  *   provider_id, first_name, last_name, public_identifier, location,
- *   email, occupation, is_premium,
- *   organizations (array of {id, mailbox_id, name})
+ *   emails (array), is_premium, current_position
+ *
+ * v1-drift fixes (verified against the SDK's generated types, the wire truth):
+ *   - `provider_id` ← `id` (the real wire has no `provider_id` key at all —
+ *     the profile's identifier is the top-level `id`).
+ *   - `email` (singular, always null) → `emails`, the real key (`string[]`).
+ *   - `is_premium` ← `specifics.is_premium` (nested — no top-level
+ *     `is_premium` on the real wire).
+ *   - `occupation`, `organizations`: REMOVED — no v2 source. The real
+ *     user-profile response has no occupation-summary field and no
+ *     administered-organizations field of any kind.
  */
 export function slimProfileMe(data: unknown): Record<string, unknown> {
   const d = (data !== null && data !== undefined && typeof data === "object"
     ? data
     : {}) as Record<string, unknown>;
 
-  const rawOrgs = Array.isArray(d["organizations"])
-    ? (d["organizations"] as Array<Record<string, unknown>>)
-    : [];
-
-  const organizations = rawOrgs.map((org) => ({
-    id: org["id"] ?? null,
-    mailbox_id: org["mailbox_id"] ?? null,
-    name: org["name"] ?? null,
-  }));
+  const specifics = getSpecifics(d);
 
   // current_position parity with `profile <id>` slim: synthesized from
-  // work_experience[0], present only when --sections experience triggers the
-  // server-side enrichment (null otherwise). Same helper, same contract.
-  const rawWE = Array.isArray(d["work_experience"])
-    ? (d["work_experience"] as unknown[])
-    : [];
-  const currentPosition = synthesizeCurrentPosition(rawWE);
+  // specifics.experience[0], present only when linkedin_sections triggers
+  // the enrichment (null otherwise). Same helper, same contract.
+  const currentPosition = synthesizeCurrentPosition(extractExperience(specifics));
 
   return {
-    provider_id: d["provider_id"] ?? null,
+    provider_id: d["id"] ?? null,
     first_name: d["first_name"] ?? null,
     last_name: d["last_name"] ?? null,
     public_identifier: d["public_identifier"] ?? null,
     location: d["location"] ?? null,
-    email: d["email"] ?? null,
-    occupation: d["occupation"] ?? null,
-    is_premium: d["is_premium"] ?? null,
-    organizations,
+    emails: Array.isArray(d["emails"]) ? d["emails"] : [],
+    is_premium: (specifics?.["is_premium"] as boolean | null | undefined) ?? null,
     current_position: currentPosition,
   };
 }
@@ -141,33 +174,38 @@ export function slimProfileMe(data: unknown): Record<string, unknown> {
 /**
  * Slim-default projection for `profile <id>`.
  *
- * Exact fields returned (9):
- *   provider_id, first_name, last_name, headline, location,
- *   occupation, network_distance, public_identifier, current_position
+ * Same real v2 `GET /v1/{account_id}/users/{user_id}` response as
+ * `profile me` (see slimProfileMe) — `user_id` addresses the target member
+ * instead of "me".
  *
- * `current_position` is synthesized from `work_experience[0]` via
+ * Exact fields returned (7):
+ *   provider_id, first_name, last_name, location, network_distance,
+ *   public_identifier, current_position
+ *
+ * v1-drift fixes (verified against the SDK's generated types, the wire truth):
+ *   - `provider_id` ← `id` (no top-level `provider_id` on the real wire).
+ *   - `network_distance` ← `specifics.network_distance` (nested — no
+ *     top-level `network_distance` on the real wire).
+ *   - `headline`, `occupation`: REMOVED — no v2 source (see slimProfileMe).
+ *
+ * `current_position` is synthesized from `specifics.experience[0]` via
  * `synthesizeCurrentPosition`. See that function for field mapping details.
- * Returns `null` when `work_experience` is empty or absent.
+ * Returns `null` when `specifics.experience` is empty or absent.
  */
 export function slimProfile(data: unknown): Record<string, unknown> {
   const d = (data !== null && data !== undefined && typeof data === "object"
     ? data
     : {}) as Record<string, unknown>;
 
-  const rawWE = Array.isArray(d["work_experience"])
-    ? (d["work_experience"] as unknown[])
-    : [];
-
-  const currentPosition = synthesizeCurrentPosition(rawWE);
+  const specifics = getSpecifics(d);
+  const currentPosition = synthesizeCurrentPosition(extractExperience(specifics));
 
   return {
-    provider_id: d["provider_id"] ?? null,
+    provider_id: d["id"] ?? null,
     first_name: d["first_name"] ?? null,
     last_name: d["last_name"] ?? null,
-    headline: d["headline"] ?? null,
     location: d["location"] ?? null,
-    occupation: d["occupation"] ?? null,
-    network_distance: d["network_distance"] ?? null,
+    network_distance: (specifics?.["network_distance"] as string | null | undefined) ?? null,
     public_identifier: d["public_identifier"] ?? null,
     current_position: currentPosition,
   };

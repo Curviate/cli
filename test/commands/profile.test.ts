@@ -646,21 +646,23 @@ describe("profile <id> — --sections passthrough", () => {
 // ---------------------------------------------------------------------------
 
 describe("profile me — slim mode (no --verbose)", () => {
+  // Real v2 UserProfile shape — provider_id sources from the top-level `id`,
+  // is_premium/experience live nested under `specifics`, emails is the real
+  // plural array. occupation/organizations have no v2 source at all.
   const richProfile = {
-    provider_id: "prov_123",
+    object: "user_profile",
+    id: "ACoAACyJnqkBprov123",
     first_name: "John",
     last_name: "Doe",
     public_identifier: "johndoe",
     location: "Berlin",
-    email: "john@example.com",
-    occupation: "Engineer",
-    is_premium: false,
-    organizations: [
-      { id: "org_1", mailbox_id: "mb_1", name: "Acme", logo_url: "https://logo.example.com" },
-    ],
+    emails: ["john@example.com"],
     entity_urn: "urn:li:member:123",
-    work_experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
-    education: [{ school: "MIT" }],
+    specifics: {
+      is_premium: false,
+      experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
+      education: [{ school: "MIT" }],
+    },
   };
 
   let accountNs: ReturnType<typeof makeAccountNs>;
@@ -676,7 +678,7 @@ describe("profile me — slim mode (no --verbose)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has exactly the 10 fields (incl. current_position), no heavy fields", async () => {
+  it("slim output has exactly the 8 fields (incl. current_position), no heavy fields", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -684,14 +686,19 @@ describe("profile me — slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(Object.keys(result)).toHaveLength(10);
+    expect(Object.keys(result)).toHaveLength(8);
+    expect(result["provider_id"]).toBe("ACoAACyJnqkBprov123");
+    expect(result["emails"]).toEqual(["john@example.com"]);
+    expect(result["is_premium"]).toBe(false);
     expect(result).toHaveProperty("current_position");
+    expect(result).not.toHaveProperty("occupation");
+    expect(result).not.toHaveProperty("organizations");
     expect(result).not.toHaveProperty("entity_urn");
-    expect(result).not.toHaveProperty("work_experience");
+    expect(result).not.toHaveProperty("specifics");
     expect(result).not.toHaveProperty("education");
   });
 
-  it("organizations only has id/mailbox_id/name per element", async () => {
+  it("current_position synthesized from specifics.experience[0]", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -699,20 +706,26 @@ describe("profile me — slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    const orgs = result["organizations"] as Array<Record<string, unknown>>;
-    expect(orgs[0]).toEqual({ id: "org_1", mailbox_id: "mb_1", name: "Acme" });
-    expect(orgs[0]!["logo_url"]).toBeUndefined();
+    expect(result["current_position"]).toEqual({
+      title: "Engineer",
+      company_name: "Acme",
+      company_id: null,
+      is_current: true,
+    });
   });
 });
 
 describe("profile me — --verbose mode", () => {
   const richProfile = {
-    provider_id: "prov_123",
+    object: "user_profile",
+    id: "ACoAACyJnqkBprov123",
     first_name: "John",
     last_name: "Doe",
     entity_urn: "urn:li:member:123",
-    work_experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
-    education: [{ school: "MIT" }],
+    specifics: {
+      experience: [{ id: "exp1", position: "Engineer", company: "Acme", end: null }],
+      education: [{ school: "MIT" }],
+    },
   };
 
   let accountNs: ReturnType<typeof makeAccountNs>;
@@ -728,7 +741,7 @@ describe("profile me — --verbose mode", () => {
     vi.restoreAllMocks();
   });
 
-  it("--verbose returns full SDK response (includes work_experience, entity_urn, etc.)", async () => {
+  it("--verbose returns full SDK response (includes specifics.experience, entity_urn, etc.)", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -741,8 +754,10 @@ describe("profile me — --verbose mode", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
     expect(result).toHaveProperty("entity_urn");
-    expect(result).toHaveProperty("work_experience");
-    expect(result).toHaveProperty("education");
+    expect(result).not.toHaveProperty("current_position");
+    const specifics = result["specifics"] as Record<string, unknown>;
+    expect(specifics).toHaveProperty("experience");
+    expect(specifics).toHaveProperty("education");
   });
 });
 
@@ -751,29 +766,33 @@ describe("profile me — --verbose mode", () => {
 // ---------------------------------------------------------------------------
 
 describe("profile <id> — slim mode (current_position synthesis)", () => {
+  // Real v2 UserProfile shape — provider_id sources from the top-level `id`,
+  // network_distance/experience live nested under `specifics`.
+  // headline/occupation have no v2 source at all (removed from slim output).
   const richProfile = {
-    provider_id: "prov_456",
+    object: "user_profile",
+    id: "ACoAACyJnqkBprov456",
     first_name: "Jane",
     last_name: "Smith",
-    headline: "Senior Engineer",
     location: "London, UK",
-    occupation: "Engineer",
-    network_distance: "DISTANCE_1",
     public_identifier: "janesmith",
-    work_experience: [
-      {
-        id: "exp_1",
-        position: "Senior Engineer",
-        company: "TechCorp",
-        location: "London",
-        status: null,
-        company_picture_url: null,
-        skills: [],
-        start: { month: 1, year: 2020 },
-        end: null,
-      },
-    ],
-    education: [{ school: "Oxford" }],
+    specifics: {
+      network_distance: "FIRST_DEGREE",
+      experience: [
+        {
+          id: "exp_1",
+          position: "Senior Engineer",
+          company: "TechCorp",
+          location: "London",
+          status: null,
+          company_picture_url: null,
+          skills: [],
+          start: { month: 1, year: 2020 },
+          end: null,
+        },
+      ],
+      education: [{ school: "Oxford" }],
+    },
     viewer_permissions: { can_send_inmail: false },
   };
 
@@ -790,7 +809,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has current_position synthesized from work_experience[0]", async () => {
+  it("slim output has provider_id/network_distance sourced correctly and current_position synthesized from specifics.experience[0]", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -802,6 +821,8 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["provider_id"]).toBe("ACoAACyJnqkBprov456");
+    expect(result["network_distance"]).toBe("FIRST_DEGREE");
     expect(result).toHaveProperty("current_position");
     expect(result["current_position"]).toEqual({
       title: "Senior Engineer",     // ← from position
@@ -809,15 +830,20 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
       company_id: null,             // ALWAYS null
       is_current: true,             // ← end == null
     });
-    expect(result).not.toHaveProperty("work_experience");
+    expect(result).not.toHaveProperty("headline");
+    expect(result).not.toHaveProperty("occupation");
+    expect(result).not.toHaveProperty("specifics");
     expect(result).not.toHaveProperty("education");
   });
 
-  it("current_position is null when work_experience is empty", async () => {
+  it("current_position is null when specifics.experience is empty", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (accountNs.users.get as Mock).mockResolvedValue({ ...richProfile, work_experience: [] });
+    (accountNs.users.get as Mock).mockResolvedValue({
+      ...richProfile,
+      specifics: { ...richProfile.specifics, experience: [] },
+    });
 
     await runProfileGet(
       client as never,
@@ -830,7 +856,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     expect(result["current_position"]).toBeNull();
   });
 
-  it("--verbose mode: work_experience present, no current_position synthesis", async () => {
+  it("--verbose mode: specifics.experience present, no current_position synthesis", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -842,7 +868,8 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result).toHaveProperty("work_experience");
+    const specifics = result["specifics"] as Record<string, unknown>;
+    expect(specifics).toHaveProperty("experience");
     expect(result).not.toHaveProperty("current_position");
   });
 });
