@@ -6,6 +6,63 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.15.1] - 2026-07-11
+
+A patch release of agent-experience (AX) and developer-experience (DX)
+improvements: clearer errors and help, a modest default pacing on `--all`
+streams, one back-compatible reaction-signature unification, and a
+`profile endorse` fix. No breaking changes.
+
+### Added
+
+- **Successor hints for removed/renamed commands.** Reaching for a command that
+  moved or was removed in 0.15.0 — `post list`, `post comment`/`comments`,
+  `connect respond`, `profile connections`, `account connect-link`/`reconnect-link`/`reconnect`,
+  `inbox sync`/`sync-chat`, `recruiter add-candidate`/`project-jobs`/`sync`,
+  `sales-nav sync`, `webhook state-diff`, `company followers` — now prints a
+  one-line "did you mean" pointer to the replacement instead of a bare
+  "unknown command". The exit code is unchanged (2).
+- **`--all` NDJSON-mode notice.** When `--all` streaming engages, a one-line
+  notice on stderr makes the format switch explicit (`--all` streams NDJSON —
+  one object per line — not the `{items, cursor}` envelope), so an agent
+  pattern-matching the plain-mode shape does not mis-parse the stream.
+- **`--page-delay <ms>` and default `--all` pacing.** `--all` now pauses a
+  modest default between page fetches, keeping a long stream under the platform
+  rate gate. `--page-delay <ms>` overrides it (pass `0` to disable).
+- **`job list --state ALL`.** A best-effort client-side union across every state
+  (DRAFT/OPEN/CLOSED/REVIEW/SUSPENDED): each state is queried, re-filtered
+  against its own state, then merged and de-duplicated by id. There is no
+  unified cursor — each state is walked independently and `--max-pages` applies
+  per state.
+- **`--fields` unknown-field warning.** Projecting a field that matches nothing
+  on the response now emits one stderr warning naming the unmatched fields and
+  listing the available keys, instead of silently returning `{}`. The output is
+  unchanged — the known fields still project.
+
+### Changed
+
+- **Reaction commands unified on the positional form.** `post react <post_id>
+  <reaction>` and `message react <chat_id> <message_id> <emoji>` now take the
+  reaction/emoji as a positional argument, matching `comment react`/`unreact`
+  and `post unreact`. The previous `--reaction` and `--emoji` flags still work as
+  deprecated aliases (no breaking removal). A missing value is now a usage error
+  (exit 2) rather than a silent empty reaction.
+- **Constraint discoverability in help.** `job create`/`job update` help now
+  states the 200-character minimum on `--description` explicitly, and
+  `job publish --budget-amount` notes it must be non-negative.
+- **List-lag notes.** `post user-posts`, `comment list`, `inbox messages`, and
+  `connect sent`/`received` help now note that a very recent create/delete may
+  take a few minutes to appear or clear (LinkedIn-side indexing), and that a
+  direct `get` reflects a change immediately.
+
+### Fixed
+
+- **`profile endorse <slug|url>`** now resolves the handle to the member's
+  provider id before endorsing (via a contact-safe profile read), matching
+  `profile follow`/`unfollow`. Previously a slug or URL 404'd because the
+  endorse endpoint accepts only the provider id; the provider-id form was
+  unaffected.
+
 ## [0.15.0] - 2026-07-11
 
 Full v2 API-surface parity — the coupled release with `@curviate/sdk` 0.15.0. A large
