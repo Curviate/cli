@@ -43,7 +43,7 @@ import {
   DEFAULT_FILTER_READERS,
   type FilterReaders,
 } from "../lib/search-filters.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,27 +95,6 @@ type SalesNavFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    salesNavigator: {
-      syncMessages: (params: Record<string, unknown>) => Promise<unknown>;
-      searchPeople: (body: Record<string, unknown>, params?: Record<string, unknown>) => Promise<unknown>;
-      searchCompanies: (body: Record<string, unknown>, params?: Record<string, unknown>) => Promise<unknown>;
-      getParameters: (params: Record<string, unknown>) => Promise<unknown>;
-      startChat: (body: Record<string, unknown>) => Promise<unknown>;
-      getProfile: (identifier: string, params?: Record<string, unknown>) => Promise<unknown>;
-      // v2 save-lead — BREAKING (2026-07-04): re-signed to a single input object.
-      saveLead: (input: Record<string, unknown>) => Promise<unknown>;
-      // v2 list surface
-      accountLists: (query?: Record<string, unknown>) => Promise<unknown>;
-      leadLists: (query?: Record<string, unknown>) => Promise<unknown>;
-      browseAccountList: (listId: string, body?: Record<string, unknown>, query?: Record<string, unknown>) => Promise<unknown>;
-      browseLeadList: (listId: string, body?: Record<string, unknown>, query?: Record<string, unknown>) => Promise<unknown>;
-      saveAccount: (input: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -177,7 +156,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * Read command — rejects --preview.
  */
 export async function runSalesNavSync(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -205,7 +184,7 @@ export async function runSalesNavSync(
  * Supports --all / --limit / --cursor pagination.
  */
 export async function runSalesNavSearchPeople(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -271,7 +250,7 @@ export async function runSalesNavSearchPeople(
  * Supports --all / --limit / --cursor pagination.
  */
 export async function runSalesNavSearchCompanies(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -333,7 +312,7 @@ export async function runSalesNavSearchCompanies(
  * Read command — rejects --preview.
  */
 export async function runSalesNavGetParameters(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -361,7 +340,7 @@ export async function runSalesNavGetParameters(
  * Write command — supports --preview. Multipart when files present.
  */
 export async function runSalesNavMessageNew(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -433,7 +412,7 @@ export async function runSalesNavMessageNew(
  * Read command — rejects --preview. Identifier resolved via resolveIdentifier.
  */
 export async function runSalesNavProfile(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -462,7 +441,7 @@ export async function runSalesNavProfile(
  * `--list-id` semantics do not exist in v2).
  */
 export async function runSalesNavSaveLead(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -503,7 +482,7 @@ export async function runSalesNavSaveLead(
  * Read command — rejects --preview. Lists the operator's saved-account lists.
  */
 export async function runSalesNavAccountLists(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -543,7 +522,7 @@ export async function runSalesNavAccountLists(
  * Read command — rejects --preview. Lists the operator's saved-lead lists.
  */
 export async function runSalesNavLeadLists(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -583,7 +562,7 @@ export async function runSalesNavLeadLists(
  * Read command (POST-with-body-filters) — rejects --preview.
  */
 export async function runSalesNavBrowseAccountList(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -629,7 +608,7 @@ export async function runSalesNavBrowseAccountList(
  * Read command (POST-with-body-filters) — rejects --preview.
  */
 export async function runSalesNavBrowseLeadList(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -675,7 +654,7 @@ export async function runSalesNavBrowseLeadList(
  * Write command — supports --preview. company_id passes verbatim.
  */
 export async function runSalesNavSaveAccount(
-  client: MinimalClient,
+  client: Curviate,
   flags: SalesNavFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -729,7 +708,7 @@ const salesNavSyncCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavSync(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -764,7 +743,7 @@ const salesNavMessageNewCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavMessageNew(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavMessageNew(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -806,7 +785,7 @@ const salesNavSearchPeopleCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavSearchPeople(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavSearchPeople(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -836,7 +815,7 @@ const salesNavSearchCompaniesCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavSearchCompanies(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavSearchCompanies(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -867,7 +846,7 @@ const salesNavSearchParametersCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavGetParameters(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavGetParameters(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -910,7 +889,7 @@ const salesNavProfileCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavProfile(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavProfile(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -937,7 +916,7 @@ const salesNavSaveLeadCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavSaveLead(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavSaveLead(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -963,7 +942,7 @@ const salesNavAccountListsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavAccountLists(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavAccountLists(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -985,7 +964,7 @@ const salesNavLeadListsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavLeadLists(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavLeadLists(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1013,7 +992,7 @@ const salesNavBrowseAccountListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavBrowseAccountList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavBrowseAccountList(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1041,7 +1020,7 @@ const salesNavBrowseLeadListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavBrowseLeadList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavBrowseLeadList(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1068,7 +1047,7 @@ const salesNavSaveAccountCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSalesNavSaveAccount(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSalesNavSaveAccount(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 

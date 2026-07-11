@@ -24,7 +24,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readFileSync } from "node:fs";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,19 +62,6 @@ type WebhookFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-// Minimal root-level client shape.
-type MinimalClient = {
-  webhooks: {
-    create: (body: Record<string, unknown>) => Promise<unknown>;
-    list: (params?: Record<string, unknown>) => Promise<unknown>;
-    listEvents: () => Promise<unknown>;
-    get: (id: string) => Promise<unknown>;
-    update: (id: string, body: Record<string, unknown>) => Promise<unknown>;
-    delete: (id: string) => Promise<unknown>;
-    getStateDiff: (accountId: string, params?: Record<string, unknown>) => Promise<unknown>;
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -131,7 +118,7 @@ async function handleError(err: unknown, outOpts: ReturnType<typeof resolveOutpu
  * --account-ids is comma-separated and maps to account_ids[].
  */
 export async function runWebhookCreate(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -185,7 +172,7 @@ export async function runWebhookCreate(
  * Run `webhook list [--all] [--limit] [--cursor]`.
  */
 export async function runWebhookList(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -224,7 +211,7 @@ export async function runWebhookList(
  * Run `webhook events`. Non-paginated read.
  */
 export async function runWebhookEvents(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -245,7 +232,7 @@ export async function runWebhookEvents(
  * Run `webhook get <id>`. Read command; no --preview (nothing to mutate).
  */
 export async function runWebhookGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -267,7 +254,7 @@ export async function runWebhookGet(
  * --source is immutable — reject with exit 2 if provided.
  */
 export async function runWebhookUpdate(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -317,7 +304,7 @@ export async function runWebhookUpdate(
  * Run `webhook delete <id>`.
  */
 export async function runWebhookDelete(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -347,7 +334,7 @@ export async function runWebhookDelete(
  * Read command; account_id is verbatim (not URL-resolved).
  */
 export async function runWebhookStateDiff(
-  client: MinimalClient,
+  client: Curviate,
   flags: WebhookFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -453,7 +440,7 @@ const webhookCreateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookCreate(client as unknown as MinimalClient, flags, out);
+    await runWebhookCreate(client, flags, out);
   },
 });
 
@@ -474,7 +461,7 @@ const webhookListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookList(client as unknown as MinimalClient, flags, out);
+    await runWebhookList(client, flags, out);
   },
 });
 
@@ -495,7 +482,7 @@ const webhookEventsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookEvents(client as unknown as MinimalClient, flags, out);
+    await runWebhookEvents(client, flags, out);
   },
 });
 
@@ -519,7 +506,7 @@ const webhookGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookGet(client as unknown as MinimalClient, flags, out);
+    await runWebhookGet(client, flags, out);
   },
 });
 
@@ -550,7 +537,7 @@ const webhookUpdateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookUpdate(client as unknown as MinimalClient, flags, out);
+    await runWebhookUpdate(client, flags, out);
   },
 });
 
@@ -574,7 +561,7 @@ const webhookDeleteCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookDelete(client as unknown as MinimalClient, flags, out);
+    await runWebhookDelete(client, flags, out);
   },
 });
 
@@ -598,7 +585,7 @@ const webhookStateDiffCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runWebhookStateDiff(client as unknown as MinimalClient, flags, out);
+    await runWebhookStateDiff(client, flags, out);
   },
 });
 

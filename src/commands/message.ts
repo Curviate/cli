@@ -32,7 +32,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type MessageFlags = {
   chatId?: string;
@@ -62,25 +62,6 @@ type MessageFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    profiles: {
-      get: (id: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    messaging: {
-      startChat: (body: Record<string, unknown>) => Promise<unknown>;
-      sendMessage: (chatId: string, body: Record<string, unknown>) => Promise<unknown>;
-      getMessage: (messageId: string) => Promise<unknown>;
-      editMessage: (messageId: string, body: Record<string, unknown>) => Promise<unknown>;
-      deleteMessage: (messageId: string) => Promise<unknown>;
-      addReaction: (messageId: string, body: Record<string, unknown>) => Promise<unknown>;
-      getAttachment: (messageId: string, attachmentId: string) => Promise<ArrayBuffer>;
-      sendInMail: (body: Record<string, unknown>) => Promise<unknown>;
-      getInMailBalance: (params?: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -165,7 +146,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  *   profiles.get not-found → exit 4.
  */
 export async function runMessageNew(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -252,7 +233,7 @@ export async function runMessageNew(
  * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runMessageSend(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -314,7 +295,7 @@ export async function runMessageSend(
  * Read command — rejects --preview and --all.
  */
 export async function runMessageGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -339,7 +320,7 @@ export async function runMessageGet(
  * Write command — supports --preview.
  */
 export async function runMessageEdit(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -378,7 +359,7 @@ export async function runMessageEdit(
  * Write command — supports --preview.
  */
 export async function runMessageDelete(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -413,7 +394,7 @@ export async function runMessageDelete(
  * CLI flag is --emoji; the SDK body field is `reaction` (confirmed from AddReactionBody).
  */
 export async function runMessageReact(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -449,7 +430,7 @@ export async function runMessageReact(
  * @param isTTY — injectable for tests (avoids reading process.stdout.isTTY)
  */
 export async function runMessageAttachment(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
   isTTY: boolean,
@@ -490,7 +471,7 @@ export async function runMessageAttachment(
  *   profiles.get not-found → exit 4.
  */
 export async function runMessageInMail(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -574,7 +555,7 @@ export async function runMessageInMail(
  * Read command — rejects --preview and --all.
  */
 export async function runMessageInMailBalance(
-  client: MinimalClient,
+  client: Curviate,
   flags: MessageFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -626,7 +607,7 @@ const messageNewCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageNew(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageNew(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -652,7 +633,7 @@ const messageGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -679,7 +660,7 @@ const messageEditCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageEdit(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageEdit(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -705,7 +686,7 @@ const messageDeleteCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageDelete(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageDelete(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -732,7 +713,7 @@ const messageReactCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageReact(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageReact(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -761,7 +742,7 @@ const messageAttachmentCommand = defineCommand({
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
     await runMessageAttachment(
-      client as unknown as MinimalClient,
+      client,
       { ...flags, account: flags.account ?? cfg.account },
       out,
       process.stdout.isTTY ?? false,
@@ -799,7 +780,7 @@ const messageInMailCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageInMail(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageInMail(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -836,7 +817,7 @@ const messageSendCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageSend(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageSend(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -861,7 +842,7 @@ const messageInMailBalanceCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageInMailBalance(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageInMailBalance(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -916,6 +897,6 @@ export const messageCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runMessageSend(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runMessageSend(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });

@@ -23,7 +23,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { readAttachment, AttachError } from "../lib/attach.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Valid write-side reaction values.
@@ -59,20 +59,6 @@ type PostFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    posts: {
-      list: (params?: Record<string, unknown>) => Promise<unknown>;
-      get: (postId: string) => Promise<unknown>;
-      create: (body: Record<string, unknown>) => Promise<unknown>;
-      comment: (postId: string, body: Record<string, unknown>) => Promise<unknown>;
-      listComments: (postId: string, params?: Record<string, unknown>) => Promise<unknown>;
-      react: (postId: string, body: Record<string, unknown>) => Promise<unknown>;
-      listReactions: (postId: string, params?: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -145,7 +131,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * Read command — rejects --preview.
  */
 export async function runPostList(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -182,7 +168,7 @@ export async function runPostList(
  * Read command — rejects --preview and --all.
  */
 export async function runPostGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -207,7 +193,7 @@ export async function runPostGet(
  * Write command — supports --preview. ALWAYS multipart (SDK handles form building).
  */
 export async function runPostCreate(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -293,7 +279,7 @@ export async function runPostCreate(
  * --reply-to → body field `comment_id` (NOT `parent_comment_id`).
  */
 export async function runPostComment(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
   _readStdin?: () => Promise<string>,
@@ -360,7 +346,7 @@ export async function runPostComment(
  * --reply-to → `comment_id` query param on the listComments call.
  */
 export async function runPostComments(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -404,7 +390,7 @@ export async function runPostComments(
  * --as-organization: reacts on behalf of an organization page.
  */
 export async function runPostReact(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -456,7 +442,7 @@ export async function runPostReact(
  * Read command — rejects --preview.
  */
 export async function runPostReactions(
-  client: MinimalClient,
+  client: Curviate,
   flags: PostFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -511,7 +497,7 @@ const postListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostList(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -541,7 +527,7 @@ const postGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -577,7 +563,7 @@ const postCreateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostCreate(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostCreate(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -614,7 +600,7 @@ const postCommentCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostComment(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostComment(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -648,7 +634,7 @@ const postCommentsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostComments(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostComments(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -696,7 +682,7 @@ const postReactCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostReact(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostReact(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -726,7 +712,7 @@ const postReactionsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runPostReactions(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runPostReactions(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 

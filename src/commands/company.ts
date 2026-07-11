@@ -32,7 +32,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { slimCompany, slimSearchPeople, slimSearchPosts, slimSearchJobs } from "../lib/slim.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type CompanyFlags = {
   id?: string;
@@ -57,18 +57,6 @@ type CompanyFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    companies: {
-      get: (id: string) => Promise<unknown>;
-      employees: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      posts: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      jobs: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      followers: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -125,7 +113,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * slug or numeric id passes through unchanged.
  */
 export async function runCompanyGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: CompanyFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -160,7 +148,7 @@ export async function runCompanyGet(
  * client-side — the server 400s a non-numeric value before any upstream call).
  */
 export async function runCompanyEmployees(
-  client: MinimalClient,
+  client: Curviate,
   flags: CompanyFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -203,7 +191,7 @@ export async function runCompanyEmployees(
  * passes through verbatim (content pass-through — never stored).
  */
 export async function runCompanyPosts(
-  client: MinimalClient,
+  client: Curviate,
   flags: CompanyFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -244,7 +232,7 @@ export async function runCompanyPosts(
  * `items[]` (no open postings) is a valid result, not an error.
  */
 export async function runCompanyJobs(
-  client: MinimalClient,
+  client: Curviate,
   flags: CompanyFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -289,7 +277,7 @@ export async function runCompanyJobs(
  * already compact).
  */
 export async function runCompanyFollowers(
-  client: MinimalClient,
+  client: Curviate,
   flags: CompanyFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -351,7 +339,7 @@ const companyEmployeesCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runCompanyEmployees(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runCompanyEmployees(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -376,7 +364,7 @@ const companyPostsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runCompanyPosts(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runCompanyPosts(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -402,7 +390,7 @@ const companyJobsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runCompanyJobs(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runCompanyJobs(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -427,7 +415,7 @@ const companyFollowersCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runCompanyFollowers(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runCompanyFollowers(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -459,6 +447,6 @@ export const companyCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runCompanyGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runCompanyGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });

@@ -22,7 +22,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { streamAll } from "../lib/paginate.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type InboxFlags = {
   chatId?: string;
@@ -50,18 +50,6 @@ type InboxFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    messaging: {
-      listChats: (params?: Record<string, unknown>) => Promise<unknown>;
-      getChat: (chatId: string) => Promise<unknown>;
-      listMessages: (chatId: string, params?: Record<string, unknown>) => Promise<unknown>;
-      syncMessages: (params?: Record<string, unknown>) => Promise<unknown>;
-      syncChat: (chatId: string) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -141,7 +129,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * Read command — rejects --preview.
  */
 export async function runInboxList(
-  client: MinimalClient,
+  client: Curviate,
   flags: InboxFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -186,7 +174,7 @@ export async function runInboxList(
  * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: InboxFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -214,7 +202,7 @@ export async function runInboxGet(
  * Thread URLs are normalized to the bare provider ID (zero network calls).
  */
 export async function runInboxMessages(
-  client: MinimalClient,
+  client: Curviate,
   flags: InboxFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -262,7 +250,7 @@ export async function runInboxMessages(
  * Read command — rejects --preview and --all.
  */
 export async function runInboxSync(
-  client: MinimalClient,
+  client: Curviate,
   flags: InboxFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -301,7 +289,7 @@ const SYNC_POLL_INTERVAL_MS = 2000;
  * hermetic suite does not wait real seconds between polls.
  */
 export async function runInboxSyncChat(
-  client: MinimalClient,
+  client: Curviate,
   flags: InboxFlags,
   out: OutputStreams,
   _sleep?: (ms: number) => Promise<void>,
@@ -381,7 +369,7 @@ const inboxListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runInboxList(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runInboxList(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -407,7 +395,7 @@ const inboxGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runInboxGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runInboxGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -442,7 +430,7 @@ const inboxMessagesCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runInboxMessages(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runInboxMessages(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -467,7 +455,7 @@ const inboxSyncCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runInboxSync(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runInboxSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -506,7 +494,7 @@ const inboxSyncChatCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runInboxSyncChat(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runInboxSyncChat(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 

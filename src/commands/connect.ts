@@ -22,7 +22,7 @@ import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type ConnectFlags = {
   id?: string;
@@ -47,18 +47,6 @@ type ConnectFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    invites: {
-      send: (body: Record<string, unknown>) => Promise<unknown>;
-      listSent: (params?: Record<string, unknown>) => Promise<unknown>;
-      listReceived: (params?: Record<string, unknown>) => Promise<unknown>;
-      respond: (id: string, body: Record<string, unknown>) => Promise<unknown>;
-      cancel: (id: string) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -101,7 +89,7 @@ function resolveOutputOpts(flags: ConnectFlags) {
  * Write command — supports --preview.
  */
 export async function runConnectSend(
-  client: MinimalClient,
+  client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -146,7 +134,7 @@ export async function runConnectSend(
  * Read command — rejects --preview.
  */
 export async function runConnectSent(
-  client: MinimalClient,
+  client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -197,7 +185,7 @@ export async function runConnectSent(
  * Read command — rejects --preview.
  */
 export async function runConnectReceived(
-  client: MinimalClient,
+  client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -249,7 +237,7 @@ export async function runConnectReceived(
  * invitation_id is NOT passed through resolveIdentifier.
  */
 export async function runConnectRespond(
-  client: MinimalClient,
+  client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -303,7 +291,7 @@ export async function runConnectRespond(
  * invitation_id is NOT passed through resolveIdentifier.
  */
 export async function runConnectCancel(
-  client: MinimalClient,
+  client: Curviate,
   flags: ConnectFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -369,7 +357,7 @@ const connectSentCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectSent(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectSent(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -396,7 +384,7 @@ const connectReceivedCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectReceived(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectReceived(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -431,7 +419,7 @@ const connectRespondCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectRespond(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectRespond(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -456,7 +444,7 @@ const connectCancelCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectCancel(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectCancel(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -516,6 +504,6 @@ export const connectCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runConnectSend(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runConnectSend(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });

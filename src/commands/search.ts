@@ -40,7 +40,7 @@ import {
   slimSearchPosts,
   slimSearchPostsItem,
 } from "../lib/slim.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type SearchFlags = {
   keywords?: string;
@@ -146,18 +146,6 @@ const FILTER_FLAGS = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    search: {
-      people: (params: Record<string, unknown>) => Promise<unknown>;
-      companies: (params: Record<string, unknown>) => Promise<unknown>;
-      posts: (params: Record<string, unknown>) => Promise<unknown>;
-      jobs: (params: Record<string, unknown>) => Promise<unknown>;
-      getParameters: (params: Record<string, unknown>) => Promise<unknown>;
-    };
-  };
 };
 
 function buildOutputStreams(): OutputStreams {
@@ -361,7 +349,7 @@ async function buildSearchBody(
  * POST body search — cursor+limit passed to SDK (which splits to query).
  */
 export async function runSearchPeople(
-  client: MinimalClient,
+  client: Curviate,
   flags: SearchFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -425,7 +413,7 @@ export async function runSearchPeople(
  * POST body search.
  */
 export async function runSearchCompanies(
-  client: MinimalClient,
+  client: Curviate,
   flags: SearchFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -478,7 +466,7 @@ export async function runSearchCompanies(
  * POST body search.
  */
 export async function runSearchPosts(
-  client: MinimalClient,
+  client: Curviate,
   flags: SearchFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -531,7 +519,7 @@ export async function runSearchPosts(
  * POST body search.
  */
 export async function runSearchJobs(
-  client: MinimalClient,
+  client: Curviate,
   flags: SearchFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -584,7 +572,7 @@ export async function runSearchJobs(
  * GET — not paginated; rejects --all (exit 2).
  */
 export async function runSearchParameters(
-  client: MinimalClient,
+  client: Curviate,
   flags: SearchFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -653,7 +641,7 @@ const searchPeopleCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSearchPeople(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSearchPeople(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -689,7 +677,7 @@ const searchCompaniesCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSearchCompanies(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSearchCompanies(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -727,7 +715,7 @@ const searchPostsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSearchPosts(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSearchPosts(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -780,7 +768,7 @@ const searchJobsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSearchJobs(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSearchJobs(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -811,7 +799,7 @@ const searchParametersCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runSearchParameters(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runSearchParameters(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 

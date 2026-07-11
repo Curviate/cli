@@ -21,12 +21,10 @@
  * the 202 response) is a positional argument that the SDK interpolates into the
  * request path, not a body field.
  *
- * connect-link / reconnect-link / connect-session poll: `accounts.getConnectSession`,
- * `accounts.createReconnectLink`, and the renamed checkpoint methods are targeted
- * through the duck-typed MinimalClient interface below rather than the SDK's own
- * generated types. All are covered in the SDK-parity manifest (test/parity.test.ts);
- * the duck-typing is a standing decoupling choice (see MinimalClient) that lets the
- * CLI ship in lockstep with the coupled SDK release.
+ * The run functions are typed against the real exported `Curviate` client, so a
+ * renamed/removed/relocated SDK method is a compile error at the call site rather
+ * than a latent runtime failure. Coverage is tracked in the SDK-parity manifest
+ * (test/parity.test.ts).
  *
  * Slim projection (default): account list and account get return a
  * compact field subset — six cached account-enrichment fields (username,
@@ -62,7 +60,7 @@ import {
   CHECKPOINT_POLL_FIRST_DELAY_MS,
   nextCheckpointPollDelayMs,
 } from "../lib/checkpoint-cadence.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ps/shell-history warning template (mirrors the --api-key warning in global-flags.ts).
 const PW_WARNING = (stdinFlag: string, envVar: string) =>
@@ -128,32 +126,6 @@ type OutputStreams = {
   stderr: { write: (s: string) => void };
 };
 
-// Minimal root-level client shape (accounts namespace is root-scoped).
-//
-// The account-connection methods are duck-typed against this interface rather
-// than the SDK's own generated types. This is why the CLI package deliberately
-// excludes itself from the root workspace — it decouples from SDK-internal
-// types on purpose, so the CLI can ship in lockstep with the coupled SDK
-// release. The checkpoint methods and createReconnectLink take the account_id
-// as their first STRING argument (the SDK interpolates it into the request
-// path); getConnectSession likewise takes the session_id as a STRING.
-type MinimalClient = {
-  accounts: {
-    list: (params?: Record<string, unknown>) => Promise<unknown>;
-    get: (accountId: string) => Promise<unknown>;
-    link: (body: Record<string, unknown>) => Promise<unknown>;
-    createConnectLink: (body: Record<string, unknown>) => Promise<unknown>;
-    createReconnectLink: (accountId: string, body?: Record<string, unknown>) => Promise<unknown>;
-    reconnect: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
-    update: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
-    disconnect: (accountId: string) => Promise<unknown>;
-    solveCheckpoint: (accountId: string, body: Record<string, unknown>) => Promise<unknown>;
-    pollCheckpoint: (accountId: string) => Promise<unknown>;
-    requestCheckpoint: (accountId: string) => Promise<unknown>;
-    getConnectSession: (sessionId: string) => Promise<unknown>;
-  };
-};
-
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -205,7 +177,7 @@ async function handleError(err: unknown, outOpts: ReturnType<typeof resolveOutpu
 
 /** Run `account list [--all] [--limit] [--cursor]`. */
 export async function runAccountList(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -244,7 +216,7 @@ export async function runAccountList(
 
 /** Run `account get <account_id>`. account_id passes verbatim. */
 export async function runAccountGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -472,7 +444,7 @@ type MobileApprovalOutcome =
  * 10-minute default when the response carries no expiry hint).
  */
 async function waitForMobileApproval(
-  client: MinimalClient,
+  client: Curviate,
   accountId: string,
   expiresAt: string | undefined,
   ctx: {
@@ -512,7 +484,7 @@ async function waitForMobileApproval(
  * codeless mobile-app-approval challenge.
  */
 async function runInteractiveCheckpointLoop(
-  client: MinimalClient,
+  client: Curviate,
   initial: CheckpointEnvelope,
   ctx: {
     out: OutputStreams;
@@ -591,7 +563,7 @@ async function runInteractiveCheckpointLoop(
  * the envelope and exits AUTH_NEEDED (12) otherwise.
  */
 async function handleAccountConnectResult(
-  client: MinimalClient,
+  client: Curviate,
   result: unknown,
   ctx: {
     out: OutputStreams;
@@ -631,7 +603,7 @@ async function handleAccountConnectResult(
  * Required: --seat-id, --auth-method.
  */
 export async function runAccountLink(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -720,7 +692,7 @@ type ConnectSessionWaitOutcome =
  * `connect-session poll --wait` command — one loop, two callers.
  */
 async function runConnectSessionWaitLoop(
-  client: MinimalClient,
+  client: Curviate,
   sessionId: string,
   ctx: {
     out: OutputStreams;
@@ -799,7 +771,7 @@ function resolveWaitTimeoutOverrideMs(flags: AccountFlags, out: OutputStreams): 
  * hand-off that requires a human; poll later with `connect-session poll`.
  */
 export async function runAccountConnectLink(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -904,7 +876,7 @@ export async function runAccountConnectLink(
  * a session_id it already has.
  */
 export async function runAccountConnectSessionPoll(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -984,7 +956,7 @@ export async function runAccountConnectSessionPoll(
  * `account connect-session poll`.
  */
 export async function runAccountReconnectLink(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -1079,7 +1051,7 @@ export async function runAccountReconnectLink(
  * Required: --account-id (positional), --auth-method.
  */
 export async function runAccountReconnect(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -1144,7 +1116,7 @@ export async function runAccountReconnect(
  * (a managed location is chosen at connect time instead).
  */
 export async function runAccountUpdate(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -1213,7 +1185,7 @@ export async function runAccountUpdate(
 
 /** Run `account disconnect <account_id>`. */
 export async function runAccountDisconnect(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -1245,7 +1217,7 @@ export async function runAccountDisconnect(
  * Required: --account-id (positional), --code.
  */
 export async function runAccountCheckpointSolve(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -1309,7 +1281,7 @@ export async function runAccountCheckpointSolve(
  * `handleError`, unchanged from `solve`/`poll`.
  */
 export async function runAccountCheckpointRequest(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -1364,7 +1336,7 @@ function formatRemaining(ms: number): string {
  * own to read an expiry from before the first poll.
  */
 async function runCheckpointPollWaitLoop(
-  client: MinimalClient,
+  client: Curviate,
   accountId: string,
   ctx: {
     out: OutputStreams;
@@ -1415,7 +1387,7 @@ async function runCheckpointPollWaitLoop(
  * `pending` (exit AUTH_NEEDED/12 — still resolvable, not a failure).
  */
 export async function runAccountCheckpointPoll(
-  client: MinimalClient,
+  client: Curviate,
   flags: AccountFlags,
   out: OutputStreams,
   io: CredentialIO = {},
@@ -1526,7 +1498,7 @@ const accountListCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountList(client as unknown as MinimalClient, flags, out);
+    await runAccountList(client, flags, out);
   },
 });
 
@@ -1551,7 +1523,7 @@ const accountGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountGet(client as unknown as MinimalClient, flags, out);
+    await runAccountGet(client, flags, out);
   },
 });
 
@@ -1601,7 +1573,7 @@ const accountLinkCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountLink(client as unknown as MinimalClient, flags, out);
+    await runAccountLink(client, flags, out);
   },
 });
 
@@ -1654,7 +1626,7 @@ const accountConnectLinkCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountConnectLink(client as unknown as MinimalClient, flags, out);
+    await runAccountConnectLink(client, flags, out);
   },
 });
 
@@ -1701,7 +1673,7 @@ const accountReconnectLinkCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountReconnectLink(client as unknown as MinimalClient, flags, out);
+    await runAccountReconnectLink(client, flags, out);
   },
 });
 
@@ -1750,7 +1722,7 @@ const accountConnectSessionPollCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountConnectSessionPoll(client as unknown as MinimalClient, flags, out);
+    await runAccountConnectSessionPoll(client, flags, out);
   },
 });
 
@@ -1810,7 +1782,7 @@ const accountReconnectCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountReconnect(client as unknown as MinimalClient, flags, out);
+    await runAccountReconnect(client, flags, out);
   },
 });
 
@@ -1841,7 +1813,7 @@ const accountUpdateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountUpdate(client as unknown as MinimalClient, flags, out);
+    await runAccountUpdate(client, flags, out);
   },
 });
 
@@ -1865,7 +1837,7 @@ const accountDisconnectCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountDisconnect(client as unknown as MinimalClient, flags, out);
+    await runAccountDisconnect(client, flags, out);
   },
 });
 
@@ -1897,7 +1869,7 @@ const accountCheckpointSolveCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountCheckpointSolve(client as unknown as MinimalClient, flags, out);
+    await runAccountCheckpointSolve(client, flags, out);
   },
 });
 
@@ -1945,7 +1917,7 @@ const accountCheckpointPollCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountCheckpointPoll(client as unknown as MinimalClient, flags, out);
+    await runAccountCheckpointPoll(client, flags, out);
   },
 });
 
@@ -1979,7 +1951,7 @@ const accountCheckpointRequestCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runAccountCheckpointRequest(client as unknown as MinimalClient, flags, out);
+    await runAccountCheckpointRequest(client, flags, out);
   },
 });
 

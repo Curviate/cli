@@ -47,7 +47,7 @@ import {
   type FilterReaders,
 } from "../lib/search-filters.js";
 import { readFile } from "node:fs/promises";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,31 +107,6 @@ type RecruiterFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    recruiter: {
-      syncMessages: (params: Record<string, unknown>) => Promise<unknown>;
-      startChat: (body: Record<string, unknown>) => Promise<unknown>;
-      getProfile: (identifier: string, params?: Record<string, unknown>) => Promise<unknown>;
-      searchPeople: (body: Record<string, unknown>, params?: Record<string, unknown>) => Promise<unknown>;
-      getParameters: (params: Record<string, unknown>) => Promise<unknown>;
-      listProjects: (params?: Record<string, unknown>) => Promise<unknown>;
-      getProject: (projectId: string) => Promise<unknown>;
-      addCandidate: (userId: string, body: Record<string, unknown>) => Promise<unknown>;
-      addApplicant: (userId: string, body: Record<string, unknown>) => Promise<unknown>;
-      rejectApplicant: (userId: string, body: Record<string, unknown>) => Promise<unknown>;
-      listJobs: (params?: Record<string, unknown>) => Promise<unknown>;
-      createJob: (body: Record<string, unknown>) => Promise<unknown>;
-      publishJob: (jobId: string, body: Record<string, unknown>) => Promise<unknown>;
-      solveJobCheckpoint: (jobId: string, body: Record<string, unknown>) => Promise<unknown>;
-      listApplicants: (jobId: string, params?: Record<string, unknown>) => Promise<unknown>;
-      getApplicant: (applicantId: string) => Promise<unknown>;
-      getJob: (jobId: string) => Promise<unknown>;
-      downloadResume: (applicantId: string) => Promise<ArrayBuffer>;
-    };
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -271,7 +246,7 @@ async function assembleJobCreateBody(
  * Read command — rejects --preview.
  */
 export async function runRecruiterSync(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -298,7 +273,7 @@ export async function runRecruiterSync(
  * Write command — supports --preview. Multipart when files present.
  */
 export async function runRecruiterMessageNew(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -370,7 +345,7 @@ export async function runRecruiterMessageNew(
  * Read command — rejects --preview. Identifier resolved via resolveIdentifier.
  */
 export async function runRecruiterProfile(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -396,7 +371,7 @@ export async function runRecruiterProfile(
  * Supports --all / --limit / --cursor pagination.
  */
 export async function runRecruiterSearchPeople(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
   readers: FilterReaders = DEFAULT_FILTER_READERS,
@@ -460,7 +435,7 @@ export async function runRecruiterSearchPeople(
  * Read command — rejects --preview.
  */
 export async function runRecruiterGetParameters(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -488,7 +463,7 @@ export async function runRecruiterGetParameters(
  * Read command — rejects --preview. Paginated.
  */
 export async function runRecruiterListProjects(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -529,7 +504,7 @@ export async function runRecruiterListProjects(
  * Read command — rejects --preview. project_id passes verbatim.
  */
 export async function runRecruiterGetProject(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -553,7 +528,7 @@ export async function runRecruiterGetProject(
  * Write command — supports --preview. user_id passes verbatim.
  */
 export async function runRecruiterAddCandidate(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -591,7 +566,7 @@ export async function runRecruiterAddCandidate(
  * Write command — supports --preview. user_id passes verbatim.
  */
 export async function runRecruiterAddApplicant(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -637,7 +612,7 @@ export async function runRecruiterAddApplicant(
  * forwarded as a malformed number for the server to reject with a 400.
  */
 export async function runRecruiterRejectApplicant(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -696,7 +671,7 @@ export async function runRecruiterRejectApplicant(
  * Read command — rejects --preview. Paginated.
  */
 export async function runRecruiterListJobs(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -746,7 +721,7 @@ export async function runRecruiterListJobs(
  * fields are validated by the API, whose 400 is surfaced cleanly.
  */
 export async function runRecruiterCreateJob(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
   readers: JobCreateReaders = DEFAULT_JOB_CREATE_READERS,
@@ -787,7 +762,7 @@ export async function runRecruiterCreateJob(
  * Write command — supports --preview. job_id passes verbatim.
  */
 export async function runRecruiterPublishJob(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -824,7 +799,7 @@ export async function runRecruiterPublishJob(
  * Write command — supports --preview. job_id passes verbatim.
  */
 export async function runRecruiterJobCheckpoint(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -861,7 +836,7 @@ export async function runRecruiterJobCheckpoint(
  * Read command — rejects --preview. job_id passes verbatim.
  */
 export async function runRecruiterListApplicants(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -893,7 +868,7 @@ export async function runRecruiterListApplicants(
  * `resolveJobIdentifier` (mirrors `job get`'s resolution).
  */
 export async function runRecruiterGetJob(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -918,7 +893,7 @@ export async function runRecruiterGetJob(
  * Read command — rejects --preview. applicant_id passes verbatim.
  */
 export async function runRecruiterGetApplicant(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -943,7 +918,7 @@ export async function runRecruiterGetApplicant(
  * @param isTTY — injectable for tests.
  */
 export async function runRecruiterDownloadResume(
-  client: MinimalClient,
+  client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
   isTTY: boolean,
@@ -993,7 +968,7 @@ const recruiterSyncCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterSync(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1028,7 +1003,7 @@ const recruiterMessageNewCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterMessageNew(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterMessageNew(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1065,7 +1040,7 @@ const recruiterProfileCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterProfile(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterProfile(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1096,7 +1071,7 @@ const recruiterSearchPeopleCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterSearchPeople(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterSearchPeople(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1127,7 +1102,7 @@ const recruiterSearchParametersCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterGetParameters(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterGetParameters(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1164,7 +1139,7 @@ const recruiterProjectsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterListProjects(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterListProjects(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1190,7 +1165,7 @@ const recruiterProjectCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterGetProject(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterGetProject(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1218,7 +1193,7 @@ const recruiterAddCandidateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterAddCandidate(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterAddCandidate(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1246,7 +1221,7 @@ const recruiterAddApplicantCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterAddApplicant(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterAddApplicant(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1286,7 +1261,7 @@ const recruiterRejectApplicantCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterRejectApplicant(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterRejectApplicant(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1308,7 +1283,7 @@ const recruiterJobsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterListJobs(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterListJobs(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1338,7 +1313,7 @@ const recruiterJobCreateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterCreateJob(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterCreateJob(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1365,7 +1340,7 @@ const recruiterJobPublishCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterPublishJob(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterPublishJob(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1392,7 +1367,7 @@ const recruiterJobCheckpointCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterJobCheckpoint(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterJobCheckpoint(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1417,7 +1392,7 @@ const recruiterJobApplicantsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterListApplicants(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterListApplicants(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1442,7 +1417,7 @@ const recruiterJobGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterGetJob(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterGetJob(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1491,7 +1466,7 @@ const recruiterApplicantResumeCommand = defineCommand({
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
     await runRecruiterDownloadResume(
-      client as unknown as MinimalClient,
+      client,
       { ...flags, account: flags.account ?? cfg.account },
       out,
       process.stdout.isTTY ?? false,
@@ -1531,7 +1506,7 @@ const recruiterApplicantCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterGetApplicant(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterGetApplicant(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 

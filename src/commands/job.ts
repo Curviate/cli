@@ -23,7 +23,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { slimJob } from "../lib/slim.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,14 +45,6 @@ type JobFlags = {
 type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
-};
-
-type MinimalClient = {
-  account: (id: string) => {
-    jobs: {
-      get: (idOrUrl: string) => Promise<unknown>;
-    };
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -93,7 +85,7 @@ function resolveOutputOpts(flags: JobFlags) {
  * Exported for unit-testing.
  */
 export async function runJobGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: JobFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -148,7 +140,7 @@ const jobGetCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runJobGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runJobGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
