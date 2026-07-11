@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@curviate/sdk':
-        specifier: file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz
-        version: file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz
+        specifier: ^0.15.0
+        version: 0.15.0
       citty:
         specifier: ^0.1.6
         version: 0.1.6
@@ -39,9 +39,8 @@ importers:
 
 packages:
 
-  '@curviate/sdk@file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz':
-    resolution: {integrity: sha512-6LarsQ3ivLUeW7/00WeVATsOY49b/VAhfphGn9CwCyagGSzELqsvdwFR1UgSJnmmeo2dobiUlEbBp0PvHkcckg==, tarball: file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz}
-    version: 0.15.0
+  '@curviate/sdk@0.15.0':
+    resolution: {integrity: sha512-RcUR1yoIipklP4S9UBmzIkgabFkVn4cqItEgW+Vl1muNyFW/TQt0ZR3HejNe2Sw4v6vTXAlhwDsyuPkPjoMtlw==}
     engines: {node: '>=18'}
 
   '@esbuild/aix-ppc64@0.27.7':
@@ -1213,7 +1212,7 @@ packages:
 
 snapshots:
 
-  '@curviate/sdk@file:../../.claude/tmp/pm/sdk-cli-v2/curviate-sdk-0.15.0.tgz':
+  '@curviate/sdk@0.15.0':
     dependencies:
       zod: 3.25.76
 
