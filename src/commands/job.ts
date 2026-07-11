@@ -1,39 +1,83 @@
 /**
- * `curviate job` — public job posting retrieval.
+ * `curviate job` — classic job-posting operations (own postings + public read).
  *
  * Subcommands:
- *   job get <url|id>   — retrieve one public job posting's full detail (read)
+ *   job get <url|id>                             — retrieve one public job posting (read)
+ *   job list --state <s>                         — list own postings by state (read, paginated)
+ *   job create <flags>                           — create a draft posting (write)
+ *   job update <id> <flags>                      — partial update of a posting (write)
+ *   job budget <id>                              — price a publish before committing money (read)
+ *   job publish <id> --mode <m>                  — publish a draft (write; PROMOTED* spends money)
+ *   job close <id>                               — stop accepting applications (write, bodyless)
+ *   job applicants <id>                          — list applicants (read, POST-as-search)
+ *   job applicant get <id> <app_id>              — one applicant's full detail (read)
+ *   job applicant resume <id> <app_id> -o <f>    — download an applicant's résumé (binary)
  *
- * Account-scoped. The positional accepts a full LinkedIn job URL or a bare
- * numeric id — resolved client-side via `resolveJobIdentifier`; a value that
- * does not match the URL pattern passes through unchanged and the SDK's own
- * job-id resolution is the fallback validator.
- *
- * Read command: --preview is a usage error (exit 2).
- *
- * Slim projection (default): object, id, title, company, company_id,
- * location, state, applicants_counter, published_at, description. Pass
- * --verbose for the full SDK response (adds cost, created_at, hiring_team).
+ * Account-scoped. Read commands reject --preview (exit 2); write commands render
+ * --preview and never touch the network under it. A paid publish
+ * (PROMOTED/PROMOTED_PLUS) requires an explicit budget — supplying it IS the
+ * opt-in to spend real money on the connected account's LinkedIn payment method.
  */
 
 import { defineCommand } from "citty";
-import { READ_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { READ_SINGLE_FLAGS, WRITE_SINGLE_FLAGS, GLOBAL_FLAGS } from "../lib/global-flags.js";
 import { resolveJobIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
+import { buildPreviewOutput } from "../lib/preview.js";
+import { streamAll } from "../lib/paginate.js";
+import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import { slimJob } from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — request bodies/queries derived from the real SDK method signatures
+// so a shape drift is a compile error, not a latent runtime break.
 // ---------------------------------------------------------------------------
+
+type AccountNs = ReturnType<Curviate["account"]>;
+type CreateJobBody = Parameters<AccountNs["jobs"]["create"]>[0];
+type UpdateJobBody = Parameters<AccountNs["jobs"]["update"]>[1];
+type PublishJobBody = Parameters<AccountNs["jobs"]["publish"]>[1];
+type JobListQuery = Parameters<AccountNs["jobs"]["list"]>[0];
+type ListApplicantsParams = NonNullable<Parameters<AccountNs["jobs"]["listApplicants"]>[1]>;
 
 type JobFlags = {
   id?: string;
+  applicantId?: string;
+  // list
+  state?: string;
+  // create / update
+  "job-title"?: string;
+  "job-title-id"?: string;
+  company?: string;
+  "company-id"?: string;
+  "workplace-type"?: string;
+  location?: string;
+  "employment-status"?: string;
+  description?: string;
+  "apply-method"?: string;
+  "notification-email"?: string;
+  "website-url"?: string;
+  skills?: string;
+  // publish
+  mode?: string;
+  "budget-currency"?: string;
+  "budget-amount"?: string;
+  "budget-scope"?: string;
+  // applicants
+  ratings?: string;
+  // binary
+  output?: string;
+  // global
   account?: string;
   json?: boolean;
   fields?: string;
+  limit?: string;
+  cursor?: string;
+  all?: boolean;
+  "max-pages"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -46,6 +90,15 @@ type OutputStreams = {
   stdout: { write: (s: string) => void };
   stderr: { write: (s: string) => void };
 };
+
+
+const JOB_STATES = ["DRAFT", "OPEN", "CLOSED", "REVIEW", "SUSPENDED"] as const;
+const WORKPLACE_TYPES = ["ON_SITE", "HYBRID", "REMOTE"] as const;
+const EMPLOYMENT_STATUSES = ["FULL_TIME", "PART_TIME", "CONTRACT", "TEMPORARY", "OTHER", "VOLUNTEER", "INTERNSHIP"] as const;
+const APPLY_METHODS = ["linkedin", "external"] as const;
+const PUBLISH_MODES = ["FREE", "PROMOTED", "PROMOTED_PLUS"] as const;
+const BUDGET_SCOPES = ["DAILY", "TOTAL"] as const;
+const RATINGS = ["UNRATED", "NOT_A_FIT", "MAYBE", "GOOD_FIT"] as const;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -66,6 +119,13 @@ function requireAccount(account: string | undefined, out: OutputStreams): string
   return account;
 }
 
+function rejectPreviewOnRead(preview: boolean | undefined, out: OutputStreams): void {
+  if (preview) {
+    out.stderr.write("error: --preview is only valid on write commands (mutations). Reads just run.\n");
+    process.exit(2);
+  }
+}
+
 function resolveOutputOpts(flags: JobFlags) {
   return {
     json: (flags.json ?? false) || !process.stdout.isTTY,
@@ -75,28 +135,77 @@ function resolveOutputOpts(flags: JobFlags) {
   };
 }
 
+/** Exit 2, naming the missing required flag. */
+function requireFlag(value: string | undefined, flag: string, out: OutputStreams): string {
+  if (!value) {
+    out.stderr.write(`error: ${flag} is required.\n`);
+    process.exit(2);
+  }
+  return value;
+}
+
+/** Exit 2 when a value is outside its allowed enum, naming the flag. */
+function requireEnum(value: string, allowed: readonly string[], flag: string, out: OutputStreams): void {
+  if (!allowed.includes(value)) {
+    out.stderr.write(`error: ${flag} must be one of: ${allowed.join(", ")}. Got "${value}".\n`);
+    process.exit(2);
+  }
+}
+
+async function handleSdkError(
+  err: unknown,
+  outOpts: ReturnType<typeof resolveOutputOpts>,
+  out: OutputStreams,
+): Promise<never> {
+  const { CurviateError } = await import("@curviate/sdk");
+  if (err instanceof CurviateError) {
+    const { getExitCode } = await import("../lib/exit-codes.js");
+    renderError(err as CurviateError, outOpts, out);
+    process.exit(getExitCode(err.code));
+  }
+  renderUnexpectedError(err, out);
+  process.exit(1);
+}
+
+/**
+ * Build a { id? , name? } reference object from an id flag and a name flag.
+ * Returns undefined when neither is set (so update can omit it). `create`
+ * validates presence separately (naming the flag) before calling this.
+ */
+function buildRef(idValue: string | undefined, nameValue: string | undefined): { id?: string; name?: string } | undefined {
+  if (idValue) return { id: idValue };
+  if (nameValue) return { name: nameValue };
+  return undefined;
+}
+
+/**
+ * Build the apply_method oneOf from --apply-method + its companion flag.
+ * `linkedin` needs --notification-email; `external` needs --website-url.
+ * On a required call site (create), a missing companion exits 2 naming it.
+ */
+function buildApplyMethod(flags: JobFlags, out: OutputStreams): { method: string; notification_email?: string; website_url?: string } {
+  const method = flags["apply-method"] ?? "";
+  requireEnum(method, APPLY_METHODS, "--apply-method", out);
+  if (method === "linkedin") {
+    const email = requireFlag(flags["notification-email"], "--notification-email (required when --apply-method is linkedin)", out);
+    return { method, notification_email: email };
+  }
+  const url = requireFlag(flags["website-url"], "--website-url (required when --apply-method is external)", out);
+  return { method, website_url: url };
+}
+
 // ---------------------------------------------------------------------------
-// Exported run functions (testable without citty)
+// Read run functions
 // ---------------------------------------------------------------------------
 
 /**
  * Run `job get <url|id>`.
- * Read command — rejects --preview (exit 2), no SDK call is made in that case.
- * Exported for unit-testing.
+ * Read command — rejects --preview (exit 2), no SDK call in that case.
  */
-export async function runJobGet(
-  client: Curviate,
-  flags: JobFlags,
-  out: OutputStreams,
-): Promise<void> {
-  if (flags.preview) {
-    out.stderr.write("error: --preview is only valid on write commands (mutations). Reads just run.\n");
-    process.exit(2);
-  }
-
+export async function runJobGet(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
-  const rawId = flags.id ?? "";
-  const resolvedId = resolveJobIdentifier(rawId);
+  const resolvedId = resolveJobIdentifier(flags.id ?? "");
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
@@ -104,14 +213,299 @@ export async function runJobGet(
     const result = await ns.jobs.get(resolvedId);
     renderSuccess(result, { ...outOpts, slim: slimJob }, out);
   } catch (err: unknown) {
-    const { CurviateError } = await import("@curviate/sdk");
-    if (err instanceof CurviateError) {
-      const { getExitCode } = await import("../lib/exit-codes.js");
-      renderError(err as CurviateError, outOpts, out);
-      process.exit(getExitCode(err.code));
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job list --state <s>` — jobs.list (paginated read). --state is required. */
+export async function runJobList(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const state = requireFlag(flags.state, "--state", out);
+  requireEnum(state, JOB_STATES, "--state", out);
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const base: { state: string; limit?: number; cursor?: string } = { state };
+  if (flags.limit) base.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) base.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      // Narrow cast at the query-argument call site: state is validated above.
+      const fn = (p: typeof base) => ns.jobs.list(p as JobListQuery);
+      for await (const item of streamAll(fn, base, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.jobs.list(base as JobListQuery);
+      renderSuccess(result, outOpts, out);
     }
-    renderUnexpectedError(err, out);
-    process.exit(1);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job budget <id>` — jobs.getBudget (single read). */
+export async function runJobBudget(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.jobs.getBudget(jobId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job applicants <id>` — jobs.listApplicants (POST-as-search, paginated read). */
+export async function runJobApplicants(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  // Filter body (ratings) + top-level pagination merged into one param object,
+  // matching the SDK's POST-as-search convention.
+  const base: Record<string, unknown> = {};
+  if (flags.ratings) {
+    const ratings = flags.ratings.split(",").map((r) => r.trim()).filter(Boolean);
+    for (const r of ratings) requireEnum(r, RATINGS, "--ratings", out);
+    base.ratings = ratings;
+  }
+  if (flags.limit) base.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) base.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) => ns.jobs.listApplicants(jobId, p as ListApplicantsParams);
+      for await (const item of streamAll(fn, base, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.jobs.listApplicants(jobId, base as ListApplicantsParams);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job applicant get <id> <app_id>` — jobs.getApplicant (single read). */
+export async function runJobApplicantGet(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+  const applicantId = flags.applicantId ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  try {
+    const result = await ns.jobs.getApplicant(jobId, applicantId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `job applicant resume <id> <app_id> -o <file>` — jobs.downloadResume (binary).
+ * Read command — rejects --preview. Refuses to dump bytes to a TTY without -o.
+ * @param isTTY injectable for tests.
+ */
+export async function runJobApplicantResume(client: Curviate, flags: JobFlags, out: OutputStreams, isTTY: boolean): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+  const applicantId = flags.applicantId ?? "";
+  const ns = client.account(accountId);
+
+  try {
+    const data = await ns.jobs.downloadResume(jobId, applicantId);
+    await writeBinaryOutput(data, { outputPath: flags.output, isTTY, stdout: process.stdout });
+  } catch (err: unknown) {
+    if (err instanceof BinaryOutputError) {
+      out.stderr.write(`error: ${err.message}\n`);
+      process.exit(err.exitCode);
+    }
+    await handleSdkError(err, resolveOutputOpts(flags), out);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Write run functions
+// ---------------------------------------------------------------------------
+
+/** Run `job create <flags>` — jobs.create. All 7 body fields are required. */
+export async function runJobCreate(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+
+  // Validate every required field FIRST, naming the missing flag (exit 2,
+  // before any SDK call).
+  if (!flags["job-title"] && !flags["job-title-id"]) {
+    out.stderr.write("error: --job-title (a free-text name) or --job-title-id is required.\n");
+    process.exit(2);
+  }
+  if (!flags.company && !flags["company-id"]) {
+    out.stderr.write("error: --company (a free-text name) or --company-id is required.\n");
+    process.exit(2);
+  }
+  const workplaceType = requireFlag(flags["workplace-type"], "--workplace-type", out);
+  requireEnum(workplaceType, WORKPLACE_TYPES, "--workplace-type", out);
+  const location = requireFlag(flags.location, "--location", out);
+  const employmentStatus = requireFlag(flags["employment-status"], "--employment-status", out);
+  requireEnum(employmentStatus, EMPLOYMENT_STATUSES, "--employment-status", out);
+  const description = requireFlag(flags.description, "--description", out);
+  requireFlag(flags["apply-method"], "--apply-method", out);
+  const applyMethod = buildApplyMethod(flags, out);
+
+  const body: Record<string, unknown> = {
+    job_title: buildRef(flags["job-title-id"], flags["job-title"]),
+    company: buildRef(flags["company-id"], flags.company),
+    workplace_type: workplaceType,
+    location,
+    employment_status: employmentStatus,
+    description,
+    apply_method: applyMethod,
+  };
+  if (flags.skills) {
+    body.skills = flags.skills.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "jobs.create", args: {}, body, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    // Narrow cast at the body-argument call site: every required field is
+    // validated above; apply_method is a method-discriminated oneOf.
+    const result = await ns.jobs.create(body as CreateJobBody);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job update <id> <flags>` — jobs.update. Only the provided fields change. */
+export async function runJobUpdate(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+
+  const body: Record<string, unknown> = {};
+  const jobTitle = buildRef(flags["job-title-id"], flags["job-title"]);
+  if (jobTitle) body.job_title = jobTitle;
+  const company = buildRef(flags["company-id"], flags.company);
+  if (company) body.company = company;
+  if (flags["workplace-type"]) {
+    requireEnum(flags["workplace-type"], WORKPLACE_TYPES, "--workplace-type", out);
+    body.workplace_type = flags["workplace-type"];
+  }
+  if (flags.location) body.location = flags.location;
+  if (flags["employment-status"]) {
+    requireEnum(flags["employment-status"], EMPLOYMENT_STATUSES, "--employment-status", out);
+    body.employment_status = flags["employment-status"];
+  }
+  if (flags.description) body.description = flags.description;
+  if (flags["apply-method"]) body.apply_method = buildApplyMethod(flags, out);
+  if (flags.skills) body.skills = flags.skills.split(",").map((s) => s.trim()).filter(Boolean);
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "jobs.update", args: { job_id: jobId }, body, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.jobs.update(jobId, body as UpdateJobBody);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `job publish <id> --mode <m>` — jobs.publish.
+ * --mode is required. PROMOTED/PROMOTED_PLUS require a full --budget-* triple —
+ * supplying it is the explicit opt-in to spend real money.
+ */
+export async function runJobPublish(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+  const mode = requireFlag(flags.mode, "--mode", out);
+  requireEnum(mode, PUBLISH_MODES, "--mode", out);
+
+  let body: Record<string, unknown> = { mode };
+  if (mode === "PROMOTED" || mode === "PROMOTED_PLUS") {
+    const currency = requireFlag(flags["budget-currency"], "--budget-currency (required for a paid publish)", out);
+    const amountRaw = requireFlag(flags["budget-amount"], "--budget-amount (required for a paid publish)", out);
+    const scope = requireFlag(flags["budget-scope"], "--budget-scope (required for a paid publish)", out);
+    requireEnum(scope, BUDGET_SCOPES, "--budget-scope", out);
+    const amount = Number(amountRaw);
+    if (!Number.isFinite(amount) || amount < 0) {
+      out.stderr.write("error: --budget-amount must be a non-negative number.\n");
+      process.exit(2);
+    }
+    body = { mode, budget: { currency, amount, scope } };
+  }
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "jobs.publish", args: { job_id: jobId }, body, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    // Narrow cast at the body-argument call site: mode + budget are validated
+    // above; the body is a mode-discriminated oneOf.
+    const result = await ns.jobs.publish(jobId, body as PublishJobBody);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `job close <id>` — jobs.close (bodyless write). */
+export async function runJobClose(client: Curviate, flags: JobFlags, out: OutputStreams): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const jobId = resolveJobIdentifier(flags.id ?? "");
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "jobs.close", args: { job_id: jobId }, body: {}, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.jobs.close(jobId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
   }
 }
 
@@ -119,40 +513,203 @@ export async function runJobGet(
 // Citty command definitions
 // ---------------------------------------------------------------------------
 
+/** Shared config/client boilerplate for a subcommand's run(). */
+async function withClient(
+  flags: JobFlags,
+  fn: (client: Curviate, flags: JobFlags, out: OutputStreams) => Promise<void>,
+): Promise<void> {
+  const cfg = await resolveEffectiveConfig({
+    apiKey: flags["api-key"],
+    baseUrl: flags["base-url"],
+    timeout: flags.timeout,
+    account: flags.account,
+    profile: flags.profile,
+  });
+  if (!cfg.apiKey) {
+    process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+    process.exit(3);
+  }
+  const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+  const out = buildOutputStreams();
+  await fn(client, { ...flags, account: flags.account ?? cfg.account }, out);
+}
+
+// Shared body flags for create/update (kebab → snake_case body keys).
+const JOB_BODY_FLAGS = {
+  "job-title": { type: "string" as const, description: "Job title as free text (or use --job-title-id for an existing LinkedIn title)." },
+  "job-title-id": { type: "string" as const, description: "Existing LinkedIn job-title id." },
+  company: { type: "string" as const, description: "Hiring company as free text (or use --company-id)." },
+  "company-id": { type: "string" as const, description: "Existing company id." },
+  "workplace-type": { type: "string" as const, description: "Workplace arrangement: ON_SITE|HYBRID|REMOTE." },
+  location: { type: "string" as const, description: "A LOCATION parameter id (from search parameters)." },
+  "employment-status": { type: "string" as const, description: "Employment type: FULL_TIME|PART_TIME|CONTRACT|TEMPORARY|OTHER|VOLUNTEER|INTERNSHIP." },
+  description: { type: "string" as const, description: "Full job description (min 200 chars)." },
+  "apply-method": { type: "string" as const, description: "How candidates apply: linkedin|external." },
+  "notification-email": { type: "string" as const, description: "Email notified of new applicants (required when --apply-method is linkedin)." },
+  "website-url": { type: "string" as const, description: "External apply URL (required when --apply-method is external)." },
+  skills: { type: "string" as const, description: "Comma-separated skill parameter ids (optional)." },
+};
+
 const jobGetCommand = defineCommand({
   meta: { name: "get", description: "Retrieve one public LinkedIn job posting's full detail." },
   args: {
     ...READ_SINGLE_FLAGS,
-    id: { type: "positional", description: "Job URL (e.g. https://www.linkedin.com/jobs/view/4428113858) or a bare numeric job id." },
+    id: { type: "positional", description: "Job URL or a bare numeric job id." },
   },
   async run({ args }) {
-    const flags = args as JobFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runJobGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
+    await withClient(args as JobFlags, runJobGet);
+  },
+});
+
+const jobListCommand = defineCommand({
+  meta: { name: "list", description: "List your own classic job postings by state." },
+  args: {
+    ...GLOBAL_FLAGS,
+    state: { type: "string", description: "Filter by state (required): DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED.", required: true },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobList);
+  },
+});
+
+const jobCreateCommand = defineCommand({
+  meta: { name: "create", description: "Create a classic job-posting draft (never publishes, never spends)." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    ...JOB_BODY_FLAGS,
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobCreate);
+  },
+});
+
+const jobUpdateCommand = defineCommand({
+  meta: { name: "update", description: "Apply a partial update to a job posting you own." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id to update." },
+    ...JOB_BODY_FLAGS,
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobUpdate);
+  },
+});
+
+const jobBudgetCommand = defineCommand({
+  meta: { name: "budget", description: "Price a publish before committing any money." },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id to price." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobBudget);
+  },
+});
+
+const jobPublishCommand = defineCommand({
+  meta: { name: "publish", description: "Publish a draft. PROMOTED/PROMOTED_PLUS spend real money and require --budget-*." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id to publish." },
+    mode: { type: "string", description: "Publish mode (required): FREE|PROMOTED|PROMOTED_PLUS.", required: true },
+    "budget-currency": { type: "string", description: "ISO-4217 currency (required for a paid publish), e.g. EUR." },
+    "budget-amount": { type: "string", description: "Budget amount (required for a paid publish)." },
+    "budget-scope": { type: "string", description: "Budget scope (required for a paid publish): DAILY|TOTAL." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobPublish);
+  },
+});
+
+const jobCloseCommand = defineCommand({
+  meta: { name: "close", description: "Stop a posting from accepting applications (irreversible once LISTED)." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id to close." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobClose);
+  },
+});
+
+const jobApplicantsCommand = defineCommand({
+  meta: { name: "applicants", description: "List applicants to a posting you own (POST-as-search)." },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Job id to list applicants for." },
+    ratings: { type: "string", description: "Comma-separated rating filter: UNRATED|NOT_A_FIT|MAYBE|GOOD_FIT. Omit for the full funnel." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobApplicants);
+  },
+});
+
+const jobApplicantGetCommand = defineCommand({
+  meta: { name: "get", description: "Get one applicant's full detail, including contact info." },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id the applicant applied to." },
+    applicantId: { type: "positional", description: "Applicant id." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, runJobApplicantGet);
+  },
+});
+
+const jobApplicantResumeCommand = defineCommand({
+  meta: { name: "resume", description: "Download an applicant's résumé (binary)." },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    id: { type: "positional", description: "Job id the applicant applied to." },
+    applicantId: { type: "positional", description: "Applicant id." },
+    output: { type: "string", alias: "o", description: "Path to write the résumé file to." },
+  },
+  async run({ args }) {
+    await withClient(args as JobFlags, (c, f, o) => runJobApplicantResume(c, f, o, process.stdout.isTTY ?? false));
+  },
+});
+
+const jobApplicantCommand = defineCommand({
+  meta: { name: "applicant", description: "Applicant detail + résumé for a posting you own." },
+  args: { ...READ_SINGLE_FLAGS },
+  subCommands: {
+    get: jobApplicantGetCommand,
+    resume: jobApplicantResumeCommand,
+  },
+  async run() {
+    process.stderr.write(
+      "Usage: curviate job applicant get <job_id> <applicant_id>\n" +
+      "       curviate job applicant resume <job_id> <applicant_id> -o <file>\n",
+    );
   },
 });
 
 export const jobCommand = defineCommand({
-  meta: { name: "job", description: "Public LinkedIn job posting operations." },
+  meta: { name: "job", description: "Classic LinkedIn job-posting operations." },
   args: { ...READ_SINGLE_FLAGS },
   subCommands: {
     get: jobGetCommand,
+    list: jobListCommand,
+    create: jobCreateCommand,
+    update: jobUpdateCommand,
+    budget: jobBudgetCommand,
+    publish: jobPublishCommand,
+    close: jobCloseCommand,
+    applicants: jobApplicantsCommand,
+    applicant: jobApplicantCommand,
   },
   async run() {
     process.stderr.write(
-      "Usage: curviate job get <url|id>\n",
+      "Usage: curviate job get <url|id>\n" +
+      "       curviate job list --state <DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED>\n" +
+      "       curviate job create --job-title <t> --company <c> --workplace-type <w> --location <id> --employment-status <e> --description <d> --apply-method <linkedin|external>\n" +
+      "       curviate job update <id> [<flags>]\n" +
+      "       curviate job budget <id>\n" +
+      "       curviate job publish <id> --mode <FREE|PROMOTED|PROMOTED_PLUS>\n" +
+      "       curviate job close <id>\n" +
+      "       curviate job applicants <id>\n" +
+      "       curviate job applicant get <id> <applicant_id>\n" +
+      "       curviate job applicant resume <id> <applicant_id> -o <file>\n",
     );
   },
 });
