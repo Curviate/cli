@@ -204,21 +204,23 @@ describe("company command (retrieve)", () => {
 // ---------------------------------------------------------------------------
 
 describe("company slim mode (no --verbose)", () => {
+  // Real v2 CompanyProfile shape — employee_count/employee_count_range live
+  // nested at insights.headcount/insights.headcount_range.from, the
+  // establishment date is a bare year at establishment_year, follower_count
+  // is singular, and there is no messaging field on this resource at all.
   const richCompany = {
     id: "co_123",
     name: "Acme Corp",
     public_identifier: "acme-corp",
     profile_url: "https://linkedin.com/company/acme-corp",
-    industry: "Technology",
-    employee_count: 500,
-    employee_count_range: { min: 201, max: 500, to: null },
+    industry: ["Technology"],
     website: "https://acme.com",
-    foundation_date: "2000-01-01",
-    messaging: { is_enabled: true, thread_id: "t_1", extra: "hidden" },
+    establishment_year: 2000,
     locations: [
-      { city: "Austin", country: "US", area: "TX", is_headquarter: true },
+      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true },
     ],
-    followers_count: 12000,
+    insights: { headcount: 500, headcount_range: { from: 201 } },
+    follower_count: 12000,
     viewer_permissions: { can_send_message: false },
     description: "A company description",
     activities: [{ id: "act_1" }],
@@ -237,7 +239,7 @@ describe("company slim mode (no --verbose)", () => {
     vi.restoreAllMocks();
   });
 
-  it("slim output has exactly the 12 fields", async () => {
+  it("slim output has exactly the 11 fields", async () => {
     const { runCompanyGet } = await import("../../src/commands/company.js");
     const out = makeOut();
 
@@ -245,7 +247,12 @@ describe("company slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(Object.keys(result)).toHaveLength(12);
+    expect(Object.keys(result)).toHaveLength(11);
+    expect(result["employee_count"]).toBe(500);
+    expect(result["employee_count_range"]).toEqual({ from: 201 });
+    expect(result["establishment_year"]).toBe(2000);
+    expect(result["follower_count"]).toBe(12000);
+    expect(result).not.toHaveProperty("messaging");
   });
 
   it("headquarters synthesized from is_headquarter location", async () => {
@@ -256,7 +263,7 @@ describe("company slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result["headquarters"]).toEqual({ city: "Austin", country: "US", area: "TX" });
+    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701" });
   });
 });
 

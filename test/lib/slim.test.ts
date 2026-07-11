@@ -79,17 +79,20 @@ describe("synthesizeCurrentPosition", () => {
 // ---------------------------------------------------------------------------
 
 describe("synthesizeHeadquarters", () => {
-  it("finds is_headquarter:true entry and extracts city/country/area", () => {
+  // Real v2 CompanyProfile `locations[]` item shape (per the SDK's generated
+  // types): { is_headquarter?, country_code?, city?, postal_code? }. There is
+  // no `country` and no `area` key on the real wire.
+  it("finds is_headquarter:true entry and extracts city/country_code/postal_code", () => {
     const result = synthesizeHeadquarters([
-      { city: "Berlin", country: "DE", area: "Berlin", is_headquarter: false },
-      { city: "Munich", country: "DE", area: "Bavaria", is_headquarter: true, zip: "80333" },
+      { city: "Berlin", country_code: "DE", postal_code: "10115", is_headquarter: false },
+      { city: "Munich", country_code: "DE", postal_code: "80333", is_headquarter: true },
     ]);
-    expect(result).toEqual({ city: "Munich", country: "DE", area: "Bavaria" });
+    expect(result).toEqual({ city: "Munich", country_code: "DE", postal_code: "80333" });
   });
 
   it("no is_headquarter:true entry → null", () => {
     const result = synthesizeHeadquarters([
-      { city: "Paris", country: "FR", area: "IDF", is_headquarter: false },
+      { city: "Paris", country_code: "FR", postal_code: "75001", is_headquarter: false },
     ]);
     expect(result).toBeNull();
   });
@@ -98,19 +101,28 @@ describe("synthesizeHeadquarters", () => {
     expect(synthesizeHeadquarters([])).toBeNull();
   });
 
-  it("area absent in hq → area null", () => {
+  it("postal_code absent in hq → postal_code null", () => {
     const result = synthesizeHeadquarters([
-      { city: "Austin", country: "US", is_headquarter: true },
+      { city: "Austin", country_code: "US", is_headquarter: true },
     ]);
-    expect(result!.area).toBeNull();
+    expect(result!.postal_code).toBeNull();
   });
 
-  it("does not leak extra keys (zip, etc.) into output", () => {
+  it("country_code absent in hq → country_code null", () => {
     const result = synthesizeHeadquarters([
-      { city: "Austin", country: "US", area: "TX", is_headquarter: true, zip: "78701" },
+      { city: "Austin", postal_code: "78701", is_headquarter: true },
+    ]);
+    expect(result!.country_code).toBeNull();
+  });
+
+  it("does not leak extra keys, and never re-introduces the fictitious v1 country/area keys", () => {
+    const result = synthesizeHeadquarters([
+      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true, zip: "78701" },
     ]);
     expect(result).not.toHaveProperty("zip");
     expect(result).not.toHaveProperty("is_headquarter");
+    expect(result).not.toHaveProperty("country");
+    expect(result).not.toHaveProperty("area");
   });
 });
 
@@ -334,40 +346,51 @@ describe("slimProfile", () => {
 // ---------------------------------------------------------------------------
 
 describe("slimCompany", () => {
+  // Real v2 CompanyProfile shape (`GET /v1/{account_id}/companies/{identifier}`,
+  // per the SDK's generated types) — `employee_count`/`employee_count_range`
+  // live nested at `insights.headcount`/`insights.headcount_range.from` (no
+  // `to` — the range is documented open-ended-high), the establishment date
+  // is a bare year at `establishment_year` (not a `foundation_date` string),
+  // the follower count key is singular `follower_count`, and there is no
+  // `messaging` field anywhere on this resource.
   const fullCompany = {
+    object: "company_profile",
     id: "co_123",
     name: "Acme Corp",
     public_identifier: "acme-corp",
     profile_url: "https://linkedin.com/company/acme-corp",
-    industry: "Technology",
-    employee_count: 500,
-    employee_count_range: { min: 201, max: 500, to: null },
+    industry: ["Technology"],
     website: "https://acme.com",
-    foundation_date: "2000-01-01",
-    messaging: { is_enabled: true, thread_id: "thread_1", extra: "hidden" },
+    establishment_year: 2000,
+    follower_count: 12000,
     locations: [
-      { city: "Austin", country: "US", area: "TX", is_headquarter: true, zip: "78701" },
-      { city: "New York", country: "US", area: "NY", is_headquarter: false },
+      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true },
+      { city: "New York", country_code: "US", postal_code: "10001", is_headquarter: false },
     ],
-    followers_count: 12000,
-    viewer_permissions: { can_send_message: false },
+    insights: {
+      headcount: 500,
+      headcount_range: { from: 201 },
+      average_tenure: 3.2,
+    },
     description: "A company description",
+    tagline: "Building the future",
+    is_active: true,
+    viewer_permissions: { can_send_message: false },
     activities: [{ id: "act_1" }],
   };
 
-  it("projects exactly the 12 slim fields", () => {
+  it("projects exactly the 11 slim fields", () => {
     const result = slimCompany(fullCompany);
-    expect(Object.keys(result)).toHaveLength(12);
+    expect(Object.keys(result)).toHaveLength(11);
     expect(Object.keys(result).sort()).toEqual(
       [
         "employee_count",
         "employee_count_range",
-        "followers_count",
-        "foundation_date",
+        "establishment_year",
+        "follower_count",
         "headquarters",
         "id",
         "industry",
-        "messaging",
         "name",
         "profile_url",
         "public_identifier",
@@ -376,52 +399,96 @@ describe("slimCompany", () => {
     );
   });
 
-  it("messaging projected to {is_enabled} only (not full object)", () => {
+  it("excludes messaging entirely — no messaging field exists on the real v2 schema", () => {
     const result = slimCompany(fullCompany);
-    expect(result["messaging"]).toEqual({ is_enabled: true });
-    const msg = result["messaging"] as Record<string, unknown>;
-    expect(msg["thread_id"]).toBeUndefined();
-    expect(msg["extra"]).toBeUndefined();
+    expect(result).not.toHaveProperty("messaging");
   });
 
-  it("headquarters synthesized from is_headquarter location", () => {
+  it("employee_count sourced from insights.headcount (not a nonexistent top-level employee_count)", () => {
     const result = slimCompany(fullCompany);
-    expect(result["headquarters"]).toEqual({ city: "Austin", country: "US", area: "TX" });
+    expect(result["employee_count"]).toBe(500);
+  });
+
+  it("employee_count_range sourced from insights.headcount_range, {from} only — no to is invented", () => {
+    const result = slimCompany(fullCompany);
+    expect(result["employee_count_range"]).toEqual({ from: 201 });
+    expect(result["employee_count_range"]).not.toHaveProperty("to");
+    expect(result["employee_count_range"]).not.toHaveProperty("min");
+    expect(result["employee_count_range"]).not.toHaveProperty("max");
+  });
+
+  it("employee_count / employee_count_range null when insights is absent", () => {
+    const withoutInsights = Object.fromEntries(
+      Object.entries(fullCompany).filter(([k]) => k !== "insights"),
+    );
+    const result = slimCompany(withoutInsights);
+    expect(result["employee_count"]).toBeNull();
+    expect(result["employee_count_range"]).toBeNull();
+  });
+
+  it("employee_count_range.from is null when headcount_range is present but empty", () => {
+    const result = slimCompany({ ...fullCompany, insights: { headcount: 500, headcount_range: {} } });
+    expect(result["employee_count_range"]).toEqual({ from: null });
+  });
+
+  it("establishment_year sourced from the real establishment_year field (not the fictitious foundation_date)", () => {
+    const result = slimCompany(fullCompany);
+    expect(result["establishment_year"]).toBe(2000);
+    expect(result).not.toHaveProperty("foundation_date");
+  });
+
+  it("follower_count sourced from the real singular follower_count key", () => {
+    const result = slimCompany(fullCompany);
+    expect(result["follower_count"]).toBe(12000);
+    expect(result).not.toHaveProperty("followers_count");
+  });
+
+  it("industry passes through the real array shape unchanged", () => {
+    const result = slimCompany(fullCompany);
+    expect(result["industry"]).toEqual(["Technology"]);
+  });
+
+  it("headquarters synthesized from is_headquarter location (city/country_code/postal_code)", () => {
+    const result = slimCompany(fullCompany);
+    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701" });
   });
 
   it("headquarters is null when no is_headquarter location", () => {
     const result = slimCompany({
       ...fullCompany,
       locations: [
-        { city: "Paris", country: "FR", area: "IDF", is_headquarter: false },
+        { city: "Paris", country_code: "FR", postal_code: "75001", is_headquarter: false },
       ],
     });
     expect(result["headquarters"]).toBeNull();
   });
 
-  it("area is null when absent in hq location", () => {
+  it("postal_code is null when absent in hq location", () => {
     const result = slimCompany({
       ...fullCompany,
-      locations: [{ city: "Berlin", country: "DE", is_headquarter: true }],
+      locations: [{ city: "Berlin", country_code: "DE", is_headquarter: true }],
     });
     const hq = result["headquarters"] as Record<string, unknown>;
-    expect(hq["area"]).toBeNull();
+    expect(hq["postal_code"]).toBeNull();
   });
 
-  it("employee_count_range preserves nullable to", () => {
-    const result = slimCompany(fullCompany);
-    const ecr = result["employee_count_range"] as Record<string, unknown>;
-    expect(ecr["to"]).toBeNull();
-    expect(ecr["min"]).toBe(201);
-    expect(ecr["max"]).toBe(500);
-  });
-
-  it("excludes viewer_permissions, description, activities, locations raw array", () => {
+  it("excludes viewer_permissions, description, tagline, is_active, activities, insights raw object, locations raw array", () => {
     const result = slimCompany(fullCompany);
     expect(result).not.toHaveProperty("viewer_permissions");
     expect(result).not.toHaveProperty("description");
+    expect(result).not.toHaveProperty("tagline");
+    expect(result).not.toHaveProperty("is_active");
     expect(result).not.toHaveProperty("activities");
+    expect(result).not.toHaveProperty("insights");
     expect(result).not.toHaveProperty("locations");
+  });
+
+  it("non-object input projects to an all-null/empty shape (never throws)", () => {
+    const result = slimCompany(null);
+    expect(result["id"]).toBeNull();
+    expect(result["employee_count"]).toBeNull();
+    expect(result["employee_count_range"]).toBeNull();
+    expect(result["headquarters"]).toBeNull();
   });
 });
 

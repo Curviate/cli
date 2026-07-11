@@ -62,12 +62,17 @@ export function synthesizeCurrentPosition(
 /**
  * Synthesize a `headquarters` object from the `locations` array.
  *
- * Finds the entry with `is_headquarter: true` and extracts `{city, country, area}`.
+ * Finds the entry with `is_headquarter: true` and extracts
+ * `{city, country_code, postal_code}` — the real v2 CompanyProfile
+ * `locations[]` item shape (per the SDK's generated types). There is no
+ * `country` and no `area` key on the real wire; `country_code` and
+ * `postal_code` are the actual fields (v1-shaped `country`/`area` were
+ * fictitious and always projected null).
  * Returns null when no headquarters entry is present.
  */
 export function synthesizeHeadquarters(
   locations: unknown[],
-): { city: string | null; country: string | null; area: string | null } | null {
+): { city: string | null; country_code: string | null; postal_code: string | null } | null {
   if (!Array.isArray(locations)) return null;
   const hq = locations.find(
     (l) => (l as Record<string, unknown>)["is_headquarter"] === true,
@@ -75,8 +80,8 @@ export function synthesizeHeadquarters(
   if (!hq) return null;
   return {
     city: (hq["city"] as string | null | undefined) ?? null,
-    country: (hq["country"] as string | null | undefined) ?? null,
-    area: (hq["area"] as string | null | undefined) ?? null,
+    country_code: (hq["country_code"] as string | null | undefined) ?? null,
+    postal_code: (hq["postal_code"] as string | null | undefined) ?? null,
   };
 }
 
@@ -636,13 +641,27 @@ export function slimJob(data: unknown): Record<string, unknown> {
 /**
  * Slim-default projection for `company <id>`.
  *
- * Exact fields returned (12):
+ * Exact fields returned (11):
  *   id, name, public_identifier, profile_url, industry,
- *   employee_count, employee_count_range, website, foundation_date,
- *   messaging ({is_enabled}), headquarters ({city,country,area}|null),
- *   followers_count
+ *   employee_count, employee_count_range, website, establishment_year,
+ *   headquarters ({city,country_code,postal_code}|null), follower_count
  *
- * `messaging` is projected to `{ is_enabled }` only.
+ * v1-drift fixes (real v2 CompanyProfile shape — verified against the SDK's
+ * generated types, the wire truth):
+ *   - `employee_count` ← `insights.headcount` (was reading a nonexistent
+ *     top-level `employee_count`, always null).
+ *   - `employee_count_range` ← `insights.headcount_range`, projected to
+ *     `{ from }` only — the real range has no upper bound at all (documented
+ *     open-ended-high); no `to` is invented.
+ *   - `foundation_date` (a fictitious key, always null) → renamed
+ *     `establishment_year`, the real field — a bare year number (e.g. 2000),
+ *     not a date string, so the old "date" name would have misdescribed the
+ *     value even pointed at the right source.
+ *   - `followers_count` → renamed `follower_count` — the real key is
+ *     singular.
+ *   - `messaging`: REMOVED — no `messaging` field exists anywhere on the
+ *     real schema (was permanently `{is_enabled: false}`).
+ *
  * `headquarters` is synthesized from `locations` via `synthesizeHeadquarters`.
  * Returns `null` when no headquarters location is present.
  */
@@ -651,13 +670,22 @@ export function slimCompany(data: unknown): Record<string, unknown> {
     ? data
     : {}) as Record<string, unknown>;
 
-  // Project messaging to {is_enabled} only
-  const rawMessaging = (d["messaging"] !== null && d["messaging"] !== undefined && typeof d["messaging"] === "object")
-    ? (d["messaging"] as Record<string, unknown>)
-    : null;
-  const messaging = {
-    is_enabled: (rawMessaging?.["is_enabled"] as boolean | null | undefined) ?? false,
-  };
+  const rawInsights =
+    d["insights"] !== null && d["insights"] !== undefined && typeof d["insights"] === "object"
+      ? (d["insights"] as Record<string, unknown>)
+      : null;
+
+  const rawHeadcountRange =
+    rawInsights?.["headcount_range"] !== null &&
+    rawInsights?.["headcount_range"] !== undefined &&
+    typeof rawInsights?.["headcount_range"] === "object"
+      ? (rawInsights["headcount_range"] as Record<string, unknown>)
+      : null;
+
+  const employeeCountRange =
+    rawHeadcountRange !== null
+      ? { from: (rawHeadcountRange["from"] as number | null | undefined) ?? null }
+      : null;
 
   // Synthesize headquarters from locations
   const rawLocations = Array.isArray(d["locations"])
@@ -671,12 +699,11 @@ export function slimCompany(data: unknown): Record<string, unknown> {
     public_identifier: d["public_identifier"] ?? null,
     profile_url: d["profile_url"] ?? null,
     industry: d["industry"] ?? null,
-    employee_count: d["employee_count"] ?? null,
-    employee_count_range: d["employee_count_range"] ?? null,
+    employee_count: (rawInsights?.["headcount"] as number | null | undefined) ?? null,
+    employee_count_range: employeeCountRange,
     website: d["website"] ?? null,
-    foundation_date: d["foundation_date"] ?? null,
-    messaging,
+    establishment_year: d["establishment_year"] ?? null,
     headquarters,
-    followers_count: d["followers_count"] ?? null,
+    follower_count: d["follower_count"] ?? null,
   };
 }
