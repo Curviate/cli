@@ -78,7 +78,10 @@ describe("--all truncation contract — structural regression guard", () => {
       for (const m of matches) {
         // Look at the next ~200 chars after the call — the options block is
         // small (maxPages + out, at most a couple of lines).
-        const window = content.slice(m.index, m.index + 200);
+        const window = content.slice(m.index, m.index + 220);
+        // Documented exception: an aggregate call site (e.g. the job list
+        // --state ALL union) owns its own output and marks itself opt-out.
+        if (/union-aggregate-no-out/.test(window)) continue;
         if (!/\bout\b/.test(window)) {
           offenders.push(`${file} near offset ${m.index}: streamAll(...) call site has no \`out\` in its options`);
         }
@@ -95,9 +98,10 @@ describe("--all truncation contract — structural regression guard", () => {
       const content = await readFile(join(commandsDir, file), "utf8");
       const matches = [...content.matchAll(/streamAll\(/g)];
       for (const m of matches) {
-        // The options block is small; pageDelayMs sits alongside maxPages/out.
+        // The options block is small; pageDelayMs sits alongside maxPages/out
+        // (either as `pageDelayMs: …` or as an object shorthand).
         const window = content.slice(m.index, m.index + 220);
-        if (!/pageDelayMs\s*:/.test(window)) {
+        if (!/pageDelayMs\b/.test(window)) {
           offenders.push(`${file} near offset ${m.index}: streamAll(...) call site does not thread \`pageDelayMs\``);
         }
       }

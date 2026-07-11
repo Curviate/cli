@@ -3,7 +3,7 @@
  *
  * Subcommands:
  *   job get <url|id>                             — retrieve one public job posting (read)
- *   job list --state <s>                         — list own postings by state (read, paginated)
+ *   job list --state <s|ALL>                     — list own postings by state (ALL = client-side union, read, paginated)
  *   job create <flags>                           — create a draft posting (write)
  *   job update <id> <flags>                      — partial update of a posting (write)
  *   job budget <id>                              — price a publish before committing money (read)
@@ -33,7 +33,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags, ndjsonModeNotice, DEFAULT_PAGE_DELAY_MS } from "../lib/paginate.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import { slimJob } from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
@@ -283,12 +283,19 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
   rejectPreviewOnRead(flags.preview, out);
   const accountId = requireAccount(flags.account, out);
   const state = requireFlag(flags.state, "--state", out);
-  requireEnum(state, JOB_STATES, "--state", out);
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const pageDelayMs = pageDelayFromFlags(flags);
+
+  // --state ALL → a best-effort client-side union over every enum state.
+  if (state === "ALL") {
+    await runJobListAllStates(ns, flags, out, outOpts, { all, maxPages, pageDelayMs });
+    return;
+  }
+  requireEnum(state, JOB_STATES, "--state", out);
 
   const base: { state: string; limit?: number; cursor?: string } = { state };
   if (flags.limit) base.limit = parseInt(flags.limit, 10);
@@ -323,6 +330,96 @@ export async function runJobList(client: Curviate, flags: JobFlags, out: OutputS
         out.stderr.write(stateFilterDroppedNote(dropped, result.items?.length ?? 0, state));
       }
       renderSuccess({ ...result, items: filtered }, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** A modest inter-request pause reused between per-state fetches in a union. */
+function pace(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+const JOB_LIST_UNION_CAVEAT =
+  "note: --state ALL is a best-effort client-side union over DRAFT/OPEN/CLOSED/REVIEW/SUSPENDED. " +
+  "LinkedIn's per-state filter is best-effort, so each state is queried, its items are re-filtered against their own state, " +
+  "and the results are merged and de-duplicated by id. There is no unified pagination cursor — each state is walked " +
+  "independently and --max-pages applies per state.\n";
+
+/** The stable id of a job-list item (for cross-state de-duplication), if present. */
+function jobItemId(item: unknown): string | undefined {
+  const id = (item as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+/**
+ * Run `job list --state ALL` — a best-effort client-side union over every enum
+ * state. Each state is queried and re-filtered against its own `state` (LinkedIn's
+ * filter is best-effort), then results are merged and de-duplicated by id. A
+ * modest pause separates the per-state fetches (pacing). With `--all`, each
+ * state's pages are streamed as NDJSON and de-duplicated across the whole union;
+ * without it, the first page of each state is merged into one envelope (no
+ * unified cursor).
+ */
+async function runJobListAllStates(
+  ns: AccountNs,
+  flags: JobFlags,
+  out: OutputStreams,
+  outOpts: ReturnType<typeof resolveOutputOpts>,
+  opts: { all: boolean; maxPages: number; pageDelayMs: number | undefined },
+): Promise<void> {
+  const { all, maxPages, pageDelayMs } = opts;
+  const betweenStatesDelay = pageDelayMs ?? DEFAULT_PAGE_DELAY_MS;
+  const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
+  const seen = new Set<string>();
+
+  try {
+    if (all) {
+      // The union owns the NDJSON notice + the caveat + cross-state dedupe; the
+      // per-state streamAll gets no `out` (a per-state truncation sentinel would
+      // be misleading inside a merged stream).
+      out.stderr.write(ndjsonModeNotice());
+      out.stderr.write(JOB_LIST_UNION_CAVEAT);
+      for (let i = 0; i < JOB_STATES.length; i++) {
+        const s = JOB_STATES[i]!;
+        const base: { state: string; limit?: number } = { state: s };
+        if (limit !== undefined) base.limit = limit;
+        const fn = (p: typeof base) =>
+          ns.jobs.list(p as JobListQuery).then((page) => ({
+            ...page,
+            items: filterJobsByState(page.items, s).items,
+          }));
+        // The union owns its own NDJSON notice, caveat, and cross-state dedupe,
+        // so this per-state streamAll deliberately gets no `out` (a per-state
+        // truncation sentinel would be misleading in a merged stream). The
+        // marker below is a documented exception for the call-site gate.
+        for await (const item of streamAll(fn, base, { maxPages, pageDelayMs /* union-aggregate-no-out */ })) {
+          const id = jobItemId(item);
+          if (id !== undefined && seen.has(id)) continue;
+          if (id !== undefined) seen.add(id);
+          out.stdout.write(JSON.stringify(item) + "\n");
+        }
+        if (i < JOB_STATES.length - 1) await pace(betweenStatesDelay);
+      }
+    } else {
+      out.stderr.write(JOB_LIST_UNION_CAVEAT);
+      const merged: JobListItem[] = [];
+      for (let i = 0; i < JOB_STATES.length; i++) {
+        const s = JOB_STATES[i]!;
+        const base: { state: string; limit?: number } = { state: s };
+        if (limit !== undefined) base.limit = limit;
+        const page = await ns.jobs.list(base as JobListQuery);
+        const { items: filtered } = filterJobsByState(page.items, s);
+        for (const item of filtered) {
+          const id = jobItemId(item);
+          if (id !== undefined && seen.has(id)) continue;
+          if (id !== undefined) seen.add(id);
+          merged.push(item);
+        }
+        if (i < JOB_STATES.length - 1) await pace(betweenStatesDelay);
+      }
+      renderSuccess({ object: "list", items: merged, cursor: null }, outOpts, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -621,7 +718,7 @@ const JOB_BODY_FLAGS = {
   "workplace-type": { type: "string" as const, description: "Workplace arrangement: ON_SITE|HYBRID|REMOTE." },
   location: { type: "string" as const, description: "A LOCATION parameter id (from search parameters)." },
   "employment-status": { type: "string" as const, description: "Employment type: FULL_TIME|PART_TIME|CONTRACT|TEMPORARY|OTHER|VOLUNTEER|INTERNSHIP." },
-  description: { type: "string" as const, description: "Full job description (min 200 chars)." },
+  description: { type: "string" as const, description: "Full job description (required; minimum 200 characters — enforced server-side)." },
   "apply-method": { type: "string" as const, description: "How candidates apply: linkedin|external." },
   "notification-email": { type: "string" as const, description: "Email notified of new applicants (required when --apply-method is linkedin)." },
   "website-url": { type: "string" as const, description: "External apply URL (required when --apply-method is external)." },
@@ -643,7 +740,7 @@ const jobListCommand = defineCommand({
   meta: { name: "list", description: "List your own classic job postings by state." },
   args: {
     ...GLOBAL_FLAGS,
-    state: { type: "string", description: "Filter by state (required): DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED. Best-effort on LinkedIn's side -- verify item.state. The CLI re-filters returned items against their own state (dropped items are noted on stderr), but the upstream page walk itself is unfiltered, so --all may fetch more pages than the filtered item count implies.", required: true },
+    state: { type: "string", description: "Filter by state (required): DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED, or ALL for a best-effort client-side union across every state (each state queried, re-filtered, merged and de-duplicated by id; no unified cursor). Best-effort on LinkedIn's side -- verify item.state. The CLI re-filters returned items against their own state (dropped items are noted on stderr), but the upstream page walk itself is unfiltered, so --all may fetch more pages than the filtered item count implies.", required: true },
   },
   async run({ args }) {
     await withClient(args as JobFlags, runJobList);
@@ -691,7 +788,7 @@ const jobPublishCommand = defineCommand({
     id: { type: "positional", description: "Job id to publish." },
     mode: { type: "string", description: "Publish mode (required): FREE|PROMOTED|PROMOTED_PLUS.", required: true },
     "budget-currency": { type: "string", description: "ISO-4217 currency (required for a paid publish), e.g. EUR." },
-    "budget-amount": { type: "string", description: "Budget amount (required for a paid publish)." },
+    "budget-amount": { type: "string", description: "Budget amount — a non-negative number (required for a paid publish)." },
     "budget-scope": { type: "string", description: "Budget scope (required for a paid publish): DAILY|TOTAL." },
   },
   async run({ args }) {
@@ -779,7 +876,7 @@ export const jobCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate job get <url|id>\n" +
-      "       curviate job list --state <DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED>\n" +
+      "       curviate job list --state <DRAFT|OPEN|CLOSED|REVIEW|SUSPENDED|ALL>\n" +
       "       curviate job create --job-title <t> --company <c> --workplace-type <w> --location <id> --employment-status <e> --description <d> --apply-method <linkedin|external>\n" +
       "       curviate job update <id> [<flags>]\n" +
       "       curviate job budget <id>\n" +
