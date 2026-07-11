@@ -51,9 +51,11 @@ describe("lib/client — createClient factory", () => {
 
   it("factory is the only construction point — returns a Curviate instance", () => {
     const client = createClient({ apiKey: "rdc_live_K" });
-    // Has the expected resource namespaces.
+    // v2 mounts only the root-scoped namespaces on the client; the rest are
+    // reached through the account-scoped accessor.
     expect(client).toHaveProperty("accounts");
-    expect(client).toHaveProperty("messaging");
-    expect(client).toHaveProperty("profiles");
+    expect(client).toHaveProperty("auth");
+    expect(client).toHaveProperty("webhooks");
+    expect(typeof client.account).toBe("function");
   });
 });

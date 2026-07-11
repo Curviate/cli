@@ -12,19 +12,24 @@ import type { Mock } from "vitest";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Minimal account-scoped namespace stub. */
+/** Minimal account-scoped namespace stub (v2 SDK surface). */
 function makeAccountNs() {
   return {
-    profiles: {
-      getMe: vi.fn(),
+    users: {
       get: vi.fn(),
-      listPosts: vi.fn(),
-      listComments: vi.fn(),
-      listReactions: vi.fn(),
+      listRelations: vi.fn(),
       listFollowers: vi.fn(),
-      listConnections: vi.fn(),
-      endorse: vi.fn(),
-      getCompany: vi.fn(),
+      endorseSkill: vi.fn(),
+    },
+    posts: {
+      listUserPosts: vi.fn(),
+      listUserReactions: vi.fn(),
+    },
+    comments: {
+      listUserComments: vi.fn(),
+    },
+    companies: {
+      get: vi.fn(),
     },
   };
 }
@@ -83,30 +88,28 @@ describe("profile command — routing", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getMe as Mock).mockResolvedValue({ id: "me" });
-    (accountNs.profiles.get as Mock).mockResolvedValue({ id: "jdoe" });
-    (accountNs.profiles.listPosts as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.listComments as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.listReactions as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.listFollowers as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.listConnections as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.endorse as Mock).mockResolvedValue({ success: true });
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue({ id: "123456" });
+    (accountNs.users.get as Mock).mockResolvedValue({ id: "jdoe" });
+    (accountNs.posts.listUserPosts as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.comments.listUserComments as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.posts.listUserReactions as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.users.listFollowers as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.users.listRelations as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.users.endorseSkill as Mock).mockResolvedValue({ success: true });
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "123456" });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("profile me — calls getMe() with empty params when no --sections", async () => {
+  it("profile me — calls users.get('me') with empty params when no --sections", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runProfileMe(client as never, { account: "acc_1", json: true } as ProfileCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(accountNs.profiles.getMe).toHaveBeenCalledWith({});
-    expect(accountNs.profiles.get).not.toHaveBeenCalled();
+    expect(accountNs.users.get).toHaveBeenCalledWith("me", {});
   });
 
   it("profile me — --preview is a usage error (exit 2)", async () => {
@@ -139,24 +142,26 @@ describe("profile command — routing", () => {
     }
   });
 
-  it("profile <id> — default (no flag) calls profiles.get with resolved id", async () => {
+  it("profile <id> — default (no flag) calls users.get with resolved id", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runProfileGet(client as never, { id: "https://www.linkedin.com/in/jdoe/", account: "acc_1", json: true } as ProfileCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(accountNs.profiles.get).toHaveBeenCalledWith("jdoe", expect.objectContaining({}));
-    expect(accountNs.profiles.listPosts).not.toHaveBeenCalled();
+    expect(accountNs.users.get).toHaveBeenCalledWith("jdoe", expect.objectContaining({}));
+    expect(accountNs.posts.listUserPosts).not.toHaveBeenCalled();
   });
 
-  it("profile <id> --notify — passes notify param", async () => {
+  it("profile <id> --notify — notify is NOT forwarded (v2 users.get has no notify param)", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runProfileGet(client as never, { id: "jdoe", account: "acc_1", notify: true, json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.get).toHaveBeenCalledWith("jdoe", expect.objectContaining({ notify: true }));
+    // CLI-1: v2 users.get only accepts linkedin_sections; --notify is dropped
+    // (open re-point question for CLI-2). Guard that it is not forwarded.
+    expect(accountNs.users.get).toHaveBeenCalledWith("jdoe", {});
   });
 
   it("profile <id> --posts — calls listPosts", async () => {
@@ -165,19 +170,21 @@ describe("profile command — routing", () => {
 
     await runProfileGet(client as never, { id: "jdoe", posts: true, account: "acc_1", json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.listPosts).toHaveBeenCalledWith("jdoe", expect.any(Object));
-    expect(accountNs.profiles.get).not.toHaveBeenCalled();
+    expect(accountNs.posts.listUserPosts).toHaveBeenCalledWith("jdoe", expect.any(Object));
+    expect(accountNs.users.get).not.toHaveBeenCalled();
   });
 
-  it("profile <id> --posts --is-company (numeric id) — passes is_company: true, no slug resolution", async () => {
+  it("profile <id> --posts --is-company (numeric id) — no slug resolution, lists directly", async () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    // Use a numeric id to exercise the "bypass slug resolution" path
+    // Use a numeric id to exercise the "bypass slug resolution" path.
+    // v2 listUserPosts carries no is_company query param — the company vs. user
+    // distinction is resolved by passing the numeric company id, not a flag.
     await runProfileGet(client as never, { id: "123456", posts: true, "is-company": true, account: "acc_1", json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.getCompany).not.toHaveBeenCalled();
-    expect(accountNs.profiles.listPosts).toHaveBeenCalledWith("123456", expect.objectContaining({ is_company: true }));
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+    expect(accountNs.posts.listUserPosts).toHaveBeenCalledWith("123456", expect.any(Object));
   });
 
   it("profile <id> --comments — calls listComments", async () => {
@@ -186,7 +193,7 @@ describe("profile command — routing", () => {
 
     await runProfileGet(client as never, { id: "jdoe", comments: true, account: "acc_1", json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.listComments).toHaveBeenCalledWith("jdoe", expect.any(Object));
+    expect(accountNs.comments.listUserComments).toHaveBeenCalledWith("jdoe", expect.any(Object));
   });
 
   it("profile <id> --reactions — calls listReactions", async () => {
@@ -195,7 +202,7 @@ describe("profile command — routing", () => {
 
     await runProfileGet(client as never, { id: "jdoe", reactions: true, account: "acc_1", json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.listReactions).toHaveBeenCalledWith("jdoe", expect.any(Object));
+    expect(accountNs.posts.listUserReactions).toHaveBeenCalledWith("jdoe", expect.any(Object));
   });
 
   it("profile <id> --followers — calls listFollowers", async () => {
@@ -204,7 +211,7 @@ describe("profile command — routing", () => {
 
     await runProfileGet(client as never, { id: "jdoe", followers: true, account: "acc_1", json: true } as ProfileCommandArgs, out);
 
-    expect(accountNs.profiles.listFollowers).toHaveBeenCalledWith("jdoe", expect.any(Object));
+    expect(accountNs.users.listFollowers).toHaveBeenCalledWith("jdoe", expect.any(Object));
   });
 
   it("profile <id> read flag + --preview → usage error (exit 2)", async () => {
@@ -229,7 +236,7 @@ describe("profile command — routing", () => {
     await runProfileConnections(client as never, { account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(accountNs.profiles.listConnections).toHaveBeenCalled();
+    expect(accountNs.users.listRelations).toHaveBeenCalled();
   });
 
   it("profile connections --all — streams NDJSON over 2 pages", async () => {
@@ -237,7 +244,7 @@ describe("profile command — routing", () => {
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     // Two pages
-    (accountNs.profiles.listConnections as Mock)
+    (accountNs.users.listRelations as Mock)
       .mockResolvedValueOnce({ items: [{ id: "A" }, { id: "B" }], cursor: "c1" })
       .mockResolvedValueOnce({ items: [{ id: "C" }], cursor: null });
 
@@ -255,7 +262,7 @@ describe("profile command — routing", () => {
     const { runProfileConnections } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (accountNs.profiles.listConnections as Mock)
+    (accountNs.users.listRelations as Mock)
       .mockResolvedValueOnce({ items: [{ id: "A" }, { id: "B" }], cursor: "c1" });
 
     await runProfileConnections(client as never, { account: "acc_1", all: true, "max-pages": "1" } as SubCommandArgs, out);
@@ -276,21 +283,21 @@ describe("profile endorse — write command", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.endorse as Mock).mockResolvedValue({ success: true });
+    (accountNs.users.endorseSkill as Mock).mockResolvedValue({ success: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("endorse <id> --skill <sid> — calls endorse(id, {skill_endorsement_id})", async () => {
+  it("endorse <id> --skill <sid> — calls endorse(id, {endorsement_id})", async () => {
     const { runProfileEndorse } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     await runProfileEndorse(client as never, { id: "jdoe", skill: "skill_123", account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(accountNs.profiles.endorse).toHaveBeenCalledWith("jdoe", { skill_endorsement_id: "skill_123" });
+    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("jdoe", { endorsement_id: "skill_123" });
   });
 
   it("endorse --preview — renders preview without calling endorse", async () => {
@@ -299,10 +306,10 @@ describe("profile endorse — write command", () => {
 
     await runProfileEndorse(client as never, { id: "jdoe", skill: "skill_123", account: "acc_1", preview: true } as SubCommandArgs, out);
 
-    expect(accountNs.profiles.endorse).not.toHaveBeenCalled();
+    expect(accountNs.users.endorseSkill).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("profiles.endorse");
+    expect(parsed.method).toBe("users.endorseSkill");
   });
 
   it("endorse — resolves member URL to slug", async () => {
@@ -311,7 +318,7 @@ describe("profile endorse — write command", () => {
 
     await runProfileEndorse(client as never, { id: "https://www.linkedin.com/in/some-user/", skill: "skill_1", account: "acc_1", json: true } as SubCommandArgs, out);
 
-    expect(accountNs.profiles.endorse).toHaveBeenCalledWith("some-user", { skill_endorsement_id: "skill_1" });
+    expect(accountNs.users.endorseSkill).toHaveBeenCalledWith("some-user", { endorsement_id: "skill_1" });
   });
 });
 
@@ -345,14 +352,14 @@ describe("profile me — --sections passthrough", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getMe as Mock).mockResolvedValue({ id: "me" });
+    (accountNs.users.get as Mock).mockResolvedValue({ id: "me" });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("--sections 'experience,education' calls getMe with linkedin_sections array", async () => {
+  it("--sections 'experience,education' calls users.get('me') with linkedin_sections array", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -362,12 +369,13 @@ describe("profile me — --sections passthrough", () => {
       out,
     );
 
-    expect(accountNs.profiles.getMe).toHaveBeenCalledWith(
+    expect(accountNs.users.get).toHaveBeenCalledWith(
+      "me",
       expect.objectContaining({ linkedin_sections: ["experience", "education"] }),
     );
   });
 
-  it("--sections '*' calls getMe with linkedin_sections:['*']", async () => {
+  it("--sections '*' calls users.get('me') with linkedin_sections:['*']", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -377,7 +385,8 @@ describe("profile me — --sections passthrough", () => {
       out,
     );
 
-    expect(accountNs.profiles.getMe).toHaveBeenCalledWith(
+    expect(accountNs.users.get).toHaveBeenCalledWith(
+      "me",
       expect.objectContaining({ linkedin_sections: ["*"] }),
     );
   });
@@ -401,7 +410,7 @@ describe("profile me — --sections passthrough", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(accountNs.profiles.getMe).not.toHaveBeenCalled();
+    expect(accountNs.users.get).not.toHaveBeenCalled();
   });
 });
 
@@ -412,7 +421,7 @@ describe("profile <id> — --sections passthrough", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.get as Mock).mockResolvedValue({ id: "jdoe" });
+    (accountNs.users.get as Mock).mockResolvedValue({ id: "jdoe" });
   });
 
   afterEach(() => {
@@ -429,7 +438,7 @@ describe("profile <id> — --sections passthrough", () => {
       out,
     );
 
-    expect(accountNs.profiles.get).toHaveBeenCalledWith(
+    expect(accountNs.users.get).toHaveBeenCalledWith(
       "jdoe",
       expect.objectContaining({ linkedin_sections: ["experience"] }),
     );
@@ -454,7 +463,7 @@ describe("profile <id> — --sections passthrough", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(accountNs.profiles.get).not.toHaveBeenCalled();
+    expect(accountNs.users.get).not.toHaveBeenCalled();
   });
 });
 
@@ -486,7 +495,7 @@ describe("profile me — slim mode (no --verbose)", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getMe as Mock).mockResolvedValue(richProfile);
+    (accountNs.users.get as Mock).mockResolvedValue(richProfile);
   });
 
   afterEach(() => {
@@ -538,7 +547,7 @@ describe("profile me — --verbose mode", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.getMe as Mock).mockResolvedValue(richProfile);
+    (accountNs.users.get as Mock).mockResolvedValue(richProfile);
   });
 
   afterEach(() => {
@@ -600,7 +609,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.get as Mock).mockResolvedValue(richProfile);
+    (accountNs.users.get as Mock).mockResolvedValue(richProfile);
   });
 
   afterEach(() => {
@@ -634,7 +643,7 @@ describe("profile <id> — slim mode (current_position synthesis)", () => {
     const { runProfileGet } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    (accountNs.profiles.get as Mock).mockResolvedValue({ ...richProfile, work_experience: [] });
+    (accountNs.users.get as Mock).mockResolvedValue({ ...richProfile, work_experience: [] });
 
     await runProfileGet(
       client as never,
@@ -675,8 +684,8 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
   beforeEach(() => {
     accountNs = makeAccountNs();
     client = makeClient(accountNs);
-    (accountNs.profiles.listPosts as Mock).mockResolvedValue({ items: [], cursor: null });
-    (accountNs.profiles.getCompany as Mock).mockResolvedValue({ id: "7890123" });
+    (accountNs.posts.listUserPosts as Mock).mockResolvedValue({ items: [], cursor: null });
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "7890123" });
   });
 
   afterEach(() => {
@@ -693,10 +702,10 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
       out,
     );
 
-    expect(accountNs.profiles.getCompany).toHaveBeenCalledWith("acme-corp");
-    expect(accountNs.profiles.listPosts).toHaveBeenCalledWith(
+    expect(accountNs.companies.get).toHaveBeenCalledWith("acme-corp");
+    expect(accountNs.posts.listUserPosts).toHaveBeenCalledWith(
       "7890123",
-      expect.objectContaining({ is_company: true }),
+      expect.any(Object),
     );
   });
 
@@ -710,10 +719,10 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
       out,
     );
 
-    expect(accountNs.profiles.getCompany).not.toHaveBeenCalled();
-    expect(accountNs.profiles.listPosts).toHaveBeenCalledWith(
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+    expect(accountNs.posts.listUserPosts).toHaveBeenCalledWith(
       "7890123",
-      expect.objectContaining({ is_company: true }),
+      expect.any(Object),
     );
   });
 
@@ -734,10 +743,10 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
     );
 
     // resolveIdentifier extracts "acme-corp" from the URL, then getCompany is called
-    expect(accountNs.profiles.getCompany).toHaveBeenCalledWith("acme-corp");
-    expect(accountNs.profiles.listPosts).toHaveBeenCalledWith(
+    expect(accountNs.companies.get).toHaveBeenCalledWith("acme-corp");
+    expect(accountNs.posts.listUserPosts).toHaveBeenCalledWith(
       "7890123",
-      expect.objectContaining({ is_company: true }),
+      expect.any(Object),
     );
   });
 
@@ -746,7 +755,7 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     const mockErr = new Error("not found");
-    (accountNs.profiles.getCompany as Mock).mockRejectedValue(mockErr);
+    (accountNs.companies.get as Mock).mockRejectedValue(mockErr);
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(
       (code?: number | string | null) => { throw new Error(`process.exit(${code})`); },
@@ -765,6 +774,6 @@ describe("profile <id> --posts --is-company — company slug resolution", () => 
       exitSpy.mockRestore();
     }
 
-    expect(accountNs.profiles.listPosts).not.toHaveBeenCalled();
+    expect(accountNs.posts.listUserPosts).not.toHaveBeenCalled();
   });
 });

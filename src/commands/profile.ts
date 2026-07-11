@@ -35,7 +35,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { slimProfileMe, slimProfile } from "../lib/slim.js";
-import type { CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError } from "@curviate/sdk";
 
 // ---------------------------------------------------------------------------
 // Types (minimal — enough for the run functions to be testable standalone)
@@ -86,22 +86,8 @@ type OutputStreams = {
   stderr: { write: (s: string) => void };
 };
 
-// Minimal client shape to avoid coupling to SDK internals in tests.
-type MinimalClient = {
-  account: (id: string) => {
-    profiles: {
-      getMe: (params?: Record<string, unknown>) => Promise<unknown>;
-      get: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      listPosts: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      listComments: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      listReactions: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      listFollowers: (id: string, params?: Record<string, unknown>) => Promise<unknown>;
-      listConnections: (params?: Record<string, unknown>) => Promise<unknown>;
-      endorse: (id: string, body: { skill_endorsement_id: string }) => Promise<unknown>;
-      getCompany: (id: string) => Promise<unknown>;
-    };
-  };
-};
+// Pagination-query shape shared by the profile list reads (limit + cursor).
+type ListQuery = { limit?: number; cursor?: string };
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -153,14 +139,14 @@ function resolveOutputOpts(flags: ProfileFlags | SubFlags) {
  * Run `profile me [--posts|--comments|--reactions|--followers]`.
  * Exported for unit-testing.
  *
- * No activity flag → getMe() with optional --sections (base behavior).
- * Activity flag set → resolves own public_identifier via getMe(), then
- * routes to the matching list method using a precedence chain
- * (posts > comments > reactions > followers).
+ * No activity flag → users.get("me") with optional --sections (base behavior).
+ * Activity flag set → the self-scoped list method for the "me" sentinel, via a
+ * precedence chain (posts > comments > reactions > followers). v2 accepts the
+ * "me" sentinel directly, so there is no getMe pre-call to resolve a slug.
  * Multiple activity flags silently use the first in precedence — no exit 2.
  */
 export async function runProfileMe(
-  client: MinimalClient,
+  client: Curviate,
   flags: ProfileFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -169,7 +155,7 @@ export async function runProfileMe(
   const hasActivityFlag = !!(flags.posts || flags.comments || flags.reactions || flags.followers);
 
   // --all is only valid when an activity flag is set (list command).
-  // On the base getMe path, reject it (getMe is not paginated).
+  // On the base users.get path, reject it (a single profile is not paginated).
   if (!hasActivityFlag) {
     rejectAllOnNonPaginated(flags.all, out);
   }
@@ -186,22 +172,18 @@ export async function runProfileMe(
   const outOpts = resolveOutputOpts(flags);
 
   if (hasActivityFlag) {
-    // Two-call pattern: getMe to resolve own public_identifier, then list call.
+    // Self-scoped activity — "me" is passed straight through to the list method.
     const all = flags.all ?? false;
     const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-    const params: Record<string, unknown> = {};
-    if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
-    if (flags.cursor) params["cursor"] = flags.cursor;
+    const params: ListQuery = {};
+    if (flags.limit) params.limit = parseInt(flags.limit, 10);
+    if (flags.cursor) params.cursor = flags.cursor;
 
     try {
-      const meResult = (await ns.profiles.getMe({})) as Record<string, unknown>;
-      const ownSlug = meResult["public_identifier"] as string;
-
       // Precedence chain: posts > comments > reactions > followers
       if (flags.posts) {
         if (all) {
-          const fn = (p: Record<string, unknown>) =>
-            ns.profiles.listPosts(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          const fn = (p: ListQuery) => ns.posts.listUserPosts("me", p);
           for await (const item of streamAll(fn, params, {
             maxPages,
             onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -209,13 +191,12 @@ export async function runProfileMe(
             out.stdout.write(JSON.stringify(item) + "\n");
           }
         } else {
-          const result = await ns.profiles.listPosts(ownSlug, params);
+          const result = await ns.posts.listUserPosts("me", params);
           renderSuccess(result, outOpts, out);
         }
       } else if (flags.comments) {
         if (all) {
-          const fn = (p: Record<string, unknown>) =>
-            ns.profiles.listComments(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          const fn = (p: ListQuery) => ns.comments.listUserComments("me", p);
           for await (const item of streamAll(fn, params, {
             maxPages,
             onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -223,13 +204,12 @@ export async function runProfileMe(
             out.stdout.write(JSON.stringify(item) + "\n");
           }
         } else {
-          const result = await ns.profiles.listComments(ownSlug, params);
+          const result = await ns.comments.listUserComments("me", params);
           renderSuccess(result, outOpts, out);
         }
       } else if (flags.reactions) {
         if (all) {
-          const fn = (p: Record<string, unknown>) =>
-            ns.profiles.listReactions(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          const fn = (p: ListQuery) => ns.posts.listUserReactions("me", p);
           for await (const item of streamAll(fn, params, {
             maxPages,
             onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -237,13 +217,12 @@ export async function runProfileMe(
             out.stdout.write(JSON.stringify(item) + "\n");
           }
         } else {
-          const result = await ns.profiles.listReactions(ownSlug, params);
+          const result = await ns.posts.listUserReactions("me", params);
           renderSuccess(result, outOpts, out);
         }
       } else if (flags.followers) {
         if (all) {
-          const fn = (p: Record<string, unknown>) =>
-            ns.profiles.listFollowers(ownSlug, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+          const fn = (p: ListQuery) => ns.users.listFollowers("me", p);
           for await (const item of streamAll(fn, params, {
             maxPages,
             onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -251,7 +230,7 @@ export async function runProfileMe(
             out.stdout.write(JSON.stringify(item) + "\n");
           }
         } else {
-          const result = await ns.profiles.listFollowers(ownSlug, params);
+          const result = await ns.users.listFollowers("me", params);
           renderSuccess(result, outOpts, out);
         }
       }
@@ -268,18 +247,17 @@ export async function runProfileMe(
     return;
   }
 
-  // Base behavior: no activity flag → getMe with optional sections.
-  // Build params — always pass an object so callers can expect getMe({})
-  const params: Record<string, unknown> = {};
+  // Base behavior: no activity flag → users.get("me") with optional sections.
+  const params: { linkedin_sections?: string[] } = {};
   if (flags.sections) {
-    params["linkedin_sections"] = flags.sections
+    params.linkedin_sections = flags.sections
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
   }
 
   try {
-    const result = await ns.profiles.getMe(params);
+    const result = await ns.users.get("me", params);
     const slimOutOpts = { ...outOpts, slim: slimProfileMe };
     renderSuccess(result, slimOutOpts, out);
   } catch (err: unknown) {
@@ -299,13 +277,13 @@ export async function runProfileMe(
  * Exported for unit-testing.
  */
 export async function runProfileGet(
-  client: MinimalClient,
+  client: Curviate,
   flags: ProfileFlags,
   out: OutputStreams,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
-  // --sections "" is a usage error on the default (profiles.get) branch.
+  // --sections "" is a usage error on the default (users.get) branch.
   // Validate early (before the try block) so the mock-throw from process.exit(2)
   // doesn't get swallowed by the catch-all error handler below.
   const isListCommand = flags.posts || flags.comments || flags.reactions || flags.followers;
@@ -329,24 +307,25 @@ export async function runProfileGet(
   try {
     // Select list method by flag
     if (flags.posts) {
-      const params: Record<string, unknown> = {};
-      if (flags["is-company"]) params["is_company"] = true;
-      if (limit !== undefined) params["limit"] = limit;
-      if (cursor) params["cursor"] = cursor;
+      const params: ListQuery = {};
+      if (limit !== undefined) params.limit = limit;
+      if (cursor) params.cursor = cursor;
 
       // Company slug resolution: when --is-company and the id is non-numeric
-      // (a slug or URL-derived slug), we need the numeric company id for listPosts.
+      // (a slug or URL-derived slug), resolve the numeric company id via
+      // companies.get before listing posts (the retained v2 retrieve method —
+      // the pre-v2 profiles.getCompany was removed upstream).
       let postId = resolvedId;
       if (flags["is-company"]) {
         const isNumericId = /^\d+$/.test(resolvedId);
         if (!isNumericId) {
-          const companyData = await ns.profiles.getCompany(resolvedId) as Record<string, unknown>;
-          postId = companyData["id"] as string;
+          const companyData = await ns.companies.get(resolvedId);
+          postId = companyData.id;
         }
       }
 
       if (all) {
-        const fn = (p: Record<string, unknown>) => ns.profiles.listPosts(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+        const fn = (p: ListQuery) => ns.posts.listUserPosts(postId, p);
         for await (const item of streamAll(fn, params, {
           maxPages,
           onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -354,16 +333,16 @@ export async function runProfileGet(
           out.stdout.write(JSON.stringify(item) + "\n");
         }
       } else {
-        const result = await ns.profiles.listPosts(postId, params);
+        const result = await ns.posts.listUserPosts(postId, params);
         renderSuccess(result, outOpts, out);
       }
     } else if (flags.comments) {
-      const params: Record<string, unknown> = {};
-      if (limit !== undefined) params["limit"] = limit;
-      if (cursor) params["cursor"] = cursor;
+      const params: ListQuery = {};
+      if (limit !== undefined) params.limit = limit;
+      if (cursor) params.cursor = cursor;
 
       if (all) {
-        const fn = (p: Record<string, unknown>) => ns.profiles.listComments(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+        const fn = (p: ListQuery) => ns.comments.listUserComments(resolvedId, p);
         for await (const item of streamAll(fn, params, {
           maxPages,
           onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -371,16 +350,16 @@ export async function runProfileGet(
           out.stdout.write(JSON.stringify(item) + "\n");
         }
       } else {
-        const result = await ns.profiles.listComments(resolvedId, params);
+        const result = await ns.comments.listUserComments(resolvedId, params);
         renderSuccess(result, outOpts, out);
       }
     } else if (flags.reactions) {
-      const params: Record<string, unknown> = {};
-      if (limit !== undefined) params["limit"] = limit;
-      if (cursor) params["cursor"] = cursor;
+      const params: ListQuery = {};
+      if (limit !== undefined) params.limit = limit;
+      if (cursor) params.cursor = cursor;
 
       if (all) {
-        const fn = (p: Record<string, unknown>) => ns.profiles.listReactions(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+        const fn = (p: ListQuery) => ns.posts.listUserReactions(resolvedId, p);
         for await (const item of streamAll(fn, params, {
           maxPages,
           onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -388,16 +367,16 @@ export async function runProfileGet(
           out.stdout.write(JSON.stringify(item) + "\n");
         }
       } else {
-        const result = await ns.profiles.listReactions(resolvedId, params);
+        const result = await ns.posts.listUserReactions(resolvedId, params);
         renderSuccess(result, outOpts, out);
       }
     } else if (flags.followers) {
-      const params: Record<string, unknown> = {};
-      if (limit !== undefined) params["limit"] = limit;
-      if (cursor) params["cursor"] = cursor;
+      const params: ListQuery = {};
+      if (limit !== undefined) params.limit = limit;
+      if (cursor) params.cursor = cursor;
 
       if (all) {
-        const fn = (p: Record<string, unknown>) => ns.profiles.listFollowers(resolvedId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+        const fn = (p: ListQuery) => ns.users.listFollowers(resolvedId, p);
         for await (const item of streamAll(fn, params, {
           maxPages,
           onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -405,23 +384,25 @@ export async function runProfileGet(
           out.stdout.write(JSON.stringify(item) + "\n");
         }
       } else {
-        const result = await ns.profiles.listFollowers(resolvedId, params);
+        const result = await ns.users.listFollowers(resolvedId, params);
         renderSuccess(result, outOpts, out);
       }
     } else {
-      // Default: profiles.get
+      // Default: users.get (accepts a member id/slug/URL, or the "me" sentinel).
       rejectAllOnNonPaginated(flags.all, out);
 
-      const params: Record<string, unknown> = {};
-      if (flags.notify) params["notify"] = true;
+      // NOTE (CLI-1): v2 users.get exposes only `linkedin_sections`; the pre-v2
+      // `notify` (signal-a-view) query has no home on this op. `--notify` is
+      // therefore not forwarded — an open re-point question for CLI-2 to settle.
+      const params: { linkedin_sections?: string[] } = {};
       if (flags.sections) {
-        params["linkedin_sections"] = flags.sections
+        params.linkedin_sections = flags.sections
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
       }
 
-      const result = await ns.profiles.get(resolvedId, params);
+      const result = await ns.users.get(resolvedId, params);
       const getOutOpts = { ...outOpts, slim: slimProfile };
       renderSuccess(result, getOutOpts, out);
     }
@@ -442,7 +423,7 @@ export async function runProfileGet(
  * Exported for unit-testing.
  */
 export async function runProfileConnections(
-  client: MinimalClient,
+  client: Curviate,
   flags: SubFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -455,13 +436,13 @@ export async function runProfileConnections(
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
   const cursor = (flags as ProfileFlags).cursor;
-  const params: Record<string, unknown> = {};
-  if (limit !== undefined) params["limit"] = limit;
-  if (cursor) params["cursor"] = cursor;
+  const params: ListQuery = {};
+  if (limit !== undefined) params.limit = limit;
+  if (cursor) params.cursor = cursor;
 
   try {
     if (all) {
-      const fn = (p: Record<string, unknown>) => ns.profiles.listConnections(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      const fn = (p: ListQuery) => ns.users.listRelations(p);
       for await (const item of streamAll(fn, params, {
         maxPages,
         onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
@@ -469,7 +450,7 @@ export async function runProfileConnections(
         out.stdout.write(JSON.stringify(item) + "\n");
       }
     } else {
-      const result = await ns.profiles.listConnections(params);
+      const result = await ns.users.listRelations(params);
       renderSuccess(result, outOpts, out);
     }
   } catch (err: unknown) {
@@ -485,12 +466,12 @@ export async function runProfileConnections(
 }
 
 /**
- * Run `profile endorse <id> --skill <skill_endorsement_id>`.
+ * Run `profile endorse <id> --skill <endorsement_id>`.
  * Write command — supports --preview.
  * Exported for unit-testing.
  */
 export async function runProfileEndorse(
-  client: MinimalClient,
+  client: Curviate,
   flags: SubFlags,
   out: OutputStreams,
 ): Promise<void> {
@@ -502,9 +483,9 @@ export async function runProfileEndorse(
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "profiles.endorse",
+      method: "users.endorseSkill",
       args: { id: resolvedId },
-      body: { skill_endorsement_id: skillId },
+      body: { endorsement_id: skillId },
       account: accountId,
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
@@ -514,7 +495,7 @@ export async function runProfileEndorse(
   const ns = client.account(accountId);
 
   try {
-    const result = await ns.profiles.endorse(resolvedId, { skill_endorsement_id: skillId });
+    const result = await ns.users.endorseSkill(resolvedId, { endorsement_id: skillId });
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     const { CurviateError } = await import("@curviate/sdk");
@@ -576,7 +557,7 @@ const profileMeCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runProfileMe(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runProfileMe(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -598,7 +579,7 @@ const profileConnectionsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runProfileConnections(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runProfileConnections(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -624,7 +605,7 @@ const profileEndorseCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runProfileEndorse(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runProfileEndorse(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -676,6 +657,6 @@ export const profileCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runProfileGet(client as unknown as MinimalClient, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runProfileGet(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });

@@ -1,15 +1,15 @@
 /**
  * profile me activity flags — --posts/--comments/--reactions/--followers routing
  *
- * `profile me --posts/--comments/--reactions/--followers` resolves own
- * public_identifier via getMe(), then routes to the matching list method.
+ * v2: `profile me --posts/--comments/--reactions/--followers` passes the "me"
+ * sentinel straight to the self-scoped list method — a single SDK call, no
+ * getMe pre-call to resolve a public identifier.
  *
- * Precedence: posts > comments > reactions > followers (multiple flags → first wins, no exit 2).
- * Exactly 2 SDK calls per invocation: getMe() + the list method.
+ * Precedence: posts > comments > reactions > followers (multiple flags → first
+ * wins, no exit 2).
  *
- * --all is still rejected when NO activity flag is present (getMe is not paginated).
- * --all is ACCEPTED when an activity flag is present (the list IS paginated) —
- * but this test focuses on the basic 2-call wiring, not full --all streaming.
+ * --all is rejected when NO activity flag is present (a single profile is not
+ * paginated); accepted when an activity flag is present (the list IS paginated).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -17,16 +17,16 @@ import type { Mock } from "vitest";
 
 function makeAccountNs() {
   return {
-    profiles: {
-      getMe: vi.fn(),
+    users: {
       get: vi.fn(),
-      listPosts: vi.fn(),
-      listComments: vi.fn(),
-      listReactions: vi.fn(),
       listFollowers: vi.fn(),
-      listConnections: vi.fn(),
-      endorse: vi.fn(),
-      getCompany: vi.fn(),
+    },
+    posts: {
+      listUserPosts: vi.fn(),
+      listUserReactions: vi.fn(),
+    },
+    comments: {
+      listUserComments: vi.fn(),
     },
   };
 }
@@ -58,27 +58,22 @@ describe("profile me activity flags", () => {
   beforeEach(() => {
     ns = makeAccountNs();
     client = makeClient(ns);
-    // getMe stub returns public_identifier
-    (ns.profiles.getMe as Mock).mockResolvedValue({
+    (ns.users.get as Mock).mockResolvedValue({
+      object: "user_profile",
+      id: "ACoXX",
       public_identifier: "raphael-redmer",
-      provider_id: "ACoXX",
       first_name: "Raphael",
       last_name: "Redmer",
-      location: "Berlin",
-      email: "r@r.ai",
-      occupation: "Founder",
-      is_premium: true,
-      organizations: [],
     });
-    (ns.profiles.listPosts as Mock).mockResolvedValue({ object: "post_list", items: [], cursor: null });
-    (ns.profiles.listComments as Mock).mockResolvedValue({ object: "comment_list", items: [], cursor: null });
-    (ns.profiles.listReactions as Mock).mockResolvedValue({ object: "reaction_list", items: [], cursor: null });
-    (ns.profiles.listFollowers as Mock).mockResolvedValue({ object: "follower_list", items: [], cursor: null });
+    (ns.posts.listUserPosts as Mock).mockResolvedValue({ object: "post_list", items: [], cursor: null });
+    (ns.comments.listUserComments as Mock).mockResolvedValue({ object: "comment_list", items: [], cursor: null });
+    (ns.posts.listUserReactions as Mock).mockResolvedValue({ object: "reaction_list", items: [], cursor: null });
+    (ns.users.listFollowers as Mock).mockResolvedValue({ object: "follower_list", items: [], cursor: null });
   });
 
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it("--posts: getMe() called once, listPosts(slug) called once, exactly 2 SDK calls", async () => {
+  it("--posts: listUserPosts('me') called once, no getMe pre-call, exactly 1 SDK call", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -88,20 +83,16 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.getMe).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.listPosts).toHaveBeenCalledWith(
-      "raphael-redmer",
-      expect.any(Object),
-    );
-    expect(ns.profiles.listPosts).toHaveBeenCalledTimes(1);
-    // Verify exactly 2 SDK calls total (getMe + listPosts)
-    expect(ns.profiles.get).not.toHaveBeenCalled();
-    expect(ns.profiles.listComments).not.toHaveBeenCalled();
-    expect(ns.profiles.listReactions).not.toHaveBeenCalled();
-    expect(ns.profiles.listFollowers).not.toHaveBeenCalled();
+    expect(ns.posts.listUserPosts).toHaveBeenCalledWith("me", expect.any(Object));
+    expect(ns.posts.listUserPosts).toHaveBeenCalledTimes(1);
+    // No base users.get pre-call, and no other list method fired.
+    expect(ns.users.get).not.toHaveBeenCalled();
+    expect(ns.comments.listUserComments).not.toHaveBeenCalled();
+    expect(ns.posts.listUserReactions).not.toHaveBeenCalled();
+    expect(ns.users.listFollowers).not.toHaveBeenCalled();
   });
 
-  it("--comments: getMe() + listComments(slug)", async () => {
+  it("--comments: listUserComments('me')", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -111,12 +102,11 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.getMe).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.listComments).toHaveBeenCalledWith("raphael-redmer", expect.any(Object));
-    expect(ns.profiles.listPosts).not.toHaveBeenCalled();
+    expect(ns.comments.listUserComments).toHaveBeenCalledWith("me", expect.any(Object));
+    expect(ns.posts.listUserPosts).not.toHaveBeenCalled();
   });
 
-  it("--reactions: getMe() + listReactions(slug)", async () => {
+  it("--reactions: listUserReactions('me')", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -126,12 +116,11 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.getMe).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.listReactions).toHaveBeenCalledWith("raphael-redmer", expect.any(Object));
-    expect(ns.profiles.listPosts).not.toHaveBeenCalled();
+    expect(ns.posts.listUserReactions).toHaveBeenCalledWith("me", expect.any(Object));
+    expect(ns.posts.listUserPosts).not.toHaveBeenCalled();
   });
 
-  it("--followers: getMe() + listFollowers(slug)", async () => {
+  it("--followers: listFollowers('me')", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -141,9 +130,8 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.getMe).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.listFollowers).toHaveBeenCalledWith("raphael-redmer", expect.any(Object));
-    expect(ns.profiles.listPosts).not.toHaveBeenCalled();
+    expect(ns.users.listFollowers).toHaveBeenCalledWith("me", expect.any(Object));
+    expect(ns.posts.listUserPosts).not.toHaveBeenCalled();
   });
 
   it("--posts --comments (multiple flags) → precedence: posts wins, no exit 2", async () => {
@@ -158,11 +146,11 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.listPosts).toHaveBeenCalledWith("raphael-redmer", expect.any(Object));
-    expect(ns.profiles.listComments).not.toHaveBeenCalled();
+    expect(ns.posts.listUserPosts).toHaveBeenCalledWith("me", expect.any(Object));
+    expect(ns.comments.listUserComments).not.toHaveBeenCalled();
   });
 
-  it("no activity flag → getMe() called, no list method called (base behavior preserved)", async () => {
+  it("no activity flag → users.get('me') called, no list method called", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
@@ -171,12 +159,12 @@ describe("profile me activity flags", () => {
       json: true,
     } as ProfileMeArgs, out);
 
-    expect(ns.profiles.getMe).toHaveBeenCalledTimes(1);
-    expect(ns.profiles.listPosts).not.toHaveBeenCalled();
-    expect(ns.profiles.listComments).not.toHaveBeenCalled();
+    expect(ns.users.get).toHaveBeenCalledWith("me", {});
+    expect(ns.posts.listUserPosts).not.toHaveBeenCalled();
+    expect(ns.comments.listUserComments).not.toHaveBeenCalled();
   });
 
-  it("--all without activity flag → still exit 2 (getMe is not paginated)", async () => {
+  it("--all without activity flag → still exit 2 (a single profile is not paginated)", async () => {
     const { runProfileMe } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
