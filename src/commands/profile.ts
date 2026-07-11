@@ -8,7 +8,7 @@
  *   profile <id> --comments                      — list comments
  *   profile <id> --reactions                     — list reactions
  *   profile <id> --followers                     — list followers
- *   profile connections                          — list connections
+ *   profile relations                            — list 1st-degree connections
  *   profile endorse <id> --skill <sid>           — endorse a skill (write)
  *
  * All subcommands are account-scoped. `<id>` passes through resolveIdentifier.
@@ -27,15 +27,20 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import { slimProfileMe, slimProfile } from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
+
+// Body type derived from the real SDK signature — a shape drift is a compile
+// error, not a latent runtime break.
+type UserUpdateBody = Parameters<ReturnType<Curviate["account"]>["users"]["update"]>[1];
 
 // ---------------------------------------------------------------------------
 // Types (minimal — enough for the run functions to be testable standalone)
@@ -79,6 +84,14 @@ type SubFlags = {
   limit?: string;
   cursor?: string;
   verbose?: boolean;
+  // profile update body flags (no --description — the v2 op has no such key)
+  headline?: string;
+  bio?: string;
+  "first-name"?: string;
+  "last-name"?: string;
+  skills?: string;
+  picture?: string;
+  "background-picture"?: string;
 };
 
 type OutputStreams = {
@@ -419,10 +432,10 @@ export async function runProfileGet(
 }
 
 /**
- * Run `profile connections [--all] [--limit] [--cursor]`.
+ * Run `profile relations [--all] [--limit] [--cursor]`.
  * Exported for unit-testing.
  */
-export async function runProfileConnections(
+export async function runProfileRelations(
   client: Curviate,
   flags: SubFlags,
   out: OutputStreams,
@@ -509,6 +522,210 @@ export async function runProfileEndorse(
   }
 }
 
+// Shared error handler for the new subcommands.
+async function handleSdkError(
+  err: unknown,
+  outOpts: ReturnType<typeof resolveOutputOpts>,
+  out: OutputStreams,
+): Promise<never> {
+  const { CurviateError } = await import("@curviate/sdk");
+  if (err instanceof CurviateError) {
+    const { getExitCode } = await import("../lib/exit-codes.js");
+    renderError(err as CurviateError, outOpts, out);
+    process.exit(getExitCode(err.code));
+  }
+  renderUnexpectedError(err, out);
+  process.exit(1);
+}
+
+/**
+ * Run `profile update` — users.update (own profile only).
+ * Write command — supports --preview. Only the provided fields change. The v2
+ * op has NO `description` key; `--description` is not defined or forwarded.
+ * `--picture`/`--background-picture` take a file path and travel as base64.
+ * `--skills` is a comma list of skill names (add-only).
+ */
+export async function runProfileUpdate(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+
+  const body: Record<string, unknown> = {};
+  if (flags["first-name"]) body.first_name = flags["first-name"];
+  if (flags["last-name"]) body.last_name = flags["last-name"];
+  if (flags.headline) body.headline = flags.headline;
+  if (flags.bio) body.bio = flags.bio;
+  if (flags.skills) {
+    body.skills = flags.skills.split(",").map((s) => s.trim()).filter(Boolean).map((name) => ({ name }));
+  }
+
+  // Load picture files (if any) before any SDK call so a bad path fails fast.
+  try {
+    if (flags.picture) {
+      const buf = await readAttachment(flags.picture);
+      body.picture = toAttachmentPayload(flags.picture, buf);
+    }
+    if (flags["background-picture"]) {
+      const buf = await readAttachment(flags["background-picture"]);
+      body.background_picture = toAttachmentPayload(flags["background-picture"], buf);
+    }
+  } catch (err: unknown) {
+    if (err instanceof AttachError) {
+      out.stderr.write(`error: ${err.message}\n`);
+      process.exit(err.exitCode);
+    }
+    throw err;
+  }
+
+  if (Object.keys(body).length === 0) {
+    out.stderr.write("error: nothing to update — pass at least one of --first-name, --last-name, --headline, --bio, --skills, --picture, --background-picture.\n");
+    process.exit(2);
+  }
+
+  if (flags.preview) {
+    // Render picture fields as a shape marker, never the raw base64 bytes.
+    const previewBody: Record<string, unknown> = { ...body };
+    if (previewBody.picture) previewBody.picture = "<base64 image>";
+    if (previewBody.background_picture) previewBody.background_picture = "<base64 image>";
+    const preview = buildPreviewOutput({ method: "users.update", args: { user_id: "me" }, body: previewBody, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    // Narrow cast at the body-argument call site: skills/picture are shaped to
+    // the generated body above.
+    const result = await ns.users.update("me", body as UserUpdateBody);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `profile follow <id>` — users.follow (bodyless write, supports --preview). */
+export async function runProfileFollow(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const resolvedId = resolveIdentifier(flags.id ?? "");
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "users.follow", args: { user_id: resolvedId }, body: {}, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.users.follow(resolvedId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `profile unfollow <id>` — users.unfollow (bodyless write, supports --preview). */
+export async function runProfileUnfollow(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const resolvedId = resolveIdentifier(flags.id ?? "");
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "users.unfollow", args: { user_id: resolvedId }, body: {}, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.users.unfollow(resolvedId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `profile followers <id>` — users.listFollowers (paginated read). */
+export async function runProfileFollowers(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const resolvedId = resolveIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params: ListQuery = {};
+  if (flags.limit) params.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) params.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: ListQuery) => ns.users.listFollowers(resolvedId, p);
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.users.listFollowers(resolvedId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/** Run `profile following <id>` — users.listFollowing (paginated read). */
+export async function runProfileFollowing(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const resolvedId = resolveIdentifier(flags.id ?? "");
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params: ListQuery = {};
+  if (flags.limit) params.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) params.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: ListQuery) => ns.users.listFollowing(resolvedId, p);
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.users.listFollowing(resolvedId, params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -561,8 +778,8 @@ const profileMeCommand = defineCommand({
   },
 });
 
-const profileConnectionsCommand = defineCommand({
-  meta: { name: "connections", description: "List your 1st-degree connections." },
+const profileRelationsCommand = defineCommand({
+  meta: { name: "relations", description: "List your 1st-degree connections." },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {
     const flags = args as ProfileFlags;
@@ -579,7 +796,7 @@ const profileConnectionsCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runProfileConnections(client, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runProfileRelations(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -609,6 +826,88 @@ const profileEndorseCommand = defineCommand({
   },
 });
 
+/** Shared config/client boilerplate for a subcommand's run(). */
+async function withClient(
+  flags: SubFlags & { "api-key"?: string; "base-url"?: string; timeout?: string; profile?: string },
+  fn: (client: Curviate, flags: SubFlags, out: OutputStreams) => Promise<void>,
+): Promise<void> {
+  const cfg = await resolveEffectiveConfig({
+    apiKey: flags["api-key"],
+    baseUrl: flags["base-url"],
+    timeout: flags.timeout,
+    account: flags.account,
+    profile: flags.profile,
+  });
+  if (!cfg.apiKey) {
+    process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+    process.exit(3);
+  }
+  const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+  const out = buildOutputStreams();
+  await fn(client, { ...flags, account: flags.account ?? cfg.account }, out);
+}
+
+const profileUpdateCommand = defineCommand({
+  meta: { name: "update", description: "Update your own profile (headline, bio, name, skills, photos)." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    headline: { type: "string", description: "New headline." },
+    bio: { type: "string", description: "New about/bio text." },
+    "first-name": { type: "string", description: "New first name." },
+    "last-name": { type: "string", description: "New last name." },
+    skills: { type: "string", description: "Comma-separated skill names to add (add-only)." },
+    picture: { type: "string", description: "New profile photo — path to an image file." },
+    "background-picture": { type: "string", description: "New cover/banner photo — path to an image file." },
+  },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileUpdate);
+  },
+});
+
+const profileFollowCommand = defineCommand({
+  meta: { name: "follow", description: "Follow a member (sends a connect request if their profile is private)." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    id: { type: "positional", description: "Member identifier (URL, slug, provider id)." },
+  },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileFollow);
+  },
+});
+
+const profileUnfollowCommand = defineCommand({
+  meta: { name: "unfollow", description: "Unfollow a member (idempotent)." },
+  args: {
+    ...WRITE_SINGLE_FLAGS,
+    id: { type: "positional", description: "Member identifier (URL, slug, provider id)." },
+  },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileUnfollow);
+  },
+});
+
+const profileFollowersCommand = defineCommand({
+  meta: { name: "followers", description: "List a member's followers (accepts 'me')." },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Member identifier (URL, slug, provider id, or 'me')." },
+  },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileFollowers);
+  },
+});
+
+const profileFollowingCommand = defineCommand({
+  meta: { name: "following", description: "List who a member follows (accepts 'me')." },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Member identifier (URL, slug, provider id, or 'me')." },
+  },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileFollowing);
+  },
+});
+
 export const profileCommand = defineCommand({
   meta: { name: "profile", description: "LinkedIn profile operations." },
   args: {
@@ -627,8 +926,13 @@ export const profileCommand = defineCommand({
   },
   subCommands: {
     me: profileMeCommand,
-    connections: profileConnectionsCommand,
+    relations: profileRelationsCommand,
     endorse: profileEndorseCommand,
+    update: profileUpdateCommand,
+    follow: profileFollowCommand,
+    unfollow: profileUnfollowCommand,
+    followers: profileFollowersCommand,
+    following: profileFollowingCommand,
   },
   async run({ args }) {
     const flags = args as ProfileFlags;
@@ -638,7 +942,10 @@ export const profileCommand = defineCommand({
       process.stderr.write(
         "Usage: curviate profile <id> [--posts|--comments|--reactions|--followers]\n" +
         "       curviate profile me\n" +
-        "       curviate profile connections\n" +
+        "       curviate profile relations\n" +
+        "       curviate profile followers <id> | following <id>\n" +
+        "       curviate profile follow <id> | unfollow <id>\n" +
+        "       curviate profile update [--headline|--bio|--first-name|--last-name|--skills|--picture]\n" +
         "       curviate profile endorse <id> --skill <sid>\n",
       );
       return;

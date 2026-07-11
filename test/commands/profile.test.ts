@@ -229,18 +229,18 @@ describe("profile command — routing", () => {
     }
   });
 
-  it("profile connections — calls listConnections()", async () => {
-    const { runProfileConnections } = await import("../../src/commands/profile.js");
+  it("profile relations — calls listRelations()", async () => {
+    const { runProfileRelations } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
-    await runProfileConnections(client as never, { account: "acc_1", json: true } as SubCommandArgs, out);
+    await runProfileRelations(client as never, { account: "acc_1", json: true } as SubCommandArgs, out);
 
     expect(client.account).toHaveBeenCalledWith("acc_1");
     expect(accountNs.users.listRelations).toHaveBeenCalled();
   });
 
-  it("profile connections --all — streams NDJSON over 2 pages", async () => {
-    const { runProfileConnections } = await import("../../src/commands/profile.js");
+  it("profile relations --all — streams NDJSON over 2 pages", async () => {
+    const { runProfileRelations } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     // Two pages
@@ -248,7 +248,7 @@ describe("profile command — routing", () => {
       .mockResolvedValueOnce({ items: [{ id: "A" }, { id: "B" }], cursor: "c1" })
       .mockResolvedValueOnce({ items: [{ id: "C" }], cursor: null });
 
-    await runProfileConnections(client as never, { account: "acc_1", all: true } as SubCommandArgs, out);
+    await runProfileRelations(client as never, { account: "acc_1", all: true } as SubCommandArgs, out);
 
     const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
     const ndjsonLines = writtenLines.filter((l) => l.trim().startsWith("{"));
@@ -258,14 +258,14 @@ describe("profile command — routing", () => {
     expect(JSON.parse(ndjsonLines[2]!)).toEqual({ id: "C" });
   });
 
-  it("profile connections --all --max-pages 1 — truncates and notes stderr", async () => {
-    const { runProfileConnections } = await import("../../src/commands/profile.js");
+  it("profile relations --all --max-pages 1 — truncates and notes stderr", async () => {
+    const { runProfileRelations } = await import("../../src/commands/profile.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
 
     (accountNs.users.listRelations as Mock)
       .mockResolvedValueOnce({ items: [{ id: "A" }, { id: "B" }], cursor: "c1" });
 
-    await runProfileConnections(client as never, { account: "acc_1", all: true, "max-pages": "1" } as SubCommandArgs, out);
+    await runProfileRelations(client as never, { account: "acc_1", all: true, "max-pages": "1" } as SubCommandArgs, out);
 
     const writtenLines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string);
     const ndjsonLines = writtenLines.filter((l) => l.trim().startsWith("{"));
