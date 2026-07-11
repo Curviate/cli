@@ -2,7 +2,6 @@
  * `curviate sales-nav` — Sales Navigator operations (tier: sn).
  *
  * Subcommands:
- *   sales-nav sync [--cursor] [--limit]                                           — sync messages (read)
  *   sales-nav search people [--keywords <k>] [--all] [--limit] [--cursor]        — search people (POST)
  *   sales-nav search companies [--keywords <k>] [--all] [--limit] [--cursor]     — search companies (POST)
  *   sales-nav search parameters --type <t>                                        — get filter parameters (read)
@@ -157,33 +156,6 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
 // ---------------------------------------------------------------------------
 // Exported run functions (testable without citty)
 // ---------------------------------------------------------------------------
-
-/**
- * Run `sales-nav sync`.
- * Read command — rejects --preview.
- */
-export async function runSalesNavSync(
-  client: Curviate,
-  flags: SalesNavFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  const params: Record<string, unknown> = {};
-  if (flags.cursor) params["cursor"] = flags.cursor;
-  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
-
-  try {
-    const result = await ns.salesNavigator.syncMessages(params);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
 
 /**
  * Run `sales-nav search people [filters…]`.
@@ -773,28 +745,6 @@ export async function runSalesNavSaveAccount(
 // Citty command definitions
 // ---------------------------------------------------------------------------
 
-const salesNavSyncCommand = defineCommand({
-  meta: { name: "sync", description: "Sync Sales Navigator message history for an account." },
-  args: { ...GLOBAL_FLAGS },
-  async run({ args }) {
-    const flags = args as SalesNavFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runSalesNavSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 const salesNavMessageNewCommand = defineCommand({
   meta: { name: "new", description: "Start a new Sales Navigator chat." },
   args: {
@@ -1168,7 +1118,6 @@ export const salesNavCommand = defineCommand({
   meta: { name: "sales-nav", description: "Sales Navigator operations (requires the Sales Navigator add-on)." },
   args: { ...GLOBAL_FLAGS },
   subCommands: {
-    sync: salesNavSyncCommand,
     message: salesNavMessageCommand,
     search: salesNavSearchCommand,
     profile: salesNavProfileCommand,
@@ -1181,8 +1130,7 @@ export const salesNavCommand = defineCommand({
   },
   async run() {
     process.stderr.write(
-      "Usage: curviate sales-nav sync\n" +
-      "       curviate sales-nav search people [--keywords <k>]\n" +
+      "Usage: curviate sales-nav search people [--keywords <k>]\n" +
       "       curviate sales-nav search companies [--keywords <k>]\n" +
       "       curviate sales-nav search parameters --type <t>\n" +
       "       curviate sales-nav search <url>\n" +

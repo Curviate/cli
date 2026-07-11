@@ -2,14 +2,16 @@
  * `curviate post` — LinkedIn post operations.
  *
  * Subcommands:
- *   post list                                              — list posts (paginated)
  *   post get <post_id>                                    — get a single post (read)
  *   post create "<text>" [--attach <file>…]              — create post (write, JSON only in v2)
- *   post comment <post_id> "<text>" [--attach <file>]    — comment on post (write, multipart)
- *   post comments <post_id>                               — list comments (paginated, read)
  *   post react <post_id> --reaction <r>                  — react to post (write, body field: reaction)
  *   post reactions <post_id>                             — list reactions (paginated, read)
+ *   post delete <post_id>                                — delete a post you own (write)
+ *   post unreact <post_id> <reaction>                    — remove your reaction (write)
+ *   post user-posts <user_id>                            — list a member's own posts (read)
+ *   post user-reactions <user_id>                        — list a member's own reactions (read)
  *
+ * Comment operations moved to the dedicated `comment` command group.
  * post_id passes through verbatim — NOT resolved via resolveIdentifier.
  * All subcommands are account-scoped.
  *
@@ -134,43 +136,6 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
 // ---------------------------------------------------------------------------
 
 /**
- * Run `post list [--all] [--limit] [--cursor]`.
- * Read command — rejects --preview.
- */
-export async function runPostList(
-  client: Curviate,
-  flags: PostFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-  const all = flags.all ?? false;
-  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const params = buildPaginationParams(flags);
-
-  try {
-    if (all) {
-      const fn = (p: Record<string, unknown>) =>
-        ns.posts.list(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
-      for await (const item of streamAll(fn, params, {
-        maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
-      })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
-      }
-    } else {
-      const result = await ns.posts.list(params);
-      renderSuccess(result, outOpts, out);
-    }
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
  * Run `post get <post_id>`.
  * Read command — rejects --preview and --all.
  */
@@ -259,115 +224,6 @@ export async function runPostCreate(
   try {
     const result = await ns.posts.create(body);
     renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
- * Run `post comment <post_id> "<text>" [--attach <file>] [--reply-to <comment_id>]`.
- * Write command — supports --preview. Multipart.
- * --reply-to → body field `comment_id` (NOT `parent_comment_id`).
- */
-export async function runPostComment(
-  client: Curviate,
-  flags: PostFlags,
-  out: OutputStreams,
-  _readStdin?: () => Promise<string>,
-): Promise<void> {
-  const accountId = requireAccount(flags.account, out);
-  const postId = flags.postId ?? "";
-  const rawText = flags.text ?? "";
-  const replyTo = flags["reply-to"];
-
-  // Resolve stdin sentinel: "-" reads all of stdin.
-  const text = await resolveTextOrStdin(rawText, out, _readStdin);
-  const attachPaths = normalizeAttachPaths(flags.attach);
-
-  // Load attachments before any preview or SDK call.
-  let attachBuffers: Buffer[] = [];
-  try {
-    attachBuffers = await Promise.all(attachPaths.map((p) => readAttachment(p)));
-  } catch (err: unknown) {
-    if (err instanceof AttachError) {
-      out.stderr.write(`error: ${err.message}\n`);
-      process.exit(err.exitCode);
-    }
-    throw err;
-  }
-
-  // Build body shared between preview and SDK call.
-  // comment_id is the confirmed field name for reply threading.
-  const body: Record<string, unknown> = { text };
-  if (replyTo) body["comment_id"] = replyTo;
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "posts.comment",
-      args: { post_id: postId },
-      body,
-      account: accountId,
-      attachments: attachBuffers.map((buf, i) => ({
-        name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
-        buffer: buf,
-      })),
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  if (attachBuffers.length > 0) {
-    body["attachments"] = attachBuffers;
-  }
-
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  try {
-    const result = await ns.posts.comment(postId, body);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
- * Run `post comments <post_id> [--reply-to <comment_id>] [--all] [--limit] [--cursor]`.
- * Read command — rejects --preview.
- * --reply-to → `comment_id` query param on the listComments call.
- */
-export async function runPostComments(
-  client: Curviate,
-  flags: PostFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const postId = flags.postId ?? "";
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-  const all = flags.all ?? false;
-  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-  const params = buildPaginationParams(flags);
-
-  // --reply-to filters replies under a specific comment
-  if (flags["reply-to"]) params["comment_id"] = flags["reply-to"];
-
-  try {
-    if (all) {
-      const fn = (p: Record<string, unknown>) =>
-        ns.posts.listComments(postId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
-      for await (const item of streamAll(fn, params, {
-        maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
-      })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
-      }
-    } else {
-      const result = await ns.posts.listComments(postId, params);
-      renderSuccess(result, outOpts, out);
-    }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -619,28 +475,6 @@ export async function runPostUserReactions(
 // Citty command definitions
 // ---------------------------------------------------------------------------
 
-const postListCommand = defineCommand({
-  meta: { name: "list", description: "List posts published by the account." },
-  args: { ...GLOBAL_FLAGS },
-  async run({ args }) {
-    const flags = args as PostFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runPostList(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 const postGetCommand = defineCommand({
   meta: { name: "get", description: "Get a post by id." },
   args: {
@@ -649,7 +483,7 @@ const postGetCommand = defineCommand({
       type: "positional",
       description:
         "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
-        "POSTID is always the post's id. To list replies to a comment, use 'post comments <post_id> --reply-to <comment_id>'.",
+        "POSTID is always the post's id. To list comments on a post, use 'comment list <post_id>'.",
     },
   },
   async run({ args }) {
@@ -700,77 +534,6 @@ const postCreateCommand = defineCommand({
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
     await runPostCreate(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
-const postCommentCommand = defineCommand({
-  meta: { name: "comment", description: "Comment on a post, or reply to a comment with --reply-to." },
-  args: {
-    // Write command: WRITE_FLAGS omits pagination/projection flags
-    ...WRITE_FLAGS,
-    postId: {
-      type: "positional",
-      description:
-        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
-        "POSTID is always the post's id; use --reply-to <comment_id> to reply to a specific comment within this post.",
-    },
-    text: { type: "positional", description: "Comment text (max ~1,250 characters per LinkedIn limits). Pass - to read from stdin." },
-    attach: { type: "string", description: "Image to attach to the comment (optional; one image per comment)." },
-    "reply-to": {
-      type: "string",
-      description: "Post as a reply to this comment id (omit for a top-level comment on the post).",
-    },
-  },
-  async run({ args }) {
-    const flags = args as PostFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runPostComment(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
-const postCommentsCommand = defineCommand({
-  meta: { name: "comments", description: "List comments on a post. Use --reply-to to fetch replies to a specific comment." },
-  args: {
-    ...GLOBAL_FLAGS,
-    postId: {
-      type: "positional",
-      description:
-        "Numeric post id, urn:li:activity:N, or full LinkedIn share URL (activity-<N>- extracted). " +
-        "POSTID is always the post's id; to fetch replies to a comment, use --reply-to <comment_id>.",
-    },
-    "reply-to": {
-      type: "string",
-      description: "Filter replies under this comment id (omit to list top-level comments on the post).",
-    },
-  },
-  async run({ args }) {
-    const flags = args as PostFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runPostComments(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -917,11 +680,8 @@ const postUserReactionsCommand = defineCommand({
 export const postCommand = defineCommand({
   meta: { name: "post", description: "Create and manage LinkedIn posts." },
   subCommands: {
-    list: postListCommand,
     get: postGetCommand,
     create: postCreateCommand,
-    comment: postCommentCommand,
-    comments: postCommentsCommand,
     react: postReactCommand,
     reactions: postReactionsCommand,
     delete: postDeleteCommand,
@@ -932,17 +692,15 @@ export const postCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate post <subcommand>\n" +
-      "  list\n" +
       "  get <post_id>\n" +
       "  create \"<text>\" [--attach <file>…]\n" +
-      "  comment <post_id> \"<text>\" [--attach <file>] [--reply-to <comment_id>]\n" +
-      "  comments <post_id> [--reply-to <comment_id>]\n" +
       "  react <post_id> --reaction <r> [--as-organization <org_id>]\n" +
       "  reactions <post_id>\n" +
       "  delete <post_id>\n" +
       "  unreact <post_id> <reaction>\n" +
       "  user-posts <user_id>\n" +
-      "  user-reactions <user_id>\n",
+      "  user-reactions <user_id>\n" +
+      "\nComment operations moved to the `comment` command group.\n",
     );
   },
 });

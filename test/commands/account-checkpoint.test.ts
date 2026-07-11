@@ -1,5 +1,5 @@
 /**
- * Guided checkpoint follow-through on `account link` / `account reconnect`.
+ * Guided checkpoint follow-through on `account link`.
  *
  * Covers the 202 checkpoint_required branch: interactive TTY resolution
  * (code prompt, 422 retry loop, chained-challenge follow-through, the
@@ -23,9 +23,6 @@ function makeClient() {
     accounts: {
       list: vi.fn(),
       get: vi.fn(),
-      createConnectLink: vi.fn(),
-      reconnect: vi.fn(),
-      createReconnectLink: vi.fn(),
       update: vi.fn(),
       disconnect: vi.fn(),
     },
@@ -136,16 +133,6 @@ function makeLinkArgs() {
   // the checkpoint-code prompt in these tests, not the password prompt.
   return {
     "seat-id": "seat_1",
-    "auth-method": "credentials",
-    email: "otp@example.com",
-    password: "test-password",
-    json: true,
-  } as AccountFlags;
-}
-
-function makeReconnectArgs() {
-  return {
-    "account-id": "acc_1",
     "auth-method": "credentials",
     email: "otp@example.com",
     password: "test-password",
@@ -484,55 +471,6 @@ describe("account link — checkpoint_required, interactive mobile_app_approval"
     expect(client.auth.pollCheckpoint).toHaveBeenCalledTimes(1);
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("checkpoint poll acc_pending_mobile");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// account reconnect — same mechanics, "reconnected" wording — spot check
-// ---------------------------------------------------------------------------
-
-describe("account reconnect — checkpoint_required, interactive OTP", () => {
-  let client: Client;
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.reconnect as Mock).mockResolvedValue(OTP_CHECKPOINT);
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("prints 'Account reconnected' (not 'linked') on completion", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const readline = vi.fn().mockResolvedValue("999999");
-    (client.auth.solveCheckpoint as Mock).mockResolvedValue({ object: "account", account_id: "acc_final", status: "active" });
-
-    await runAccountReconnect(
-      client as never,
-      makeReconnectArgs(),
-      out,
-      { isTTY: true, isOutputTTY: true, readline, sleep: noopSleep, now: constantNow },
-    );
-
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("Account reconnected: acc_final");
-  });
-
-  it("non-interactive reconnect renders the envelope and exits 12", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const exitSpy = makeExitSpy();
-    try {
-      await runAccountReconnect(
-        client as never,
-        makeReconnectArgs(),
-        out,
-        { isTTY: false, isOutputTTY: false },
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain(`process.exit(${AUTH_NEEDED})`);
-    } finally {
-      exitSpy.mockRestore();
-    }
   });
 });
 

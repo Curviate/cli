@@ -8,7 +8,6 @@
  *   webhook get <id>                   — get a single webhook (read)
  *   webhook update <id> <body…>        — update a webhook (write; --source is usage error)
  *   webhook delete <id>                — delete a webhook (write)
- *   webhook state-diff <account_id>    — get changes since last state (read)
  *   webhook verify                     — offline HMAC verification (no network)
  *
  * Root-scoped: methods live on `curviate.webhooks.*`.
@@ -340,31 +339,6 @@ export async function runWebhookDelete(
   }
 }
 
-/**
- * Run `webhook state-diff <account_id> [--cursor <c>]`.
- * Read command; account_id is verbatim (not URL-resolved).
- */
-export async function runWebhookStateDiff(
-  client: Curviate,
-  flags: WebhookFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = flags["account-id"] ?? "";
-  const outOpts = resolveOutputOpts(flags);
-
-  const query: Record<string, unknown> = {};
-  if (flags.cursor) query["cursor"] = flags.cursor;
-
-  try {
-    const result = await client.webhooks.getStateDiff(accountId, query);
-    renderSuccess(result, outOpts, out);
-  } catch (err) {
-    await handleError(err, outOpts, out);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Exported pure function for webhook verify (offline, no client)
 // ---------------------------------------------------------------------------
@@ -576,30 +550,6 @@ const webhookDeleteCommand = defineCommand({
   },
 });
 
-const webhookStateDiffCommand = defineCommand({
-  meta: { name: "state-diff", description: "Get the set of changes for an account since the last known version." },
-  args: {
-    ...GLOBAL_FLAGS,
-    "account-id": { type: "positional", description: "Account id (acc_…)." },
-  },
-  async run({ args }) {
-    const flags = args as WebhookFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runWebhookStateDiff(client, flags, out);
-  },
-});
-
 const webhookVerifyCommand = defineCommand({
   meta: { name: "verify", description: "Verify a webhook signature offline (no network call)." },
   args: {
@@ -653,13 +603,12 @@ export const webhookCommand = defineCommand({
     get: webhookGetCommand,
     update: webhookUpdateCommand,
     delete: webhookDeleteCommand,
-    "state-diff": webhookStateDiffCommand,
     verify: webhookVerifyCommand,
   },
   async run() {
     process.stderr.write(
       "Usage: curviate webhook <subcommand>\n" +
-      "  create | list | events | get | update | delete | state-diff | verify\n",
+      "  create | list | events | get | update | delete | verify\n",
     );
   },
 });

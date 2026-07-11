@@ -1,28 +1,21 @@
 /**
- * `account connect-link` browser-handoff open+wait UX and the standalone
- * `account connect-session poll` command.
+ * The standalone `account connect-session poll` command (`auth.getSession`).
  *
  * Covers:
- *   - TTY + interactive: auto-open via an injected `open` seam, then the
- *     adaptive-cadence wait loop (1000ms, then 1500ms for 30s, then 3000ms)
- *     against a mock `getConnectSession`, all terminal exits (resolved/
- *     expired/failed/timeout), the stderr status ticker vs. --json silence.
- *   - Non-TTY / --no-interactive (the agent path): NEVER opens a browser,
- *     NEVER polls, exits 0 immediately with the mint response.
- *   - --open/--no-open and --wait/--no-wait explicit overrides on a TTY.
  *   - `account connect-session poll` standalone: one-shot (default) and
- *     --wait (same loop, same terminal semantics).
- *   - Flag suppression (the single-object write convention: pagination flags
+ *     --wait (adaptive-cadence loop 1000ms, then 1500ms for 30s, then 3000ms
+ *     against a mock `getSession`, all terminal exits — resolved/expired/
+ *     failed/timeout, the stderr status ticker vs. --json silence).
+ *   - Flag suppression (the single-object read convention: pagination flags
  *     absent, --fields kept) and command registration.
  *
- * Hermetic throughout: a mock MinimalClient, injected sleep/now/open/TTY
- * seams — never a real timer, never a real browser.
+ * Hermetic throughout: a mock client, injected sleep/now/TTY seams — never a
+ * real timer.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
 import { AUTH_NEEDED } from "../../src/lib/exit-codes.js";
-import { CHECKPOINT_POLL_FAST_WINDOW_MS } from "../../src/lib/checkpoint-cadence.js";
 
 // ---------------------------------------------------------------------------
 // Client mock factory
@@ -30,9 +23,6 @@ import { CHECKPOINT_POLL_FAST_WINDOW_MS } from "../../src/lib/checkpoint-cadence
 
 function makeClient() {
   return {
-    accounts: {
-      createConnectLink: vi.fn(),
-    },
     auth: {
       getSession: vi.fn(),
     },
@@ -85,14 +75,6 @@ function makeAdvancingClock(startMs = 0) {
   return { now, sleep };
 }
 
-const MINT_RESULT = {
-  object: "hosted_auth_url",
-  url: "https://curviate.com/api/connect/deadbeef",
-  session_id: "cs_1",
-  expires_at: "2099-01-01T00:00:00.000Z",
-  seat_id: "seat_1",
-};
-
 function resolvedSession(accountId = "acc_final") {
   return {
     object: "connect_session",
@@ -110,372 +92,6 @@ const PENDING_SESSION = {
   account_id: null,
   expires_at: "2099-01-01T00:00:00.000Z",
 };
-
-// ---------------------------------------------------------------------------
-// account connect-link — TTY + interactive (open + wait)
-// ---------------------------------------------------------------------------
-
-describe("account connect-link — TTY + interactive open+wait", () => {
-  let client: Client;
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.createConnectLink as Mock).mockResolvedValue(MINT_RESULT);
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("opens the URL once, polls on the 1000/1500(x30s)/3000ms cadence, resolves -> 'Account connected', exit 0", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock).mockResolvedValue(resolvedSession());
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", purpose: "create", json: true } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-    );
-
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(open).toHaveBeenCalledWith(MINT_RESULT.url);
-    // The session_id must be passed as a STRING (it interpolates into the SDK
-    // path); an object here would stringify to `[object Object]`.
-    expect(client.auth.getSession).toHaveBeenCalledWith("cs_1");
-    expect(clock.sleep).toHaveBeenNthCalledWith(1, 1000);
-
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("Account connected: acc_final");
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(JSON.parse(written)).toMatchObject({ status: "resolved", account_id: "acc_final" });
-  });
-
-  it.each(["expired", "failed"])("terminal status %s while waiting -> exit 9", async (status) => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock).mockResolvedValue({
-      object: "connect_session",
-      session_id: "cs_1",
-      status,
-      account_id: null,
-      expires_at: "2099-01-01T00:00:00.000Z",
-    });
-
-    const exitSpy = makeExitSpy();
-    try {
-      await runAccountConnectLink(
-        client as never,
-        { "seat-id": "seat_1", json: true } as AccountFlags,
-        out,
-        { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(9)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(open).toHaveBeenCalledTimes(1);
-  });
-
-  it("--timeout elapses while still pending -> exit 12 (AUTH_NEEDED), distinct from exit 9", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock).mockResolvedValue(PENDING_SESSION);
-
-    const exitSpy = makeExitSpy();
-    try {
-      await runAccountConnectLink(
-        client as never,
-        { "seat-id": "seat_1", json: true, timeout: "500" } as AccountFlags,
-        out,
-        { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain(`process.exit(${AUTH_NEEDED})`);
-    } finally {
-      exitSpy.mockRestore();
-    }
-    // The --timeout override (500ms) elapses before the first poll response
-    // (which arrives at t=1000, after the fixed initial delay) — one call only.
-    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("with no --timeout, the wait bound defaults to the session's own expires_at", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    // expires_at (t=1500ms) falls between the first poll (t=1000, not yet
-    // expired) and the second (t=2500, past expiry) — proves the default
-    // bound is read from the response, not a hardcoded fallback.
-    (client.auth.getSession as Mock).mockResolvedValue({
-      ...PENDING_SESSION,
-      expires_at: new Date(1500).toISOString(),
-    });
-
-    const exitSpy = makeExitSpy();
-    try {
-      await runAccountConnectLink(
-        client as never,
-        { "seat-id": "seat_1", json: true } as AccountFlags,
-        out,
-        { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain(`process.exit(${AUTH_NEEDED})`);
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(client.auth.getSession).toHaveBeenCalledTimes(2);
-  });
-
-  it("the sleep-arg cadence crosses the 30s fast/slow boundary at the right elapsed threshold", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock).mockImplementation(async () => {
-      if (clock.now() >= CHECKPOINT_POLL_FAST_WINDOW_MS + 5000) {
-        return resolvedSession();
-      }
-      return PENDING_SESSION;
-    });
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-    );
-
-    const delays = clock.sleep.mock.calls.map((c) => c[0] as number);
-    expect(delays[0]).toBe(1000);
-    expect(delays).toContain(1500);
-    expect(delays).toContain(3000);
-
-    let elapsed = 0;
-    for (const d of delays) {
-      if (d === 3000) {
-        expect(elapsed).toBeGreaterThanOrEqual(CHECKPOINT_POLL_FAST_WINDOW_MS);
-        break;
-      }
-      expect(d).toBe(elapsed === 0 ? 1000 : 1500);
-      elapsed += d;
-    }
-  });
-
-  it("TTY + not --json prints a refreshing 'Waiting for the account to connect' status line to stderr while pending", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock)
-      .mockResolvedValueOnce(PENDING_SESSION)
-      .mockResolvedValueOnce(resolvedSession());
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1" } as AccountFlags, // no json:true — human/TTY path
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-    );
-
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("Waiting for the account to connect");
-    expect(stderrText).toContain("remaining");
-  });
-
-  it("non-TTY-output / --json stays silent on the status ticker until the terminal state", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock)
-      .mockResolvedValueOnce(PENDING_SESSION)
-      .mockResolvedValueOnce(resolvedSession());
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open }, // TTY true, but --json forces silence
-    );
-
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).not.toContain("Waiting for the account to connect");
-  });
-
-  it("--no-open skips opening the browser but still runs the wait loop", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-    (client.auth.getSession as Mock).mockResolvedValue(resolvedSession());
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true, open: false } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("--no-wait opens the browser but skips the wait loop, exits 0 immediately", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const clock = makeAdvancingClock();
-    const open = vi.fn().mockResolvedValue(undefined);
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true, wait: false } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, sleep: clock.sleep, now: clock.now, open },
-    );
-
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(client.auth.getSession).not.toHaveBeenCalled();
-    expect(clock.sleep).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(JSON.parse(written)).toMatchObject({ object: "hosted_auth_url", session_id: "cs_1" });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// account connect-link — non-TTY / --no-interactive (the agent path)
-// ---------------------------------------------------------------------------
-
-describe("account connect-link — non-TTY / --no-interactive (agent path)", () => {
-  let client: Client;
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.createConnectLink as Mock).mockResolvedValue(MINT_RESULT);
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("stdout non-TTY: never calls open, never schedules a timer, prints url + relay instruction + session_id, exits 0 immediately", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const open = vi.fn();
-    const sleep = vi.fn();
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", purpose: "create", json: true } as AccountFlags,
-      out,
-      { isTTY: false, isOutputTTY: true, open, sleep },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(sleep).not.toHaveBeenCalled();
-    expect(client.auth.getSession).not.toHaveBeenCalled();
-
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain(MINT_RESULT.url);
-    expect(stderrText).toContain(MINT_RESULT.session_id);
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(JSON.parse(written)).toMatchObject({
-      object: "hosted_auth_url",
-      url: MINT_RESULT.url,
-      session_id: MINT_RESULT.session_id,
-    });
-  });
-
-  it("stdin non-TTY (stdout IS a TTY): still short-circuits — either stream being non-TTY forces non-interactive", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const open = vi.fn();
-    const sleep = vi.fn();
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: false, open, sleep },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it("--no-interactive under a real TTY also never opens and exits immediately", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const open = vi.fn();
-    const sleep = vi.fn();
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true, "no-interactive": true } as AccountFlags,
-      out,
-      { isTTY: true, isOutputTTY: true, open, sleep },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it("--open is ignored under non-TTY — never calls open even when explicitly passed", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const open = vi.fn();
-    const sleep = vi.fn();
-
-    await runAccountConnectLink(
-      client as never,
-      { "seat-id": "seat_1", json: true, open: true } as AccountFlags,
-      out,
-      { isTTY: false, isOutputTTY: true, open, sleep },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it("a createConnectLink error still routes through the standard exit-code table (no open/wait attempted)", async () => {
-    const { CurviateError } = await import("@curviate/sdk");
-    (client.accounts.createConnectLink as Mock).mockRejectedValue(
-      new CurviateError({
-        code: "RESOURCE_NOT_FOUND",
-        message: "Seat not found.",
-        httpStatus: 404,
-        userFixable: true,
-        retryLikelyToSucceed: false,
-      }),
-    );
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const open = vi.fn();
-
-    const exitSpy = makeExitSpy();
-    try {
-      await runAccountConnectLink(
-        client as never,
-        { "seat-id": "seat_bad", json: true } as AccountFlags,
-        out,
-        { isTTY: true, isOutputTTY: true, open },
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(4)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(open).not.toHaveBeenCalled();
-  });
-});
 
 // ---------------------------------------------------------------------------
 // account connect-session poll
@@ -669,11 +285,13 @@ describe("account connect-session — subcommand registration", () => {
     expect(Object.keys(connectSession.subCommands)).toEqual(["poll"]);
   });
 
-  it("account command registers 'connect-session' alongside 'connect-link'", async () => {
+  it("account command registers 'connect-session' and no longer registers the removed hosted-link commands", async () => {
     const { accountCommand } = await import("../../src/commands/account.js");
     const subCmds = (accountCommand as unknown as { subCommands: Record<string, unknown> }).subCommands;
-    expect(subCmds).toHaveProperty("connect-link");
     expect(subCmds).toHaveProperty("connect-session");
+    expect(subCmds).not.toHaveProperty("connect-link");
+    expect(subCmds).not.toHaveProperty("reconnect-link");
+    expect(subCmds).not.toHaveProperty("reconnect");
   });
 });
 
@@ -683,24 +301,7 @@ describe("account connect-session — subcommand registration", () => {
 
 const PAGINATION_ONLY_FLAGS = ["limit", "cursor", "all", "max-pages"] as const;
 
-describe("account connect-link / connect-session poll — single-object write flag set", () => {
-  it("account connect-link args has no pagination-only flags, keeps --fields, has --open/--wait/--timeout", async () => {
-    const { accountCommand } = await import("../../src/commands/account.js");
-    const subCmds = (accountCommand as unknown as { subCommands: Record<string, { args?: Record<string, unknown> }> })
-      .subCommands;
-    const args = subCmds["connect-link"]?.args ?? {};
-
-    for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `connect-link args must NOT include --${flag}`).not.toHaveProperty(flag);
-    }
-    expect(args).not.toHaveProperty("idempotency-key");
-    expect(args).not.toHaveProperty("dry-run");
-    expect(args).toHaveProperty("fields");
-    expect(args).toHaveProperty("open");
-    expect(args).toHaveProperty("wait");
-    expect(args).toHaveProperty("timeout");
-  });
-
+describe("account connect-session poll — single-object read flag set", () => {
   it("account connect-session poll args has --session (required), --wait, --timeout, --fields, no pagination", async () => {
     const { accountCommand } = await import("../../src/commands/account.js");
     const subCmds = (

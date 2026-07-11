@@ -1,20 +1,20 @@
 /**
  * `account` single-resource write/checkpoint command flag suppression, and
- * the checkpoint-hint note in `link`/`reconnect` help.
+ * the checkpoint-hint note in `link` help.
  *
- * `link`, `connect-link`, `reconnect-link`, `reconnect`, `update`, `disconnect`, and
- * `checkpoint solve`/`checkpoint poll` are all single-resource mutations —
- * pagination flags (`--limit`, `--cursor`, `--all`, `--max-pages`) have no
- * meaning on a one-row response, but `--fields` is still useful to project
- * it. They use the single-object write flag set (pagination suppressed,
- * `--fields` kept) instead of the full global flag set.
+ * `link`, `update`, `disconnect`, and `checkpoint solve`/`checkpoint poll` are
+ * all single-resource mutations — pagination flags (`--limit`, `--cursor`,
+ * `--all`, `--max-pages`) have no meaning on a one-row response, but
+ * `--fields` is still useful to project it. They use the single-object write
+ * flag set (pagination suppressed, `--fields` kept) instead of the full
+ * global flag set.
  *
  * `account list` is a genuine list read and is unaffected — kept here only
  * as a negative control so a future regression shows up immediately.
  *
- * `link`/`reconnect` also carry a one-line note in their description about
- * the checkpoint-required path: an interactive prompt on a TTY, or a
- * distinct exit code plus a follow-up command off one.
+ * `link` also carries a one-line note in its description about the
+ * checkpoint-required path: an interactive prompt on a TTY, or a distinct
+ * exit code plus a follow-up command off one.
  *
  * Strategy: inspect the `args`/`meta` on each subcommand definition
  * directly. `defineCommand` is an identity function in citty, so
@@ -35,7 +35,7 @@ async function loadAccountSubCommands(): Promise<SubCommandMap> {
   return (accountCommand as unknown as { subCommands: SubCommandMap }).subCommands;
 }
 
-const SINGLE_WRITE_COMMANDS = ["link", "connect-link", "reconnect-link", "reconnect", "update", "disconnect"] as const;
+const SINGLE_WRITE_COMMANDS = ["link", "update", "disconnect"] as const;
 
 describe("account single-resource write commands — pagination flags suppressed, --fields kept", () => {
   for (const name of SINGLE_WRITE_COMMANDS) {
@@ -104,23 +104,13 @@ describe("account list — negative control (list reads keep all pagination flag
   });
 });
 
-describe("account link / reconnect — checkpoint-required hint in description", () => {
+describe("account link — checkpoint-required hint in description", () => {
   it("account link description mentions the checkpoint exit code and follow-up command", async () => {
     const subCmds = await loadAccountSubCommands();
     const description = subCmds["link"]?.meta?.description ?? "";
 
     expect(description, "account link description should mention exit code 12").toMatch(/exits? 12/i);
     expect(description, "account link description should point at `account checkpoint solve`").toMatch(
-      /checkpoint solve/,
-    );
-  });
-
-  it("account reconnect description mentions the checkpoint exit code and follow-up command", async () => {
-    const subCmds = await loadAccountSubCommands();
-    const description = subCmds["reconnect"]?.meta?.description ?? "";
-
-    expect(description, "account reconnect description should mention exit code 12").toMatch(/exits? 12/i);
-    expect(description, "account reconnect description should point at `account checkpoint solve`").toMatch(
       /checkpoint solve/,
     );
   });

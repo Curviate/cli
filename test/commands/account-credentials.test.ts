@@ -5,7 +5,7 @@
  * the invariant that a resolved secret reaches only the SDK request body
  * (never stdout/stderr/`--json`/`--preview`/error output).
  *
- * Covers `account link`, `account reconnect`, `account update`.
+ * Covers `account link`, `account update`.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Mock } from "vitest";
@@ -13,7 +13,6 @@ import type { Mock } from "vitest";
 function makeClient() {
   return {
     accounts: {
-      reconnect: vi.fn(),
       update: vi.fn(),
     },
     auth: {
@@ -96,40 +95,6 @@ describe("account credentials — env-var precedence", () => {
     );
     expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "ENV_FALLBACK" } }),
-    );
-  });
-
-  it("li_at: flag beats env (reconnect)", async () => {
-    process.env[ENV_LI_AT] = "ENV_LIAT";
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const client = makeClient();
-    (client.accounts.reconnect as Mock).mockResolvedValue({ object: "account" });
-    const out = makeOut();
-    await runAccountReconnect(
-      client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "FLAG_LIAT", json: true } as never,
-      out,
-    );
-    expect(client.accounts.reconnect).toHaveBeenCalledWith(
-      "acc_1",
-      expect.objectContaining({ cookie: { li_at: "FLAG_LIAT" } }),
-    );
-  });
-
-  it("li_at: env used when no flag (reconnect)", async () => {
-    process.env[ENV_LI_AT] = "ENV_LIAT";
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const client = makeClient();
-    (client.accounts.reconnect as Mock).mockResolvedValue({ object: "account" });
-    const out = makeOut();
-    await runAccountReconnect(
-      client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", json: true } as never,
-      out,
-    );
-    expect(client.accounts.reconnect).toHaveBeenCalledWith(
-      "acc_1",
-      expect.objectContaining({ cookie: { li_at: "ENV_LIAT" } }),
     );
   });
 
@@ -232,17 +197,17 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
   });
 
   it("--li-at-stdin resolves the piped cookie", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
+    const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.reconnect as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
-    await runAccountReconnect(
+    await runAccountLink(
       client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, json: true } as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, json: true } as never,
       out,
       { readStdin: async () => "LIAT_S\n" },
     );
-    expect(client.accounts.reconnect).toHaveBeenCalledWith("acc_1", expect.objectContaining({ cookie: { li_at: "LIAT_S" } }));
+    expect(client.auth.intent).toHaveBeenCalledWith(expect.objectContaining({ cookie: { li_at: "LIAT_S" } }));
   });
 });
 
@@ -443,16 +408,6 @@ describe("account credentials — ps/shell-history warnings on secret value flag
     expect(args["li-at-stdin"]?.description).not.toMatch(/ps|shell history/i);
   });
 
-  it("reconnect --help: same warnings present", async () => {
-    const args = await loadArgs("reconnect");
-    expect(args["password"]?.description).toMatch(/ps|shell history/i);
-    expect(args["li-at"]?.description).toMatch(/ps|shell history/i);
-    expect(args["li-a"]?.description).toMatch(/ps|shell history/i);
-    expect(args["proxy-password"]?.description).toMatch(/ps|shell history/i);
-    expect(args["password-stdin"]?.description).not.toMatch(/ps|shell history/i);
-    expect(args["li-at-stdin"]?.description).not.toMatch(/ps|shell history/i);
-  });
-
   it("update --help: only --proxy-password warns; update has no --password/--li-at flags at all", async () => {
     const args = await loadArgs("update");
     expect(args["proxy-password"]?.description).toMatch(/ps|shell history/i);
@@ -541,13 +496,13 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
     expect(written).toContain("••••");
   });
 
-  it("--preview masks the cookie.li_at and cookie.li_a sentinels (reconnect)", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
+  it("--preview masks the cookie.li_at and cookie.li_a sentinels (link, cookie method)", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
     const out = makeOut();
-    await runAccountReconnect(
+    await runAccountLink(
       client as never,
-      { "account-id": "acc_1", "auth-method": "cookie", "li-at": SENTINEL, "li-a": `${SENTINEL}_A`, preview: true } as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at": SENTINEL, "li-a": `${SENTINEL}_A`, preview: true } as never,
       out,
     );
     const written = out.stdout.write.mock.calls.map((c) => c[0] as string).join("");

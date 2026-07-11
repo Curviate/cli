@@ -118,7 +118,7 @@ describe("router — bare intent-shaped forms reach the handler (not 'Unknown co
 
   it("company <id> (bare get) reaches the companies.get SDK path — network error, not a routing error", () => {
     // company mixes a bare positional (retrieve) with subCommands
-    // (employees/posts/jobs/followers) — the exact coexistence the
+    // (employees/posts/jobs) — the exact coexistence the
     // pre-router (dispatch.ts) exists to make work. A non-subcommand token
     // must resolve to the bare form, not "Unknown command t-systems".
     const r = run([
@@ -261,17 +261,6 @@ describe("router — subcommands still route after the bare-form fix", () => {
     expect(r.stdout).toMatch(/"error"/);
   });
 
-  it("company followers <id> reaches the companies.followers SDK path (subcommand does not shadow the bare retrieve)", () => {
-    const r = run([
-      "company", "followers", "112013061",
-      "--account", "acc_x",
-      "--base-url", UNROUTABLE,
-      "--json",
-    ]);
-    expect(isUnknownCommand(r)).toBe(false);
-    expect(r.status).toBe(1);
-    expect(r.stdout).toMatch(/"error"/);
-  });
 });
 
 describe("router — usage/routing errors exit 2", () => {

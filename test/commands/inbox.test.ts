@@ -7,9 +7,6 @@
  *   inbox get <chat_id>     → messaging.getChat (not paginated, rejects --all, rejects --preview)
  *   inbox messages <chat_id>→ messaging.listMessages (paginated)
  *   inbox messages --before/--after → date filter with UTC/Z validation
- *   inbox sync              → messaging.syncMessages (rejects --all, rejects --preview)
- *   inbox sync-chat <chat_id> → messaging.syncChat (rejects --all, rejects --preview)
- *   inbox sync-chat --wait  → polling until terminal status or timeout
  *
  * IDs (chat_id, message_id) pass through verbatim — NOT resolved via resolveIdentifier.
  * All subcommands are account-scoped (error exit 2 when no account).
@@ -24,8 +21,6 @@ function makeMessagingNs() {
       listChats: vi.fn(),
       getChat: vi.fn(),
       listMessages: vi.fn(),
-      syncMessages: vi.fn(),
-      syncChat: vi.fn(),
     },
   };
 }
@@ -276,108 +271,6 @@ describe("inbox messages", () => {
   });
 });
 
-describe("inbox sync / sync-chat", () => {
-  let ns: ReturnType<typeof makeMessagingNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeMessagingNs();
-    client = makeClient(ns);
-    (ns.messaging.syncMessages as Mock).mockResolvedValue({ synced: true });
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ synced: true });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("inbox sync — calls syncMessages", async () => {
-    const { runInboxSync } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runInboxSync(client as never, { account: "acc_1", json: true } as InboxArgs, out);
-
-    expect(ns.messaging.syncMessages).toHaveBeenCalled();
-  });
-
-  it("inbox sync --preview — usage error exit 2 (read command)", async () => {
-    const { runInboxSync } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runInboxSync(client as never, { account: "acc_1", preview: true } as InboxArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("inbox sync --all — usage error exit 2 (not paginated)", async () => {
-    const { runInboxSync } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runInboxSync(client as never, { account: "acc_1", all: true } as InboxArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("inbox sync-chat <chat_id> — calls syncChat with verbatim chat_id", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runInboxSyncChat(client as never, { chatId: "chat_abc", account: "acc_1", json: true } as InboxArgs, out);
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledWith("chat_abc");
-  });
-
-  it("inbox sync-chat --preview — usage error exit 2", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runInboxSyncChat(client as never, { chatId: "chat_abc", account: "acc_1", preview: true } as InboxArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("inbox sync-chat --all — usage error exit 2 (not paginated)", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runInboxSyncChat(client as never, { chatId: "chat_abc", account: "acc_1", all: true } as InboxArgs, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-});
-
 // ---------------------------------------------------------------------------
 // inbox list --unread filter (three-way: true / false / omit)
 // ---------------------------------------------------------------------------
@@ -595,136 +488,5 @@ describe("inbox messages date filters", () => {
     } finally {
       exitSpy.mockRestore();
     }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// inbox sync-chat --wait polling
-// ---------------------------------------------------------------------------
-
-describe("inbox sync-chat wait polling", () => {
-  let ns: ReturnType<typeof makeMessagingNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeMessagingNs();
-    client = makeClient(ns);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  const noopSleep = () => Promise.resolve();
-
-  it("inbox sync-chat without wait flag calls syncChat exactly once and returns immediately", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "running" });
-
-    await runInboxSyncChat(
-      client as never,
-      { chatId: "chat_abc", account: "acc_1", json: true } as InboxArgs,
-      out,
-    );
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
-  });
-
-  it("inbox sync-chat with wait exits normally when the first response has a done status", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "done" });
-
-    await runInboxSyncChat(
-      client as never,
-      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
-      out,
-      noopSleep,
-    );
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(written).toContain("done");
-  });
-
-  it("inbox sync-chat with wait calls syncChat again after a running status and exits when done", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock)
-      .mockResolvedValueOnce({ status: "running" })
-      .mockResolvedValueOnce({ status: "done" });
-
-    await runInboxSyncChat(
-      client as never,
-      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "60" } as InboxArgs,
-      out,
-      noopSleep,
-    );
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(2);
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(written).toContain("done");
-  });
-
-  it("inbox sync-chat with wait exits with code 3 when timeout elapses before a terminal status", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "running" });
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      // timeout=0 seconds means the elapsed check triggers immediately after the first poll
-      await runInboxSyncChat(
-        client as never,
-        { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "0" } as InboxArgs,
-        out,
-        noopSleep,
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(3)");
-      // Last observed response is written to stdout before timeout exit
-      const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-      expect(written).toContain("running");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("inbox sync-chat with wait exits normally when status is error", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "error" });
-
-    await runInboxSyncChat(
-      client as never,
-      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
-      out,
-      noopSleep,
-    );
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(written).toContain("error");
-  });
-
-  it("inbox sync-chat with wait exits normally when status is chat_deleted", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-    (ns.messaging.syncChat as Mock).mockResolvedValue({ status: "chat_deleted" });
-
-    await runInboxSyncChat(
-      client as never,
-      { chatId: "chat_abc", account: "acc_1", json: true, wait: true, timeout: "30" } as InboxArgs,
-      out,
-      noopSleep,
-    );
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledTimes(1);
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(written).toContain("chat_deleted");
   });
 });

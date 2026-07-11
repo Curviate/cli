@@ -6,7 +6,6 @@
  *   company employees <id>          → companies.employees (facade, --keywords/--location)
  *   company posts <id>              → companies.posts (facade)
  *   company jobs <id>               → companies.jobs (facade, --keywords)
- *   company followers <id>          → companies.followers (native)
  *   --preview/--all/--sections usage errors (read-command conventions)
  *   --account required (companies.get now always requires account_id)
  *   wrong usage: a non-numeric identifier on a sub-resource surfaces the
@@ -36,7 +35,6 @@ function makeAccountNs() {
       employees: vi.fn(),
       posts: vi.fn(),
       jobs: vi.fn(),
-      followers: vi.fn(),
     },
   };
 }
@@ -493,83 +491,3 @@ describe("company jobs command", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// company followers <id>
-// ---------------------------------------------------------------------------
-
-describe("company followers command", () => {
-  let accountNs: ReturnType<typeof makeAccountNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    accountNs = makeAccountNs();
-    client = makeClient(accountNs);
-    (accountNs.companies.followers as Mock).mockResolvedValue({
-      object: "company_follower_list",
-      items: [{ object: "follower", id: "ACoAFOL1", urn: "urn:li:member:1", name: "Diana Follower", headline: "Engineer", profile_url: "https://www.linkedin.com/in/diana" }],
-      cursor: null,
-    });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("company followers <cid> --account <id> — calls companies.followers", async () => {
-    const { runCompanyFollowers } = await import("../../src/commands/company.js");
-    const out = makeOut();
-
-    await runCompanyFollowers(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
-
-    expect(accountNs.companies.followers).toHaveBeenCalledWith("112013061", {});
-
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result["object"]).toBe("company_follower_list");
-    expect((result["items"] as unknown[])).toHaveLength(1);
-    // No paging block on the native followers list (route-honest — no
-    // total_count to re-map, unlike the three search facades).
-    expect(result["paging"]).toBeUndefined();
-  });
-
-  it("wrong usage: a non-numeric identifier (anthropic) — the server's 400 INVALID_REQUEST → the INVALID_REQUEST exit code", async () => {
-    (accountNs.companies.followers as Mock).mockRejectedValue(makeInvalidRequestError());
-
-    const { runCompanyFollowers } = await import("../../src/commands/company.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runCompanyFollowers(client as never, { id: "anthropic", account: "acc_1", json: true } as CompanyArgs, out);
-      expect.fail("Should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("a 403 RESOURCE_ACCESS_RESTRICTED (non-admin) surfaces as exit 8", async () => {
-    const restrictedErr = new CurviateError({
-      code: "RESOURCE_ACCESS_RESTRICTED",
-      message: "You must be a page administrator of this company to read its followers.",
-      httpStatus: 403,
-      userFixable: false,
-      retryLikelyToSucceed: false,
-    });
-    (accountNs.companies.followers as Mock).mockRejectedValue(restrictedErr);
-
-    const { runCompanyFollowers } = await import("../../src/commands/company.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runCompanyFollowers(client as never, { id: "7936402", account: "acc_1", json: true } as CompanyArgs, out);
-      expect.fail("Should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(8)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-  });
-});

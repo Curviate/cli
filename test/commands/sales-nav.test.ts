@@ -2,7 +2,6 @@
  * Tests for the `sales-nav` command group.
  *
  * Coverage:
- *   sales-nav sync [--cursor] [--limit]                                → salesNavigator.syncMessages
  *   sales-nav search people [filters…]                                 → salesNavigator.searchPeople (POST)
  *   sales-nav search companies [filters…]                              → salesNavigator.searchCompanies (POST)
  *   sales-nav search parameters --type <t>                             → salesNavigator.getParameters (GET)
@@ -32,7 +31,6 @@ import { tmpdir } from "node:os";
 function makeSalesNavNs() {
   return {
     salesNavigator: {
-      syncMessages: vi.fn(),
       searchPeople: vi.fn(),
       searchCompanies: vi.fn(),
       getParameters: vi.fn(),
@@ -192,50 +190,6 @@ describe("sales-nav tier gate", () => {
     const parsed = JSON.parse(written);
     expect(parsed.error.code).toBe("TIER_NOT_ACTIVE");
     expect(parsed.error.requiredTier).toBe("sn");
-  });
-});
-
-// ─── sales-nav sync ────────────────────────────────────────────────────────
-
-describe("sales-nav sync", () => {
-  let ns: ReturnType<typeof makeSalesNavNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeSalesNavNs();
-    client = makeClient(ns);
-    (ns.salesNavigator.syncMessages as Mock).mockResolvedValue({ object: "sync_result" });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("calls salesNavigator.syncMessages with account scoping", async () => {
-    const { runSalesNavSync } = await import("../../src/commands/sales-nav.js");
-    const out = makeOut();
-
-    await runSalesNavSync(client as never, { account: "acc_1", json: true }, out);
-
-    expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(ns.salesNavigator.syncMessages).toHaveBeenCalled();
-  });
-
-  it("--preview on read: exits 2", async () => {
-    const { runSalesNavSync } = await import("../../src/commands/sales-nav.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runSalesNavSync(client as never, { account: "acc_1", preview: true }, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(ns.salesNavigator.syncMessages).not.toHaveBeenCalled();
   });
 });
 

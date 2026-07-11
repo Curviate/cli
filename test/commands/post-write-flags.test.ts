@@ -5,8 +5,8 @@
  * flags (--limit, --cursor, --all, --max-pages) in their help. Write commands
  * additionally must NOT expose --fields. Single-object reads may keep --fields.
  *
- * Read list commands (post list, post comments, inbox list, inbox messages)
- * MUST retain all pagination flags.
+ * Read list commands (inbox list, inbox messages) MUST retain all pagination
+ * flags.
  *
  * Strategy: inspect the `args` object on each subcommand definition directly.
  * `defineCommand` is an identity function in citty, so `.subCommands.create.args`
@@ -35,19 +35,6 @@ describe("post write commands — no pagination flags in help", () => {
     }
   });
 
-  it("post comment (write) — args definition has no pagination/projection flags", async () => {
-    const { postCommand } = await import("../../src/commands/post.js");
-    const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
-    const commentArgs = subCmds["comment"]?.args ?? {};
-
-    for (const flag of PAGINATION_FLAGS) {
-      expect(
-        commentArgs,
-        `post comment args must NOT include --${flag}`,
-      ).not.toHaveProperty(flag);
-    }
-  });
-
   it("post react — args definition has no pagination/projection flags", async () => {
     const { postCommand } = await import("../../src/commands/post.js");
     const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
@@ -61,24 +48,14 @@ describe("post write commands — no pagination flags in help", () => {
     }
   });
 
-  it("post list (read) — args definition DOES have pagination flags (negative control)", async () => {
+  it("post reactions (read) — args definition DOES have pagination flags (negative control)", async () => {
     const { postCommand } = await import("../../src/commands/post.js");
     const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
-    const listArgs = subCmds["list"]?.args ?? {};
+    const reactionsArgs = subCmds["reactions"]?.args ?? {};
 
-    expect(listArgs, "post list must have --limit").toHaveProperty("limit");
-    expect(listArgs, "post list must have --cursor").toHaveProperty("cursor");
-    expect(listArgs, "post list must have --all").toHaveProperty("all");
-  });
-
-  it("post comments (read) — args definition DOES have pagination flags", async () => {
-    const { postCommand } = await import("../../src/commands/post.js");
-    const subCmds = (postCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
-    const commentsArgs = subCmds["comments"]?.args ?? {};
-
-    expect(commentsArgs, "post comments must have --limit").toHaveProperty("limit");
-    expect(commentsArgs, "post comments must have --cursor").toHaveProperty("cursor");
-    expect(commentsArgs, "post comments must have --all").toHaveProperty("all");
+    expect(reactionsArgs, "post reactions must have --limit").toHaveProperty("limit");
+    expect(reactionsArgs, "post reactions must have --cursor").toHaveProperty("cursor");
+    expect(reactionsArgs, "post reactions must have --all").toHaveProperty("all");
   });
 });
 
@@ -198,23 +175,13 @@ describe("inbox non-list commands — no pagination flags in help", () => {
     }
   });
 
-  it("inbox sync (single-object read) — no pagination-only flags", async () => {
+  it("inbox mark-read (write) — no pagination-only flags", async () => {
     const { inboxCommand } = await import("../../src/commands/inbox.js");
     const subCmds = (inboxCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
-    const args = subCmds["sync"]?.args ?? {};
+    const args = subCmds["mark-read"]?.args ?? {};
 
     for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `inbox sync args must NOT include --${flag}`).not.toHaveProperty(flag);
-    }
-  });
-
-  it("inbox sync-chat (single-object read) — no pagination-only flags", async () => {
-    const { inboxCommand } = await import("../../src/commands/inbox.js");
-    const subCmds = (inboxCommand as Record<string, unknown>).subCommands as Record<string, { args?: Record<string, unknown> }>;
-    const args = subCmds["sync-chat"]?.args ?? {};
-
-    for (const flag of PAGINATION_ONLY_FLAGS) {
-      expect(args, `inbox sync-chat args must NOT include --${flag}`).not.toHaveProperty(flag);
+      expect(args, `inbox mark-read args must NOT include --${flag}`).not.toHaveProperty(flag);
     }
   });
 

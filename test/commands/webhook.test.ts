@@ -7,7 +7,6 @@
  *   webhook events     — webhooks.listEvents() (non-paginated)
  *   webhook update     — webhooks.update() + --source is usage error (exit 2) + --preview
  *   webhook delete     — webhooks.delete() + --preview
- *   webhook state-diff — webhooks.getStateDiff() + --cursor
  *   webhook verify     — offline constructEvent(): no Curviate client, valid → event+exit0, error → envelope+exit2
  */
 
@@ -28,7 +27,6 @@ function makeClient() {
       get: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
-      getStateDiff: vi.fn(),
     },
   };
 }
@@ -437,63 +435,6 @@ describe("webhook delete", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("webhooks.delete");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// webhook state-diff
-// ---------------------------------------------------------------------------
-
-describe("webhook state-diff", () => {
-  let client: Client;
-
-  beforeEach(() => {
-    client = makeClient();
-    (client.webhooks.getStateDiff as Mock).mockResolvedValue({ object: "state_diff", changes: [] });
-  });
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("calls webhooks.getStateDiff with account_id and optional cursor", async () => {
-    const { runWebhookStateDiff } = await import("../../src/commands/webhook.js");
-    const out = makeOut();
-    await runWebhookStateDiff(client as never, {
-      "account-id": "acc_1",
-      cursor: "tok_abc",
-      json: true,
-    } as WebhookFlags, out);
-
-    expect(client.webhooks.getStateDiff).toHaveBeenCalledWith(
-      "acc_1",
-      expect.objectContaining({ cursor: "tok_abc" }),
-    );
-  });
-
-  it("calls getStateDiff without query when no cursor", async () => {
-    const { runWebhookStateDiff } = await import("../../src/commands/webhook.js");
-    const out = makeOut();
-    await runWebhookStateDiff(client as never, {
-      "account-id": "acc_1",
-      json: true,
-    } as WebhookFlags, out);
-
-    expect(client.webhooks.getStateDiff).toHaveBeenCalledWith("acc_1", {});
-  });
-
-  it("--preview on a read exits 2", async () => {
-    const { runWebhookStateDiff } = await import("../../src/commands/webhook.js");
-    const out = makeOut();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runWebhookStateDiff(client as never, { "account-id": "acc_1", preview: true } as WebhookFlags, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
   });
 });
 

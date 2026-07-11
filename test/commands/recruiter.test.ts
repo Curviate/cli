@@ -2,23 +2,19 @@
  * Tests for the `recruiter` command group.
  *
  * Coverage:
- *   recruiter sync                                                              → recruiter.syncMessages
  *   recruiter message new --to <id> "<text>" [--attach…] [--voice] [--video]  → recruiter.startChat (multipart)
  *   recruiter profile <identifier>                                              → recruiter.getProfile (resolveIdentifier)
  *   recruiter search people [filters…]                                         → recruiter.searchPeople (POST)
- *   recruiter search parameters --type <t>                                     → recruiter.getParameters (GET)
+ *   recruiter search parameters --type <t>                                     → recruiter.searchParameters (POST)
  *   recruiter projects [--all] [--limit] [--cursor]                            → recruiter.listProjects
  *   recruiter project <project_id>                                             → recruiter.getProject (verbatim id)
- *   recruiter add-candidate <user_id> --hiring-project-id <id>                → recruiter.addCandidate
- *   recruiter add-applicant <user_id> --hiring-project-id <id>                → recruiter.addApplicant
- *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>→ recruiter.rejectApplicant
+ *   recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id> → recruiter.saveCandidate
  *   recruiter jobs [--all] [--limit] [--cursor]                                → recruiter.listJobs
  *   recruiter job create <body…>                                               → recruiter.createJob
- *   recruiter job publish <job_id>                                             → recruiter.publishJob
- *   recruiter job checkpoint <job_id> --input <v>                              → recruiter.solveJobCheckpoint
- *   recruiter job applicants <job_id>                                          → recruiter.listApplicants
- *   recruiter applicant <applicant_id>                                         → recruiter.getApplicant (verbatim id)
- *   recruiter applicant resume <applicant_id> -o <file>                        → recruiter.downloadResume (binary)
+ *   recruiter job publish <project_id> <job_id>                                → recruiter.publishJob
+ *   recruiter job applicants <project_id> --channel-id <id>                    → recruiter.listApplicants
+ *   recruiter applicant <project_id> <applicant_id>                            → recruiter.getApplicant (verbatim id)
+ *   recruiter applicant resume <project_id> <applicant_id> -o <file>           → recruiter.downloadResume (binary)
  *
  * Tier gate:
  *   TIER_NOT_ACTIVE → exit 5 + JSON requiredTier
@@ -42,7 +38,6 @@ import { tmpdir } from "node:os";
 function makeRecruiterNs() {
   return {
     recruiter: {
-      syncMessages: vi.fn(),
       startChat: vi.fn(),
       getProfile: vi.fn(),
       searchPeople: vi.fn(),
@@ -54,8 +49,6 @@ function makeRecruiterNs() {
       updateProject: vi.fn(),
       listPipeline: vi.fn(),
       saveCandidate: vi.fn(),
-      addApplicant: vi.fn(),
-      rejectApplicant: vi.fn(),
       listJobs: vi.fn(),
       createJob: vi.fn(),
       getProjectJob: vi.fn(),
@@ -64,7 +57,6 @@ function makeRecruiterNs() {
       updateProjectJob: vi.fn(),
       publishJob: vi.fn(),
       closeJob: vi.fn(),
-      solveJobCheckpoint: vi.fn(),
       listApplicants: vi.fn(),
       getApplicant: vi.fn(),
       getJob: vi.fn(),
@@ -170,19 +162,19 @@ describe("recruiter tier gate", () => {
     expect(parsed.error.code).toBe("LINKEDIN_FEATURE_NOT_SUBSCRIBED");
   });
 
-  it("per-command gate independence — recruiter sync stubbed independently → exit 5", async () => {
+  it("per-command gate independence — recruiter jobs stubbed independently → exit 5", async () => {
     const tierErr = makeTierError("TIER_NOT_ACTIVE", "recruiter");
-    (ns.recruiter.syncMessages as Mock).mockRejectedValue(tierErr);
+    (ns.recruiter.listJobs as Mock).mockRejectedValue(tierErr);
 
     const { CurviateError } = await import("@curviate/sdk");
     Object.setPrototypeOf(tierErr, CurviateError.prototype);
 
-    const { runRecruiterSync } = await import("../../src/commands/recruiter.js");
+    const { runRecruiterListJobs } = await import("../../src/commands/recruiter.js");
     const out = makeOut();
     const exitSpy = mockExit();
 
     try {
-      await runRecruiterSync(client as never, { account: "acc_1", json: true }, out);
+      await runRecruiterListJobs(client as never, { account: "acc_1", json: true }, out);
     } catch (e) {
       expect((e as Error).message).toContain("process.exit(5)");
     } finally {
@@ -217,50 +209,6 @@ describe("recruiter tier gate", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.error.requiredTier).toBe("recruiter");
-  });
-});
-
-// ─── recruiter sync ────────────────────────────────────────────────────────
-
-describe("recruiter sync", () => {
-  let ns: ReturnType<typeof makeRecruiterNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeRecruiterNs();
-    client = makeClient(ns);
-    (ns.recruiter.syncMessages as Mock).mockResolvedValue({ object: "sync_result" });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("calls recruiter.syncMessages with account scoping", async () => {
-    const { runRecruiterSync } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterSync(client as never, { account: "acc_1", json: true }, out);
-
-    expect(client.account).toHaveBeenCalledWith("acc_1");
-    expect(ns.recruiter.syncMessages).toHaveBeenCalled();
-  });
-
-  it("--preview on read: exits 2", async () => {
-    const { runRecruiterSync } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runRecruiterSync(client as never, { account: "acc_1", preview: true }, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(ns.recruiter.syncMessages).not.toHaveBeenCalled();
   });
 });
 
@@ -1341,261 +1289,6 @@ describe("recruiter save-candidate", () => {
     expect(parsed.method).toBe("recruiter.saveCandidate");
   });
 });
-
-// ─── recruiter add-applicant ───────────────────────────────────────────────
-
-describe("recruiter add-applicant", () => {
-  let ns: ReturnType<typeof makeRecruiterNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeRecruiterNs();
-    client = makeClient(ns);
-    (ns.recruiter.addApplicant as Mock).mockResolvedValue({ success: true });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("calls recruiter.addApplicant with userId verbatim and body", async () => {
-    const { runRecruiterAddApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterAddApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM456",
-      "hiring-project-id": "proj_xyz",
-      json: true,
-    }, out);
-
-    expect(ns.recruiter.addApplicant).toHaveBeenCalledWith(
-      "AEM456",
-      expect.objectContaining({ hiring_project_id: "proj_xyz" }),
-    );
-  });
-
-  it("--preview renders request, does not call addApplicant", async () => {
-    const { runRecruiterAddApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterAddApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM456",
-      "hiring-project-id": "proj_xyz",
-      preview: true,
-    }, out);
-
-    expect(ns.recruiter.addApplicant).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("recruiter.addApplicant");
-  });
-});
-
-// ─── recruiter reject-applicant ───────────────────────────────────────────
-
-describe("recruiter reject-applicant", () => {
-  let ns: ReturnType<typeof makeRecruiterNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeRecruiterNs();
-    client = makeClient(ns);
-    (ns.recruiter.rejectApplicant as Mock).mockResolvedValue({ success: true });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("calls recruiter.rejectApplicant with userId verbatim, hiring-project-id, and reason in body", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      json: true,
-    }, out);
-
-    expect(ns.recruiter.rejectApplicant).toHaveBeenCalledWith(
-      "AEM789",
-      expect.objectContaining({
-        hiring_project_id: "proj_abc",
-        reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      }),
-    );
-  });
-
-  it("--preview renders request, does not call rejectApplicant", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      preview: true,
-    }, out);
-
-    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("recruiter.rejectApplicant");
-  });
-
-  it("omitting --message and --notify-at sends no rejection_notification (default: applicant not notified)", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      json: true,
-    }, out);
-
-    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(body).not.toHaveProperty("rejection_notification");
-  });
-
-  it("--message alone adds rejection_notification.message, no send_notification_at", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      message: "Thanks for applying — we've decided to move forward with other candidates.",
-      json: true,
-    }, out);
-
-    expect(ns.recruiter.rejectApplicant).toHaveBeenCalledWith(
-      "AEM789",
-      expect.objectContaining({
-        rejection_notification: {
-          message: "Thanks for applying — we've decided to move forward with other candidates.",
-        },
-      }),
-    );
-    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(body["rejection_notification"]).not.toHaveProperty("send_notification_at");
-  });
-
-  it("--message + --notify-at adds both fields, send_notification_at as a number", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      message: "Thanks for applying.",
-      "notify-at": "1735689600000",
-      json: true,
-    }, out);
-
-    expect(ns.recruiter.rejectApplicant).toHaveBeenCalledWith(
-      "AEM789",
-      expect.objectContaining({
-        rejection_notification: {
-          message: "Thanks for applying.",
-          send_notification_at: 1735689600000,
-        },
-      }),
-    );
-    const body = (ns.recruiter.rejectApplicant as Mock).mock.calls[0]?.[1] as Record<string, unknown>;
-    const notification = body["rejection_notification"] as Record<string, unknown>;
-    expect(typeof notification["send_notification_at"]).toBe("number");
-  });
-
-  it("--notify-at without --message → usage error, exit 2, no SDK call", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runRecruiterRejectApplicant(client as never, {
-        account: "acc_1",
-        userId: "AEM789",
-        "hiring-project-id": "proj_abc",
-        reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-        "notify-at": "1735689600000",
-        json: true,
-      }, out);
-      expect.fail("expected process.exit(2)");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-
-    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
-    const stderrWritten = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrWritten).toContain("--message");
-  });
-
-  it("non-numeric --notify-at (with --message) → usage error, exit 2, no SDK call", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-    const exitSpy = mockExit();
-
-    try {
-      await runRecruiterRejectApplicant(client as never, {
-        account: "acc_1",
-        userId: "AEM789",
-        "hiring-project-id": "proj_abc",
-        reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-        message: "Thanks for applying.",
-        "notify-at": "not-a-number",
-        json: true,
-      }, out);
-      expect.fail("expected process.exit(2)");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-
-    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
-    const stderrWritten = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrWritten).toContain("--notify-at");
-  });
-
-  it("--preview with --message renders rejection_notification in the previewed body", async () => {
-    const { runRecruiterRejectApplicant } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterRejectApplicant(client as never, {
-      account: "acc_1",
-      userId: "AEM789",
-      "hiring-project-id": "proj_abc",
-      reason: "NOT_MEET_BASIC_QUALIFICATIONS",
-      message: "Thanks for applying.",
-      "notify-at": "1735689600000",
-      preview: true,
-    }, out);
-
-    expect(ns.recruiter.rejectApplicant).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.body.rejection_notification).toEqual({
-      message: "Thanks for applying.",
-      send_notification_at: 1735689600000,
-    });
-  });
-});
-
 // ─── recruiter jobs ────────────────────────────────────────────────────────
 
 describe("recruiter jobs", () => {
@@ -2094,58 +1787,6 @@ describe("recruiter talent-search", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("\n");
     const lines = written.trim().split("\n").filter(Boolean);
     expect(lines.length).toBe(2);
-  });
-});
-
-// ─── recruiter job checkpoint ──────────────────────────────────────────────
-
-describe("recruiter job checkpoint", () => {
-  let ns: ReturnType<typeof makeRecruiterNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeRecruiterNs();
-    client = makeClient(ns);
-    (ns.recruiter.solveJobCheckpoint as Mock).mockResolvedValue({ object: "job_posting_published", job_id: "job_1" });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("calls recruiter.solveJobCheckpoint with jobId verbatim and input in body", async () => {
-    const { runRecruiterJobCheckpoint } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterJobCheckpoint(client as never, {
-      account: "acc_1",
-      jobId: "job_42",
-      input: "739204",
-      json: true,
-    }, out);
-
-    expect(ns.recruiter.solveJobCheckpoint).toHaveBeenCalledWith(
-      "job_42",
-      expect.objectContaining({ input: "739204" }),
-    );
-  });
-
-  it("--preview renders request, does not call solveJobCheckpoint", async () => {
-    const { runRecruiterJobCheckpoint } = await import("../../src/commands/recruiter.js");
-    const out = makeOut();
-
-    await runRecruiterJobCheckpoint(client as never, {
-      account: "acc_1",
-      jobId: "job_42",
-      input: "739204",
-      preview: true,
-    }, out);
-
-    expect(ns.recruiter.solveJobCheckpoint).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("recruiter.solveJobCheckpoint");
   });
 });
 

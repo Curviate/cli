@@ -5,7 +5,7 @@
  *   message new --to: LinkedIn URL/slug resolved via users.get; provider IDs pass through
  *   message inmail --to: URL/slug/provider-id/URN resolution; slug calls users.get
  *   Chat ID normalization: LinkedIn messaging thread URLs stripped to bare provider ID
- *   on inbox get / inbox messages / inbox sync-chat / message send
+ *   on inbox get / inbox messages / message send
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -65,8 +65,6 @@ function makeMessagingOnlyNs() {
       listChats: vi.fn(),
       getChat: vi.fn(),
       listMessages: vi.fn(),
-      syncMessages: vi.fn(),
-      syncChat: vi.fn(),
     },
   };
 }
@@ -101,10 +99,9 @@ const PROFILE_STUB = { id: "ACoAAA123", public_identifier: "raphael-redmer" };
 const CHAT_STUB = { object: "chat_started", chat_id: "c1", message_id: "m1" };
 // Stub sendInMail response
 const INMAIL_STUB = { object: "inmail_sent", message_id: "msg_1", chat_id: "chat_1" };
-// Stub getChat / listMessages / syncChat responses
+// Stub getChat / listMessages responses
 const CHAT_DETAIL_STUB = { object: "chat", id: "2-AbCdEfGhIjKlMnOpQ==" };
 const MESSAGE_LIST_STUB = { object: "message_list", items: [], cursor: null };
-const SYNC_STUB = { object: "chat_sync", status: "done" };
 
 // ---------------------------------------------------------------------------
 // message new --to identifier resolution
@@ -425,7 +422,7 @@ describe("message inmail --to resolution", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CHATID thread-URL normalization (inbox get / inbox messages / inbox sync-chat / message send)
+// CHATID thread-URL normalization (inbox get / inbox messages / message send)
 // ---------------------------------------------------------------------------
 
 describe("chat ID normalization on inbox get", () => {
@@ -533,34 +530,6 @@ describe("chat ID normalization on inbox messages", () => {
     } as InboxArgs, out);
 
     expect(ns.messaging.listMessages).toHaveBeenCalledWith("2-AbCdEfGhIjKlMnOpQ==", expect.anything());
-  });
-});
-
-describe("chat ID normalization on inbox sync-chat", () => {
-  let ns: ReturnType<typeof makeMessagingOnlyNs>;
-  let client: ReturnType<typeof makeClient>;
-
-  beforeEach(() => {
-    ns = makeMessagingOnlyNs();
-    client = makeClient(ns);
-    (ns.messaging.syncChat as Mock).mockResolvedValue(SYNC_STUB);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("LinkedIn thread URL is normalized to bare provider_id before syncChat call", async () => {
-    const { runInboxSyncChat } = await import("../../src/commands/inbox.js");
-    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
-
-    await runInboxSyncChat(client as never, {
-      chatId: "https://www.linkedin.com/messaging/thread/2-AbCdEfGhIjKlMnOpQ==",
-      account: "acc_1",
-      json: true,
-    } as InboxArgs, out);
-
-    expect(ns.messaging.syncChat).toHaveBeenCalledWith("2-AbCdEfGhIjKlMnOpQ==");
   });
 });
 

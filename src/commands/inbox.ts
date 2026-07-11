@@ -5,10 +5,9 @@
  *   inbox list                   — list chats (paginated, --all/--limit/--cursor)
  *   inbox get <chat_id>          — get a single chat (read, rejects --preview and --all)
  *   inbox messages <chat_id>     — list messages in a chat (paginated)
- *   inbox sync                   — re-sync account message history (read, rejects --preview/--all)
- *   inbox sync-chat <chat_id>    — re-sync a specific chat (read, rejects --preview/--all)
+ *   inbox mark-read <chat_id>    — mark a chat as read (write)
  *
- * <chat_id> on inbox get, inbox messages, and inbox sync-chat accepts a LinkedIn
+ * <chat_id> on inbox get, inbox messages, and inbox mark-read accepts a LinkedIn
  * messaging thread URL or bare provider ID. Thread URLs are normalized to the bare
  * provider ID (zero network calls).
  *
@@ -276,101 +275,6 @@ export async function runInboxMessages(
   }
 }
 
-/**
- * Run `inbox sync`.
- * Read command — rejects --preview and --all.
- */
-export async function runInboxSync(
-  client: Curviate,
-  flags: InboxFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-  rejectAllOnNonPaginated(flags.all, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  try {
-    const result = await ns.messaging.syncMessages();
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/** Terminal sync statuses that end --wait polling. */
-const SYNC_TERMINAL_STATUSES = new Set(["done", "error", "chat_deleted"]);
-
-/** Default poll interval for --wait mode. */
-const SYNC_POLL_INTERVAL_MS = 2000;
-
-/**
- * Run `inbox sync-chat <chat_id> [--wait] [--timeout <sec>]`.
- * Read command — rejects --preview and --all.
- *
- * <chat_id> accepts a LinkedIn messaging thread URL or bare provider ID.
- * Thread URLs are normalized to the bare provider ID (zero network calls).
- *
- * When --wait is set, polls every ~2s until status reaches a terminal value
- * (done | error | chat_deleted) or --timeout seconds elapse (exit 3 on timeout).
- *
- * The optional _sleep parameter replaces the real setTimeout in tests so the
- * hermetic suite does not wait real seconds between polls.
- */
-export async function runInboxSyncChat(
-  client: Curviate,
-  flags: InboxFlags,
-  out: OutputStreams,
-  _sleep?: (ms: number) => Promise<void>,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-  rejectAllOnNonPaginated(flags.all, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const chatId = normalizeChatId(flags.chatId ?? "");
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  if (!flags.wait) {
-    // No --wait: single call, return immediately (back-compat)
-    try {
-      const result = await ns.messaging.syncChat(chatId);
-      renderSuccess(result, outOpts, out);
-    } catch (err: unknown) {
-      await handleSdkError(err, outOpts, out);
-    }
-    return;
-  }
-
-  // --wait mode: poll until terminal status or timeout
-  const sleep = _sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const timeoutSecs = parseInt(flags.timeout ?? "30", 10);
-  const timeoutMs = (Number.isNaN(timeoutSecs) ? 30 : timeoutSecs) * 1000;
-  const startTime = Date.now();
-
-  while (true) {
-    let result: unknown;
-    try {
-      result = await ns.messaging.syncChat(chatId);
-    } catch (err: unknown) {
-      await handleSdkError(err, outOpts, out);
-    }
-    const resp = result as { status?: string };
-    if (resp.status !== undefined && SYNC_TERMINAL_STATUSES.has(resp.status)) {
-      renderSuccess(result, outOpts, out);
-      return;
-    }
-    if (Date.now() - startTime >= timeoutMs) {
-      renderSuccess(result, outOpts, out);
-      process.exit(3);
-      return; // unreachable; satisfies TypeScript
-    }
-    await sleep(SYNC_POLL_INTERVAL_MS);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -491,79 +395,13 @@ const inboxMessagesCommand = defineCommand({
   },
 });
 
-const inboxSyncCommand = defineCommand({
-  meta: { name: "sync", description: "Re-sync account message history." },
-  args: {
-    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
-    ...READ_SINGLE_FLAGS,
-  },
-  async run({ args }) {
-    const flags = args as InboxFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runInboxSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
-const inboxSyncChatCommand = defineCommand({
-  meta: { name: "sync-chat", description: "Re-sync a specific chat's message history." },
-  args: {
-    // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields.
-    // The timeout below overrides READ_SINGLE_FLAGS.timeout with a command-specific description.
-    ...READ_SINGLE_FLAGS,
-    chatId: { type: "positional", description: "Chat ID." },
-    wait: {
-      type: "boolean" as const,
-      description: "Poll until sync completes (or --timeout elapses).",
-      default: false,
-    },
-    // Override READ_SINGLE_FLAGS.timeout: here --timeout is the polling wait timeout
-    // in seconds (default: 30), not the SDK request timeout.
-    timeout: {
-      type: "string" as const,
-      description: "Polling timeout in seconds (default: 30, requires --wait).",
-    },
-  },
-  async run({ args }) {
-    const flags = args as InboxFlags;
-    // --timeout on this command is the wait polling timeout (seconds), not the SDK
-    // request timeout. Resolve config without it so the SDK uses its default timeout.
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runInboxSyncChat(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 export const inboxCommand = defineCommand({
-  meta: { name: "inbox", description: "Read and sync LinkedIn message inbox." },
+  meta: { name: "inbox", description: "Read LinkedIn message inbox." },
   subCommands: {
     list: inboxListCommand,
     get: inboxGetCommand,
     "mark-read": inboxMarkReadCommand,
     messages: inboxMessagesCommand,
-    sync: inboxSyncCommand,
-    "sync-chat": inboxSyncChatCommand,
   },
   async run() {
     process.stderr.write(
@@ -571,9 +409,7 @@ export const inboxCommand = defineCommand({
       "  list\n" +
       "  get <chat_id>\n" +
       "  mark-read <chat_id>\n" +
-      "  messages <chat_id>\n" +
-      "  sync\n" +
-      "  sync-chat <chat_id>\n",
+      "  messages <chat_id>\n",
     );
   },
 });

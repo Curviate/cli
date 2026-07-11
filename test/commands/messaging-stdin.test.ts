@@ -6,7 +6,7 @@
  * Empty stdin (zero bytes after trim) exits 2 with "stdin: empty input".
  *
  * Applies to: message send, message new, message edit, message inmail,
- *             post create, post comment.
+ *             post create.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -34,7 +34,6 @@ function makePostNs() {
   return {
     posts: {
       create: vi.fn().mockResolvedValue({ object: "post_created", post_id: "p1" }),
-      comment: vi.fn().mockResolvedValue({ object: "comment_created" }),
     },
   };
 }
@@ -423,67 +422,5 @@ describe("post create with stdin sentinel", () => {
     }
 
     expect(ns.posts.create).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// post comment "-" → reads stdin as text
-// ---------------------------------------------------------------------------
-
-describe("post comment with stdin sentinel", () => {
-  let ns: ReturnType<typeof makePostNs>;
-  let client: ReturnType<typeof makePostClient>;
-
-  beforeEach(() => {
-    ns = makePostNs();
-    client = makePostClient(ns);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("stdin sentinel reads input and passes trimmed text to posts.comment", async () => {
-    const { runPostComment } = await import("../../src/commands/post.js");
-    const out = makeOut();
-
-    await runPostComment(
-      client as never,
-      { postId: "post_1", text: "-", account: "acc_1", json: true },
-      out,
-      makeStdin("Comment text"),
-    );
-
-    expect(ns.posts.comment).toHaveBeenCalledWith(
-      "post_1",
-      expect.objectContaining({ text: "Comment text" }),
-    );
-  });
-
-  it("empty stdin exits 2 and posts.comment is not called", async () => {
-    const { runPostComment } = await import("../../src/commands/post.js");
-    const out = makeOut();
-
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-
-    try {
-      await runPostComment(
-        client as never,
-        { postId: "post_1", text: "-", account: "acc_1", json: true },
-        out,
-        makeEmptyStdin(),
-      );
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-      const stderrOutput = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-      expect(stderrOutput).toContain("stdin: empty input");
-    } finally {
-      exitSpy.mockRestore();
-    }
-
-    expect(ns.posts.comment).not.toHaveBeenCalled();
   });
 });

@@ -24,12 +24,9 @@ describe("recruiter write commands — no pagination flags in help", () => {
   it.each([
     ["message.new (start-chat)", ["message", "new"]],
     ["save-candidate", ["save-candidate"]],
-    ["add-applicant", ["add-applicant"]],
-    ["reject-applicant", ["reject-applicant"]],
     ["job.create", ["job", "create"]],
     ["job.publish", ["job", "publish"]],
     ["job.close", ["job", "close"]],
-    ["job.checkpoint", ["job", "checkpoint"]],
     ["project.update", ["project", "update"]],
     ["project-job.create", ["project-job", "create"]],
     ["project-job.update", ["project-job", "update"]],

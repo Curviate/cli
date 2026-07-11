@@ -4,10 +4,7 @@
  * Covers:
  *   account list           — accounts.list() + --all pagination
  *   account get            — accounts.get()
- *   account link           — accounts.link() body-flag + required flags + --preview
- *   account connect-link   — accounts.createConnectLink() (create-only) + --preview
- *   account reconnect      — accounts.reconnect() body-flag + required flags + --preview
- *   account reconnect-link — accounts.createReconnectLink() (path-addressed) + --preview
+ *   account link           — auth.intent() body-flag + required flags + --preview
  *   account update         — accounts.update() (metadata/proxy) + --preview
  *   account disconnect     — accounts.disconnect() + --preview
  *   account checkpoint solve — accounts.solveCheckpoint() path-addressed + --preview
@@ -30,9 +27,6 @@ function makeClient() {
     accounts: {
       list: vi.fn(),
       get: vi.fn(),
-      createConnectLink: vi.fn(),
-      reconnect: vi.fn(),
-      createReconnectLink: vi.fn(),
       update: vi.fn(),
       disconnect: vi.fn(),
     },
@@ -563,164 +557,6 @@ describe("account link", () => {
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
     expect(parsed.method).toBe("auth.intent");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// account connect-link
-// ---------------------------------------------------------------------------
-
-describe("account connect-link", () => {
-  let client: Client;
-
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.createConnectLink as Mock).mockResolvedValue({ object: "hosted_auth_url", url: "https://example.com/auth" });
-  });
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("calls accounts.createConnectLink with body", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountConnectLink(client as never, {
-      "seat-id": "seat_1",
-      json: true,
-    } as AccountFlags, out);
-
-    // Create-only: the body carries seat_id but no purpose/account_id fields.
-    expect(client.accounts.createConnectLink).toHaveBeenCalledWith({ seat_id: "seat_1" });
-  });
-
-  it("--preview renders request without calling createConnectLink", async () => {
-    const { runAccountConnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountConnectLink(client as never, {
-      "seat-id": "seat_1",
-      preview: true,
-    } as AccountFlags, out);
-
-    expect(client.accounts.createConnectLink).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.createConnectLink");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// account reconnect
-// ---------------------------------------------------------------------------
-
-describe("account reconnect", () => {
-  let client: Client;
-
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.reconnect as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
-  });
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("calls accounts.reconnect with account_id path arg verbatim + body", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountReconnect(client as never, {
-      "account-id": "acc_1",
-      "auth-method": "cookie",
-      "li-at": "li_at_value",
-      "user-agent": "Mozilla/5.0",
-      json: true,
-    } as AccountFlags, out);
-
-    expect(client.accounts.reconnect).toHaveBeenCalledWith(
-      "acc_1",
-      expect.objectContaining({ auth_method: "cookie" }),
-    );
-  });
-
-  it("missing --auth-method exits 2", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
-      throw new Error(`process.exit(${code})`);
-    });
-    try {
-      await runAccountReconnect(client as never, { "account-id": "acc_1" } as AccountFlags, out);
-      expect.fail("should have exited");
-    } catch (e) {
-      expect((e as Error).message).toContain("process.exit(2)");
-    } finally {
-      exitSpy.mockRestore();
-    }
-    expect(client.accounts.reconnect).not.toHaveBeenCalled();
-  });
-
-  it("--preview renders request without calling reconnect", async () => {
-    const { runAccountReconnect } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountReconnect(client as never, {
-      "account-id": "acc_1",
-      "auth-method": "cookie",
-      "li-at": "val",
-      "user-agent": "Mozilla/5.0",
-      preview: true,
-    } as AccountFlags, out);
-
-    expect(client.accounts.reconnect).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.reconnect");
-    expect(parsed.args).toHaveProperty("accountId", "acc_1");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// account reconnect-link (hosted re-auth; account_id is a path positional)
-// ---------------------------------------------------------------------------
-
-describe("account reconnect-link", () => {
-  let client: Client;
-
-  beforeEach(() => {
-    client = makeClient();
-    (client.accounts.createReconnectLink as Mock).mockResolvedValue({
-      object: "hosted_auth_url",
-      url: "https://curviate.com/api/connect/re",
-      session_id: "cs_re",
-      expires_at: "2099-01-01T00:00:00.000Z",
-      account_id: "acc_1",
-    });
-  });
-
-  afterEach(() => vi.restoreAllMocks());
-
-  it("non-interactive: calls createReconnectLink with the path account_id + body, prints url + session_id, exits 0", async () => {
-    const { runAccountReconnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountReconnectLink(
-      client as never,
-      { "account-id": "acc_1", "expires-in-seconds": "600", json: true } as AccountFlags,
-      out,
-      { isTTY: false, isOutputTTY: true },
-    );
-    expect(client.accounts.createReconnectLink).toHaveBeenCalledWith("acc_1", { expires_in_seconds: 600 });
-    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    expect(stderrText).toContain("cs_re");
-  });
-
-  it("--preview renders request without calling createReconnectLink", async () => {
-    const { runAccountReconnectLink } = await import("../../src/commands/account.js");
-    const out = makeOut();
-    await runAccountReconnectLink(
-      client as never,
-      { "account-id": "acc_1", preview: true } as AccountFlags,
-      out,
-    );
-    expect(client.accounts.createReconnectLink).not.toHaveBeenCalled();
-    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
-    const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.createReconnectLink");
-    expect(parsed.args).toHaveProperty("accountId", "acc_1");
   });
 });
 

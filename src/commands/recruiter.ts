@@ -2,7 +2,6 @@
  * `curviate recruiter` — LinkedIn Recruiter operations (tier: recruiter).
  *
  * Subcommands:
- *   recruiter sync [--cursor] [--limit]                                          — sync messages (read)
  *   recruiter message new --to <id> "<text>" [--attach <f>…] [--voice <f>] [--video <f>] — start chat (write, multipart)
  *   recruiter profile <identifier>                                               — get profile (read, resolveIdentifier)
  *   recruiter search people [--keywords <k>] [--all] [--limit] [--cursor]       — search people (POST)
@@ -10,12 +9,9 @@
  *   recruiter projects [--all] [--limit] [--cursor]                              — list projects (read)
  *   recruiter project <project_id>                                               — get project (read, verbatim id)
  *   recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>  — save candidate to pipeline (write)
- *   recruiter add-applicant <user_id> --hiring-project-id <id> [--stage <s>]    — add applicant (write)
- *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r> [--message <m>] [--notify-at <ms>] — reject applicant (write; applicant is notified only when --message is given)
  *   recruiter jobs [--all] [--limit] [--cursor]                                  — list jobs (read)
  *   recruiter job create [--body-file <path> | --body -] [--job-title <t>] [--description <d>] [--employment-type <e>] — create job draft (write; JSON body + scalar flags)
  *   recruiter job publish <project_id> <job_id> [--mode <m>]                                  — publish job (write)
- *   recruiter job checkpoint <job_id> --input <v>                                — solve checkpoint (write)
  *   recruiter job applicants <project_id> --channel-id <id>                                             — list applicants (read)
  *   recruiter job get <url|id>                                                    — get a job posting via the Recruiter lens (read, any public job)
  *   recruiter applicant <project_id> <applicant_id>                                            — get applicant (read, verbatim id)
@@ -371,33 +367,6 @@ function requireRecruiterJobFields(
 // ---------------------------------------------------------------------------
 // Exported run functions (testable without citty)
 // ---------------------------------------------------------------------------
-
-/**
- * Run `recruiter sync`.
- * Read command — rejects --preview.
- */
-export async function runRecruiterSync(
-  client: Curviate,
-  flags: RecruiterFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  const params: Record<string, unknown> = {};
-  if (flags.cursor) params["cursor"] = flags.cursor;
-  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
-
-  try {
-    const result = await ns.recruiter.syncMessages(params);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
 
 /**
  * Run `recruiter message new --to <id> --subject <s> --signature <sig> "<text>" [--attach <f>…] [--voice <f>] [--video <f>]`.
@@ -956,111 +925,6 @@ export async function runRecruiterSaveCandidate(
 }
 
 /**
- * Run `recruiter add-applicant <user_id> --hiring-project-id <id> [--stage <s>]`.
- * Write command — supports --preview. user_id passes verbatim.
- */
-export async function runRecruiterAddApplicant(
-  client: Curviate,
-  flags: RecruiterFlags,
-  out: OutputStreams,
-): Promise<void> {
-  const accountId = requireAccount(flags.account, out);
-  const userId = flags.userId ?? "";
-  const outOpts = resolveOutputOpts(flags);
-
-  const body: Record<string, unknown> = {};
-  if (flags["hiring-project-id"]) body["hiring_project_id"] = flags["hiring-project-id"];
-  if (flags.stage) body["stage"] = flags.stage;
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "recruiter.addApplicant",
-      args: { user_id: userId },
-      body,
-      account: accountId,
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  const ns = client.account(accountId);
-
-  try {
-    const result = await ns.recruiter.addApplicant(userId, body);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
- * Run `recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r> [--message <m>] [--notify-at <ms>]`.
- * Write command — supports --preview. user_id passes verbatim.
- *
- * --message is optional; when present it adds rejection_notification.message to the body,
- * which is the only thing that causes LinkedIn to notify the applicant of the rejection —
- * omitting --message keeps the applicant unnotified, matching the API default.
- * --notify-at (rejection_notification.send_notification_at, UNIX ms) is only meaningful inside
- * rejection_notification, so it requires --message; passing --notify-at alone is a usage error (exit 2).
- * A non-numeric --notify-at is also a usage error (exit 2) — caught client-side rather than
- * forwarded as a malformed number for the server to reject with a 400.
- */
-export async function runRecruiterRejectApplicant(
-  client: Curviate,
-  flags: RecruiterFlags,
-  out: OutputStreams,
-): Promise<void> {
-  const accountId = requireAccount(flags.account, out);
-  const userId = flags.userId ?? "";
-  const outOpts = resolveOutputOpts(flags);
-
-  if (flags["notify-at"] && !flags.message) {
-    out.stderr.write(
-      "error: --notify-at requires --message (rejection_notification.message is required to send a notification).\n",
-    );
-    process.exit(2);
-  }
-
-  let notifyAt: number | undefined;
-  if (flags["notify-at"]) {
-    notifyAt = Number(flags["notify-at"]);
-    if (!Number.isFinite(notifyAt)) {
-      out.stderr.write("error: --notify-at must be a UNIX milliseconds timestamp (a number).\n");
-      process.exit(2);
-    }
-  }
-
-  const body: Record<string, unknown> = {};
-  if (flags["hiring-project-id"]) body["hiring_project_id"] = flags["hiring-project-id"];
-  if (flags.reason) body["reason"] = flags.reason;
-  if (flags.message) {
-    const rejectionNotification: Record<string, unknown> = { message: flags.message };
-    if (notifyAt !== undefined) rejectionNotification["send_notification_at"] = notifyAt;
-    body["rejection_notification"] = rejectionNotification;
-  }
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "recruiter.rejectApplicant",
-      args: { user_id: userId },
-      body,
-      account: accountId,
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  const ns = client.account(accountId);
-
-  try {
-    const result = await ns.recruiter.rejectApplicant(userId, body);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
  * Run `recruiter jobs [--all] [--limit] [--cursor]`.
  * Read command — rejects --preview. Paginated.
  */
@@ -1440,43 +1304,6 @@ export async function runRecruiterSearchTalentPool(
 }
 
 /**
- * Run `recruiter job checkpoint <job_id> --input <v>`.
- * Write command — supports --preview. job_id passes verbatim.
- */
-export async function runRecruiterJobCheckpoint(
-  client: Curviate,
-  flags: RecruiterFlags,
-  out: OutputStreams,
-): Promise<void> {
-  const accountId = requireAccount(flags.account, out);
-  const jobId = flags.jobId ?? "";
-  const outOpts = resolveOutputOpts(flags);
-
-  const body: Record<string, unknown> = {};
-  if (flags.input) body["input"] = flags.input;
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "recruiter.solveJobCheckpoint",
-      args: { job_id: jobId },
-      body,
-      account: accountId,
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  const ns = client.account(accountId);
-
-  try {
-    const result = await ns.recruiter.solveJobCheckpoint(jobId, body);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
-/**
  * Run `recruiter job applicants <project_id> --channel-id <id>`.
  * Read command — rejects --preview. project_id passes verbatim.
  *
@@ -1609,28 +1436,6 @@ export async function runRecruiterDownloadResume(
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
-
-const recruiterSyncCommand = defineCommand({
-  meta: { name: "sync", description: "Sync Recruiter message history for an account." },
-  args: { ...GLOBAL_FLAGS },
-  async run({ args }) {
-    const flags = args as RecruiterFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runRecruiterSync(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
 
 const recruiterMessageNewCommand = defineCommand({
   meta: { name: "new", description: "Start a new Recruiter chat with a member." },
@@ -1970,74 +1775,6 @@ const recruiterSaveCandidateCommand = defineCommand({
   },
 });
 
-const recruiterAddApplicantCommand = defineCommand({
-  meta: { name: "add-applicant", description: "Add a member as an applicant in a hiring project." },
-  args: {
-    // Write command: WRITE_FLAGS omits pagination/projection flags
-    ...WRITE_FLAGS,
-    userId: { type: "positional", description: "Member ID (AEM… format)." },
-    "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
-    stage: { type: "string", description: "Pipeline stage (UNCONTACTED, CONTACTED, REPLIED)." },
-  },
-  async run({ args }) {
-    const flags = args as RecruiterFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runRecruiterAddApplicant(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
-const recruiterRejectApplicantCommand = defineCommand({
-  meta: { name: "reject-applicant", description: "Reject an applicant from a hiring project." },
-  args: {
-    // Write command: WRITE_FLAGS omits pagination/projection flags
-    ...WRITE_FLAGS,
-    userId: { type: "positional", description: "Member ID (AEM… format)." },
-    "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
-    reason: {
-      type: "string",
-      description: "Rejection reason (NOT_MEET_BASIC_QUALIFICATIONS, NOT_IN_DESIRED_LOCATION, MORE_QUALIFIED_CANDIDATES, WITHDREW_APPLICATION, NOT_CONSIDERED_OR_REASON_NOT_SPECIFIED).",
-      required: true,
-    },
-    message: {
-      type: "string",
-      description: "Rejection notification text. The applicant is only notified when --message is provided; omit it to reject silently.",
-    },
-    "notify-at": {
-      type: "string",
-      description: "UNIX milliseconds timestamp to schedule the notification (default: now). Requires --message.",
-    },
-  },
-  async run({ args }) {
-    const flags = args as RecruiterFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runRecruiterRejectApplicant(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 const recruiterJobsCommand = defineCommand({
   meta: { name: "jobs", description: "List Recruiter job postings." },
   args: { ...GLOBAL_FLAGS },
@@ -2140,33 +1877,6 @@ const recruiterJobPublishCommand = defineCommand({
   },
 });
 
-const recruiterJobCheckpointCommand = defineCommand({
-  meta: { name: "checkpoint", description: "Solve a job posting publish verification checkpoint." },
-  args: {
-    // Write command: WRITE_FLAGS omits pagination/projection flags
-    ...WRITE_FLAGS,
-    jobId: { type: "positional", description: "Job posting ID." },
-    input: { type: "string", description: "Verification value (OTP or email confirmation).", required: true },
-  },
-  async run({ args }) {
-    const flags = args as RecruiterFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runRecruiterJobCheckpoint(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 const recruiterJobApplicantsCommand = defineCommand({
   meta: { name: "applicants", description: "List applicants in a Recruiter project's talent pool." },
   args: {
@@ -2252,7 +1962,6 @@ const recruiterJobCommand = defineCommand({
     create: recruiterJobCreateCommand,
     publish: recruiterJobPublishCommand,
     close: recruiterJobCloseCommand,
-    checkpoint: recruiterJobCheckpointCommand,
     applicants: recruiterJobApplicantsCommand,
     get: recruiterJobGetCommand,
   },
@@ -2261,7 +1970,6 @@ const recruiterJobCommand = defineCommand({
       "Usage: curviate recruiter job create [flags…]\n" +
       "       curviate recruiter job publish <project_id> <job_id> --mode <FREE|PROMOTED|PROMOTED_PLUS>\n" +
       "       curviate recruiter job close <project_id> <job_id>\n" +
-      "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
       "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n",
     );
@@ -2519,7 +2227,6 @@ export const recruiterCommand = defineCommand({
   meta: { name: "recruiter", description: "LinkedIn Recruiter operations (requires the Recruiter add-on)." },
   args: { ...GLOBAL_FLAGS },
   subCommands: {
-    sync: recruiterSyncCommand,
     message: recruiterMessageCommand,
     profile: recruiterProfileCommand,
     search: recruiterSearchCommand,
@@ -2529,16 +2236,13 @@ export const recruiterCommand = defineCommand({
     "project-job": recruiterProjectJobCommand,
     "talent-search": recruiterTalentSearchCommand,
     "save-candidate": recruiterSaveCandidateCommand,
-    "add-applicant": recruiterAddApplicantCommand,
-    "reject-applicant": recruiterRejectApplicantCommand,
     jobs: recruiterJobsCommand,
     job: recruiterJobCommand,
     applicant: recruiterApplicantCommand,
   },
   async run() {
     process.stderr.write(
-      "Usage: curviate recruiter sync\n" +
-      "       curviate recruiter message new --to <id> \"<text>\"\n" +
+      "Usage: curviate recruiter message new --to <id> \"<text>\"\n" +
       "       curviate recruiter profile <identifier>\n" +
       "       curviate recruiter search people [--keywords <k>]\n" +
       "       curviate recruiter search parameters --source <s> --type <t>\n" +
@@ -2553,13 +2257,10 @@ export const recruiterCommand = defineCommand({
       "       curviate recruiter project-job update <project_id> <job_id> [flags…]\n" +
       "       curviate recruiter talent-search <project_id> --channel-id <id>\n" +
       "       curviate recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>\n" +
-      "       curviate recruiter add-applicant <user_id> --hiring-project-id <id>\n" +
-      "       curviate recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>\n" +
       "       curviate recruiter jobs\n" +
       "       curviate recruiter job create [flags…]\n" +
       "       curviate recruiter job publish <project_id> <job_id> --mode <FREE|PROMOTED|PROMOTED_PLUS>\n" +
       "       curviate recruiter job close <project_id> <job_id>\n" +
-      "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
       "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n" +
       "       curviate recruiter applicant <project_id> <applicant_id>\n" +

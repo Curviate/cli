@@ -6,12 +6,11 @@
  *   company employees <id> [--keywords] [--location]      — list employees (facade)
  *   company posts <id>                                     — list posts (facade)
  *   company jobs <id> [--keywords]                         — list open jobs (facade)
- *   company followers <id>                                 — list followers (native)
  *
- * All five are read commands: --preview is a usage error (exit 2).
+ * All four are read commands: --preview is a usage error (exit 2).
  *
  * Retrieve keeps its broader identifier contract (URL, slug, or numeric id —
- * `resolveIdentifier` handles company URLs). The four sub-resource commands
+ * `resolveIdentifier` handles company URLs). The three sub-resource commands
  * require the company's NUMERIC provider_id (the `id` field the retrieve
  * response returns) — a handle or URN is rejected server-side (400
  * INVALID_REQUEST) before any upstream call; the CLI does not duplicate that
@@ -268,50 +267,6 @@ export async function runCompanyJobs(
   }
 }
 
-/**
- * Run `company followers <id> [--limit] [--cursor] [--all]`.
- * Native — reuses the same seam that backs `profile <id> --followers`. The
- * acting account must administer the target company page (403
- * RESOURCE_ACCESS_RESTRICTED otherwise). No slim projector — mirrors the
- * profile-followers precedent (verbose by default; the Follower shape is
- * already compact).
- */
-export async function runCompanyFollowers(
-  client: Curviate,
-  flags: CompanyFlags,
-  out: OutputStreams,
-): Promise<void> {
-  rejectPreviewOnRead(flags.preview, out);
-
-  const accountId = requireAccount(flags.account, out);
-  const identifier = flags.id ?? "";
-  const ns = client.account(accountId);
-  const outOpts = resolveOutputOpts(flags);
-
-  const params: Record<string, unknown> = {};
-  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
-  if (flags.cursor) params["cursor"] = flags.cursor;
-
-  try {
-    if (flags.all) {
-      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
-      const fn = (p: Record<string, unknown>) =>
-        ns.companies.followers(identifier, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
-      for await (const item of streamAll(fn, params, {
-        maxPages,
-        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
-      })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
-      }
-      return;
-    }
-    const result = await ns.companies.followers(identifier, params);
-    renderSuccess(result, outOpts, out);
-  } catch (err: unknown) {
-    await handleSdkError(err, outOpts, out);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -394,31 +349,6 @@ const companyJobsCommand = defineCommand({
   },
 });
 
-const companyFollowersCommand = defineCommand({
-  meta: { name: "followers", description: "List the company's followers. Requires page-admin permission." },
-  args: {
-    ...GLOBAL_FLAGS,
-    id: { type: "positional", description: "The company's numeric provider_id (the id field of `company <id>`)." },
-  },
-  async run({ args }) {
-    const flags = args as CompanyFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      account: flags.account,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runCompanyFollowers(client, { ...flags, account: flags.account ?? cfg.account }, out);
-  },
-});
-
 export const companyCommand = defineCommand({
   meta: { name: "company", description: "Fetch a company profile by URL, slug, or numeric id, and its sub-resources." },
   args: {
@@ -430,7 +360,6 @@ export const companyCommand = defineCommand({
     employees: companyEmployeesCommand,
     posts: companyPostsCommand,
     jobs: companyJobsCommand,
-    followers: companyFollowersCommand,
   },
   async run({ args }) {
     const flags = args as CompanyFlags;

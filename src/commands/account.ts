@@ -5,10 +5,7 @@
  *   account list                                      — list connected accounts
  *   account get <account_id>                          — get one account
  *   account link <body…>                              — link a new account (write)
- *   account connect-link <body…>                      — generate a hosted connect URL, then (TTY+interactive) open + wait (write)
- *   account reconnect-link <account_id> <body…>       — generate a hosted re-auth URL for an existing account, then open + wait (write)
- *   account connect-session poll --session <id>       — poll a hosted connect-link session for completion (write)
- *   account reconnect <account_id> <body…>            — re-authorize a disconnected account (write)
+ *   account connect-session poll --session <id>       — poll a hosted connect session for completion (write)
  *   account update <account_id> <body…>               — update metadata / proxy config (write)
  *   account disconnect <account_id>                   — hard-disconnect an account (write)
  *   account checkpoint solve <account_id> --code      — solve a checkpoint with an OTP/2FA code (path-addressed, write)
@@ -769,113 +766,6 @@ function resolveWaitTimeoutOverrideMs(flags: AccountFlags, out: OutputStreams): 
 }
 
 /**
- * Run `account connect-link <body…> [--wait/--no-wait] [--open/--no-open] [--timeout <ms>]`.
- * All body fields are optional (conditional on purpose).
- *
- * TTY + interactive (default): auto-opens the returned URL in the browser,
- * then waits on the adaptive cadence for the session to resolve — printing a
- * refreshing status line while pending (unless --json), then a terminal exit
- * (0 resolved, 9 expired/failed, 12 AUTH_NEEDED on a wait-window timeout).
- *
- * Non-TTY / --no-interactive (the agent path): NEVER opens a browser and
- * NEVER waits — prints the URL, a relay instruction, and the session_id, then
- * returns immediately (exit 0). A headless caller must not block on a
- * hand-off that requires a human; poll later with `connect-session poll`.
- */
-export async function runAccountConnectLink(
-  client: Curviate,
-  flags: AccountFlags,
-  out: OutputStreams,
-  io: CredentialIO = {},
-): Promise<void> {
-  // Create-only: connect-link mints a link to connect a NEW account. Hosted
-  // re-auth of an existing account is `account reconnect-link <account_id>`.
-  const body: Record<string, unknown> = {};
-  if (flags["seat-id"]) body["seat_id"] = flags["seat-id"];
-  if (flags["expires-in-seconds"]) body["expires_in_seconds"] = parseInt(flags["expires-in-seconds"], 10);
-  if (flags["redirect-url"]) body["redirect_url"] = flags["redirect-url"];
-
-  const outOpts = resolveOutputOpts(flags);
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.createConnectLink", args: {}, body });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  let result: unknown;
-  try {
-    result = await client.accounts.createConnectLink(body);
-  } catch (err) {
-    await handleError(err, outOpts, out);
-    return;
-  }
-
-  const mint = result as { url?: string; session_id?: string };
-  const resolvedIo = resolveCredentialIO(io);
-  const isInteractive = resolvedIo.isTTY && resolvedIo.isOutputTTY && !(flags["no-interactive"] ?? false);
-
-  if (!isInteractive) {
-    if (mint.url) {
-      out.stderr.write(`Open this URL in a browser to connect the account: ${mint.url}\n`);
-    }
-    if (mint.session_id) {
-      out.stderr.write(
-        `Session: ${mint.session_id} — check it later with: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
-      );
-    }
-    renderSuccess(result, outOpts, out);
-    return;
-  }
-
-  if ((flags.open ?? true) && mint.url) {
-    await resolvedIo.open(mint.url);
-  }
-
-  if (!(flags.wait ?? true)) {
-    renderSuccess(result, outOpts, out);
-    return;
-  }
-
-  const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
-  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
-  const sessionId = mint.session_id ?? "";
-
-  let outcome: ConnectSessionWaitOutcome;
-  try {
-    outcome = await runConnectSessionWaitLoop(client, sessionId, {
-      out,
-      sleep: resolvedIo.sleep,
-      now: resolvedIo.now,
-      showTicker,
-      timeoutOverrideMs,
-    });
-  } catch (err) {
-    await handleError(err, outOpts, out);
-    return;
-  }
-
-  if (outcome.kind === "resolved") {
-    printConnectSessionResolved(outcome.result, { out, outOpts });
-    return;
-  }
-  if (outcome.kind === "terminal_failure") {
-    renderSuccess(outcome.result, outOpts, out);
-    out.stderr.write(
-      `This connect session has ${outcome.status}. Generate a new link: curviate account connect-link.\n`,
-    );
-    process.exit(9);
-    return;
-  }
-  // outcome.kind === "timeout"
-  renderSuccess(outcome.result, outOpts, out);
-  out.stderr.write(
-    `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${sessionId} --wait\n`,
-  );
-  process.exit(AUTH_NEEDED);
-}
-
-/**
  * Run `account connect-session poll --session <session_id> [--wait] [--timeout <ms>]`.
  *
  * Without `--wait` (default): a single poll, prints the body, exits 0
@@ -953,171 +843,6 @@ export async function runAccountConnectSessionPoll(
     `Still waiting for the account to connect — the wait window elapsed. Check again: curviate account connect-session poll --session ${flags.session} --wait\n`,
   );
   process.exit(AUTH_NEEDED);
-}
-
-/**
- * Run `account reconnect-link <account_id> <body…> [--wait/--no-wait] [--open/--no-open] [--timeout <ms>]`.
- * Required: --account-id (positional). Body fields optional.
- *
- * The hosted counterpart of `account reconnect`: mints a one-time hosted
- * re-authorization link for an EXISTING disconnected account, then (on a TTY,
- * interactively) auto-opens it and waits for the account to reconnect. Same
- * open+wait UX and terminal exit codes as `account connect-link` (0 resolved,
- * 9 expired/failed, 12 on a wait-window timeout); non-interactively it prints
- * the url + session_id and returns immediately (exit 0) for later polling with
- * `account connect-session poll`.
- */
-export async function runAccountReconnectLink(
-  client: Curviate,
-  flags: AccountFlags,
-  out: OutputStreams,
-  io: CredentialIO = {},
-): Promise<void> {
-  const accountId = flags["account-id"] ?? "";
-  const body: Record<string, unknown> = {};
-  if (flags["expires-in-seconds"]) body["expires_in_seconds"] = parseInt(flags["expires-in-seconds"], 10);
-  if (flags["redirect-url"]) body["redirect_url"] = flags["redirect-url"];
-
-  const outOpts = resolveOutputOpts(flags);
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.createReconnectLink", args: { accountId }, body });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  let result: unknown;
-  try {
-    result = await client.accounts.createReconnectLink(accountId, body);
-  } catch (err) {
-    await handleError(err, outOpts, out);
-    return;
-  }
-
-  const mint = result as { url?: string; session_id?: string };
-  const resolvedIo = resolveCredentialIO(io);
-  const isInteractive = resolvedIo.isTTY && resolvedIo.isOutputTTY && !(flags["no-interactive"] ?? false);
-
-  if (!isInteractive) {
-    if (mint.url) {
-      out.stderr.write(`Open this URL in a browser to reconnect the account: ${mint.url}\n`);
-    }
-    if (mint.session_id) {
-      out.stderr.write(
-        `Session: ${mint.session_id} — check it later with: curviate account connect-session poll --session ${mint.session_id} --wait\n`,
-      );
-    }
-    renderSuccess(result, outOpts, out);
-    return;
-  }
-
-  if ((flags.open ?? true) && mint.url) {
-    await resolvedIo.open(mint.url);
-  }
-
-  if (!(flags.wait ?? true)) {
-    renderSuccess(result, outOpts, out);
-    return;
-  }
-
-  const timeoutOverrideMs = resolveWaitTimeoutOverrideMs(flags, out);
-  const showTicker = resolvedIo.isOutputTTY && !(flags.json ?? false);
-  const sessionId = mint.session_id ?? "";
-
-  let outcome: ConnectSessionWaitOutcome;
-  try {
-    outcome = await runConnectSessionWaitLoop(client, sessionId, {
-      out,
-      sleep: resolvedIo.sleep,
-      now: resolvedIo.now,
-      showTicker,
-      timeoutOverrideMs,
-    });
-  } catch (err) {
-    await handleError(err, outOpts, out);
-    return;
-  }
-
-  if (outcome.kind === "resolved") {
-    printConnectSessionResolved(outcome.result, { out, outOpts });
-    return;
-  }
-  if (outcome.kind === "terminal_failure") {
-    renderSuccess(outcome.result, outOpts, out);
-    out.stderr.write(
-      `This reconnect session has ${outcome.status}. Generate a new link: curviate account reconnect-link ${accountId}.\n`,
-    );
-    process.exit(9);
-    return;
-  }
-  // outcome.kind === "timeout"
-  renderSuccess(outcome.result, outOpts, out);
-  out.stderr.write(
-    `Still waiting for the account to reconnect — the wait window elapsed. Check again: curviate account connect-session poll --session ${sessionId} --wait\n`,
-  );
-  process.exit(AUTH_NEEDED);
-}
-
-/**
- * Run `account reconnect <account_id> <body…>`.
- * Required: --account-id (positional), --auth-method.
- */
-export async function runAccountReconnect(
-  client: Curviate,
-  flags: AccountFlags,
-  out: OutputStreams,
-  io: CredentialIO = {},
-): Promise<void> {
-  if (!flags["auth-method"]) {
-    out.stderr.write("error: --auth-method is required for account reconnect (credentials | cookie).\n");
-    process.exit(2);
-  }
-
-  checkCredentialConflicts(flags, out);
-
-  // Cookie auth requires a User-Agent (as on link). Optional for credentials.
-  // Skipped under --preview (a client-side render must never exit).
-  if (!flags.preview && flags["auth-method"] === "cookie" && !flags["user-agent"]) {
-    out.stderr.write("error: --user-agent is required when --auth-method=cookie.\n");
-    process.exit(2);
-  }
-
-  const accountId = flags["account-id"] ?? "";
-  const resolvedIo = resolveCredentialIO(io);
-  const body = await buildAuthBody(flags, {
-    out,
-    isTTY: resolvedIo.isTTY,
-    readline: resolvedIo.readline,
-    readStdin: resolvedIo.readStdin,
-    previewMode: flags.preview ?? false,
-  });
-  const outOpts = resolveOutputOpts(flags);
-
-  if (flags.preview) {
-    const preview = buildPreviewOutput({
-      method: "accounts.reconnect",
-      args: { accountId },
-      body: maskCredentialSecretsForPreview(body),
-    });
-    out.stdout.write(JSON.stringify(preview) + "\n");
-    return;
-  }
-
-  let result: unknown;
-  try {
-    result = await client.accounts.reconnect(accountId, body);
-  } catch (err) {
-    await handleError(err, outOpts, out);
-    return;
-  }
-
-  await handleAccountConnectResult(client, result, {
-    out,
-    flags,
-    outOpts,
-    io: resolvedIo,
-    successVerb: "reconnected",
-  });
 }
 
 /**
@@ -1590,106 +1315,6 @@ const accountLinkCommand = defineCommand({
   },
 });
 
-const accountConnectLinkCommand = defineCommand({
-  meta: {
-    name: "connect-link",
-    description:
-      "Generate a one-time hosted URL to connect a NEW LinkedIn account. On an interactive TTY the URL " +
-      "auto-opens in your browser and the command waits for the account to connect (exit 0 on success, 9 " +
-      "if the link expires or fails, 12 if the wait window elapses first). Non-interactively it never opens " +
-      "a browser and returns immediately with the url and session_id — poll completion later with " +
-      "`account connect-session poll`. To re-authorize an EXISTING account, use `account reconnect-link`.",
-  },
-  args: {
-    ...WRITE_SINGLE_FLAGS,
-    "seat-id": { type: "string", description: "Empty seat to bind the new account to.", required: true },
-    "expires-in-seconds": { type: "string", description: "Link expiry in seconds (60–3600, default 900)." },
-    "redirect-url": { type: "string", description: "Browser return URL after the hosted flow." },
-    open: {
-      type: "boolean",
-      description: "Auto-open the URL in your default browser. Default: on for an interactive TTY, always off otherwise (ignored non-interactively).",
-    },
-    wait: {
-      type: "boolean",
-      description: "Poll for the account to connect on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) after opening the URL. Default: on for an interactive TTY, always off otherwise (the agent polls later via `account connect-session poll`).",
-    },
-    // Override WRITE_SINGLE_FLAGS.timeout: on this command --timeout is the
-    // TTY+interactive wait loop's own wall-clock bound in MILLISECONDS
-    // (meaningless outside that branch) — NOT the SDK request timeout.
-    // Default: the time remaining to the link's own expiry.
-    timeout: {
-      type: "string",
-      description: "Wait-loop timeout in milliseconds (only meaningful under the interactive TTY wait; default: time remaining to the link's expiry). Note the unit: this is milliseconds.",
-    },
-  },
-  async run({ args }) {
-    const flags = args as AccountFlags;
-    // --timeout here means the wait-loop bound (ms), not the SDK request
-    // timeout — resolve config without it so the SDK client keeps its
-    // default request timeout (mirrors `account checkpoint poll`'s identical
-    // flag-name collision fix).
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runAccountConnectLink(client, flags, out);
-  },
-});
-
-const accountReconnectLinkCommand = defineCommand({
-  meta: {
-    name: "reconnect-link",
-    description:
-      "Generate a one-time hosted URL to re-authorize an EXISTING disconnected account (the hosted " +
-      "counterpart of `account reconnect`). On an interactive TTY the URL auto-opens and the command waits " +
-      "for the account to reconnect (exit 0 on success, 9 if the link expires or fails, 12 if the wait " +
-      "window elapses first). Non-interactively it prints the url + session_id and returns immediately — " +
-      "poll completion later with `account connect-session poll`.",
-  },
-  args: {
-    ...WRITE_SINGLE_FLAGS,
-    "account-id": { type: "positional", description: "Account id (acc_…) to re-authorize." },
-    "expires-in-seconds": { type: "string", description: "Link expiry in seconds (60–3600, default 900)." },
-    "redirect-url": { type: "string", description: "Browser return URL after the hosted flow." },
-    open: {
-      type: "boolean",
-      description: "Auto-open the URL in your default browser. Default: on for an interactive TTY, always off otherwise (ignored non-interactively).",
-    },
-    wait: {
-      type: "boolean",
-      description: "Poll for the account to reconnect on an adaptive cadence (1000ms, then 1500ms for 30s, then 3000ms) after opening the URL. Default: on for an interactive TTY, always off otherwise.",
-    },
-    // Override WRITE_SINGLE_FLAGS.timeout: --timeout is the interactive wait
-    // loop's own wall-clock bound in MILLISECONDS, not the SDK request timeout.
-    timeout: {
-      type: "string",
-      description: "Wait-loop timeout in milliseconds (only meaningful under the interactive TTY wait; default: time remaining to the link's expiry). Note the unit: this is milliseconds.",
-    },
-  },
-  async run({ args }) {
-    const flags = args as AccountFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runAccountReconnectLink(client, flags, out);
-  },
-});
-
 const accountConnectSessionPollCommand = defineCommand({
   meta: {
     name: "poll",
@@ -1746,56 +1371,6 @@ const accountConnectSessionCommand = defineCommand({
   },
   async run() {
     process.stderr.write("Usage: curviate account connect-session poll --session <session_id>\n");
-  },
-});
-
-const accountReconnectCommand = defineCommand({
-  meta: {
-    name: "reconnect",
-    description:
-      "Re-authorize a disconnected account in place. " +
-      "If LinkedIn requires verification you'll be prompted for the code interactively; in a non-interactive shell the command exits 12 and you finish with `curviate account checkpoint solve <account_id> --code`.",
-  },
-  args: {
-    ...WRITE_SINGLE_FLAGS,
-    "account-id": { type: "positional", description: "Account id (acc_…)." },
-    "auth-method": { type: "string", description: "Authentication method: credentials | cookie.", required: true },
-    email: { type: "string", description: "LinkedIn email (credentials method)." },
-    password: { type: "string", description: `LinkedIn password (credentials method). ${PW_WARNING("--password-stdin", "CURVIATE_LINKEDIN_PASSWORD")}` },
-    "password-stdin": { type: "boolean", description: "Read the LinkedIn password from stdin (one line, trimmed).", default: false },
-    "li-at": { type: "string", description: `LinkedIn session cookie li_at (cookie method). ${PW_WARNING("--li-at-stdin", "CURVIATE_LINKEDIN_LI_AT")}` },
-    "li-at-stdin": { type: "boolean", description: "Read the li_at session cookie from stdin (one line, trimmed).", default: false },
-    "li-a": { type: "string", description: `Optional premium session cookie li_a (cookie method). ${OPTIONAL_SECRET_WARNING("CURVIATE_LINKEDIN_LI_A")}` },
-    country: { type: "string", description: "Proxy location hint (ISO 3166-1 alpha-2)." },
-    ip: { type: "string", description: "IP to infer the managed proxy location." },
-    "proxy-protocol": { type: "string", description: "Proxy protocol: http | https | socks5." },
-    "proxy-host": { type: "string", description: "Proxy host or IP." },
-    "proxy-port": { type: "string", description: "Proxy port." },
-    "proxy-username": { type: "string", description: "Proxy auth username." },
-    "proxy-password": { type: "string", description: `Proxy auth password. ${OPTIONAL_SECRET_WARNING("CURVIATE_PROXY_PASSWORD")}` },
-    "user-agent": { type: "string", description: "Browser User-Agent to pin." },
-    "recruiter-contract-id": { type: "string", description: "Recruiter contract id (Recruiter tier only)." },
-    "no-interactive": {
-      type: "boolean",
-      description: "Never prompt for a checkpoint code — on a checkpoint, always render the envelope and exit 12, even on a TTY.",
-      default: false,
-    },
-  },
-  async run({ args }) {
-    const flags = args as AccountFlags;
-    const cfg = await resolveEffectiveConfig({
-      apiKey: flags["api-key"],
-      baseUrl: flags["base-url"],
-      timeout: flags.timeout,
-      profile: flags.profile,
-    });
-    if (!cfg.apiKey) {
-      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
-      process.exit(3);
-    }
-    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
-    const out = buildOutputStreams();
-    await runAccountReconnect(client, flags, out);
   },
 });
 
@@ -1989,10 +1564,7 @@ export const accountCommand = defineCommand({
     list: accountListCommand,
     get: accountGetCommand,
     link: accountLinkCommand,
-    "connect-link": accountConnectLinkCommand,
-    "reconnect-link": accountReconnectLinkCommand,
     "connect-session": accountConnectSessionCommand,
-    reconnect: accountReconnectCommand,
     update: accountUpdateCommand,
     disconnect: accountDisconnectCommand,
     checkpoint: accountCheckpointCommand,
@@ -2000,7 +1572,7 @@ export const accountCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate account <subcommand>\n" +
-      "  list | get | link | connect-link | reconnect-link | connect-session poll | reconnect | update | disconnect | checkpoint\n",
+      "  list | get | link | connect-session poll | update | disconnect | checkpoint\n",
     );
   },
 });
