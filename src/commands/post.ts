@@ -579,7 +579,7 @@ const postReactCommand = defineCommand({
     },
     "as-organization": {
       type: "string",
-      description: "React on behalf of an organization page (org id from 'profile me' organizations).",
+      description: "React on behalf of an organization/company page you administer — pass that page's numeric id or URN.",
     },
   },
   async run({ args }) {
