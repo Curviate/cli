@@ -237,6 +237,13 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     } finally {
       exitSpy.mockRestore();
     }
+
+    // The re-connect instruction must point at the live `account link`
+    // command — `account connect-link` was removed in 0.15.0 and no longer
+    // exists.
+    const stderrOut = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).toContain("curviate account link");
+    expect(stderrOut).not.toContain("account connect-link");
   });
 
   it("--wait --timeout elapses while still pending -> exit 12 (AUTH_NEEDED)", async () => {
@@ -319,6 +326,37 @@ describe("account connect-session — subcommand registration", () => {
     expect(subCmds).not.toHaveProperty("connect-link");
     expect(subCmds).not.toHaveProperty("reconnect-link");
     expect(subCmds).not.toHaveProperty("reconnect");
+  });
+
+  // connect-session poll's help text predates the 0.15.0 removal of the
+  // hosted `account connect-link` command and still described itself in
+  // those terms. It now means "poll the status of an in-progress connect
+  // (auth intent)" — the framing must not reference the dead command.
+
+  it("connect-session group description no longer says 'Hosted connect-link session'", async () => {
+    const { accountCommand } = await import("../../src/commands/account.js");
+    const connectSession = (
+      accountCommand as unknown as {
+        subCommands: { "connect-session": { meta?: { description?: string } } };
+      }
+    ).subCommands["connect-session"];
+    const desc = connectSession.meta?.description ?? "";
+    expect(desc.toLowerCase()).not.toContain("hosted connect-link");
+    expect(desc).not.toContain("connect-link");
+    expect(desc.toLowerCase()).toContain("in-progress connect");
+  });
+
+  it("connect-session poll description no longer says 'hosted connect-link session' or references the removed 'account connect-link' command", async () => {
+    const { accountCommand } = await import("../../src/commands/account.js");
+    const connectSession = (
+      accountCommand as unknown as {
+        subCommands: { "connect-session": { subCommands: Record<string, { meta?: { description?: string } }> } };
+      }
+    ).subCommands["connect-session"];
+    const desc = connectSession.subCommands["poll"]?.meta?.description ?? "";
+    expect(desc.toLowerCase()).not.toContain("hosted connect-link");
+    expect(desc).not.toContain("account connect-link");
+    expect(desc).toContain("account link");
   });
 });
 

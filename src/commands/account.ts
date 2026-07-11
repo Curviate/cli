@@ -836,7 +836,7 @@ export async function runAccountConnectSessionPoll(
   if (outcome.kind === "terminal_failure") {
     renderSuccess(outcome.result, outOpts, out);
     out.stderr.write(
-      `This connect session has ${outcome.status}. Generate a new link: curviate account connect-link.\n`,
+      `This connect session has ${outcome.status}. Start a new connect: curviate account link.\n`,
     );
     process.exit(9);
     return;
@@ -1324,9 +1324,9 @@ const accountConnectSessionPollCommand = defineCommand({
   meta: {
     name: "poll",
     description:
-      "Poll a hosted connect-link session for completion. Without --wait: a single poll — the JSON " +
-      "`status` field (pending | resolved | expired | failed) tells you what to do next. With --wait: " +
-      "block on the same adaptive cadence as `account connect-link` until a terminal state.",
+      "Poll the status of an in-progress connect (auth intent) for completion. Without --wait: a single " +
+      "poll — the JSON `status` field (pending | resolved | expired | failed) tells you what to do next. " +
+      "With --wait: block on the same adaptive cadence as `account link` until a terminal state.",
   },
   args: {
     ...WRITE_SINGLE_FLAGS,
@@ -1370,7 +1370,7 @@ const accountConnectSessionPollCommand = defineCommand({
 });
 
 const accountConnectSessionCommand = defineCommand({
-  meta: { name: "connect-session", description: "Hosted connect-link session operations (poll for completion)." },
+  meta: { name: "connect-session", description: "In-progress connect operations (poll for completion)." },
   subCommands: {
     poll: accountConnectSessionPollCommand,
   },
