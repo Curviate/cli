@@ -6,20 +6,20 @@
  *   recruiter message new --to <id> "<text>" [--attach <f>…] [--voice <f>] [--video <f>] — start chat (write, multipart)
  *   recruiter profile <identifier>                                               — get profile (read, resolveIdentifier)
  *   recruiter search people [--keywords <k>] [--all] [--limit] [--cursor]       — search people (POST)
- *   recruiter search parameters --type <t>                                       — get filter parameters (read)
+ *   recruiter search parameters --source <s> --type <t>                                       — get filter parameters (read)
  *   recruiter projects [--all] [--limit] [--cursor]                              — list projects (read)
  *   recruiter project <project_id>                                               — get project (read, verbatim id)
- *   recruiter add-candidate <user_id> --hiring-project-id <id> [--stage <s>]    — add candidate (write)
+ *   recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>  — save candidate to pipeline (write)
  *   recruiter add-applicant <user_id> --hiring-project-id <id> [--stage <s>]    — add applicant (write)
  *   recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r> [--message <m>] [--notify-at <ms>] — reject applicant (write; applicant is notified only when --message is given)
  *   recruiter jobs [--all] [--limit] [--cursor]                                  — list jobs (read)
  *   recruiter job create [--body-file <path> | --body -] [--job-title <t>] [--description <d>] [--employment-type <e>] — create job draft (write; JSON body + scalar flags)
- *   recruiter job publish <job_id> [--mode <m>]                                  — publish job (write)
+ *   recruiter job publish <project_id> <job_id> [--mode <m>]                                  — publish job (write)
  *   recruiter job checkpoint <job_id> --input <v>                                — solve checkpoint (write)
- *   recruiter job applicants <job_id>                                             — list applicants (read)
+ *   recruiter job applicants <project_id> --channel-id <id>                                             — list applicants (read)
  *   recruiter job get <url|id>                                                    — get a job posting via the Recruiter lens (read, any public job)
- *   recruiter applicant <applicant_id>                                            — get applicant (read, verbatim id)
- *   recruiter applicant resume <applicant_id> -o <file>                          — download resume (binary)
+ *   recruiter applicant <project_id> <applicant_id>                                            — get applicant (read, verbatim id)
+ *   recruiter applicant resume <project_id> <applicant_id> -o <file>                          — download resume (binary)
  *
  * All subcommands are account-scoped.
  * Tier-gate: CLI never pre-checks — SDK call goes out; TIER_NOT_ACTIVE / LINKEDIN_FEATURE_NOT_SUBSCRIBED → exit 5.
@@ -38,7 +38,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import { slimJob } from "../lib/slim.js";
-import { readAttachment, AttachError } from "../lib/attach.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import {
   assembleFilters,
@@ -47,7 +47,20 @@ import {
   type FilterReaders,
 } from "../lib/search-filters.js";
 import { readFile } from "node:fs/promises";
-import type { Curviate, CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError, paths } from "@curviate/sdk";
+
+/**
+ * Local type aliases for the recruiter bodies that are "genuinely
+ * impractical" to build as fully-typed literals (deep discriminated unions,
+ * or a body sourced from free-form user JSON) — used for a single narrow
+ * cast at the call site per FR-001's body-typing rule.
+ */
+type RecruiterStartChatBody = paths["/v1/{account_id}/recruiter/chats"]["post"]["requestBody"]["content"]["application/json"];
+type RecruiterSearchParametersBody = paths["/v1/{account_id}/recruiter/search/parameters"]["post"]["requestBody"]["content"]["application/json"];
+type RecruiterCreateJobBody = paths["/v1/{account_id}/recruiter/jobs"]["post"]["requestBody"]["content"]["application/json"];
+type RecruiterPublishJobBody = paths["/v1/{account_id}/recruiter/projects/{project_id}/jobs/{job_id}/publish"]["post"]["requestBody"]["content"]["application/json"];
+type RecruiterListApplicantsBody = paths["/v1/{account_id}/recruiter/projects/{project_id}/talent-pool/applicants"]["post"]["requestBody"]["content"]["application/json"];
+type RecruiterSaveCandidateBody = paths["/v1/{account_id}/recruiter/projects/{project_id}/pipeline/candidate/save"]["post"]["requestBody"]["content"]["application/json"];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,10 +83,13 @@ type RecruiterFlags = {
   // Subcommand-specific
   to?: string;
   text?: string;
+  subject?: string;
+  signature?: string;
   attach?: string | string[];
   voice?: string;
   video?: string;
   type?: string;
+  source?: string;
   keywords?: string;
   // search-people filter escape hatch + curated named flags
   // (note: "employment-type" is declared below in the job-create group and is
@@ -86,10 +102,14 @@ type RecruiterFlags = {
   identifier?: string;
   userId?: string;
   projectId?: string;
+  "project-id"?: string;
   jobId?: string;
   applicantId?: string;
   "hiring-project-id"?: string;
   stage?: string;
+  "stage-id"?: string;
+  "candidate-id"?: string;
+  "channel-id"?: string;
   reason?: string;
   message?: string;
   "notify-at"?: string;
@@ -100,6 +120,7 @@ type RecruiterFlags = {
   body?: string;
   "body-file"?: string;
   "job-title"?: string;
+  "project-name"?: string;
   description?: string;
   "employment-type"?: string;
 };
@@ -228,11 +249,19 @@ async function assembleJobCreateBody(
     base = parsed as Record<string, unknown>;
   }
 
-  // 2. Top-level scalar convenience flags merge OVER the JSON. `job_title` is a
-  //    { id?, text? } object in the API; --job-title supplies free-form text.
+  // 2. Top-level scalar convenience flags merge OVER the JSON.
+  // KNOWN v2 GAP (re-point chunk, not yet reconciled): the v2 op's job_title
+  // is {id,name} and the enum field is employment_status (was
+  // job_title:{text}/employment_type pre-v2) — these two scalar flags still
+  // write the pre-v2 shape/key. --body-file/--body - (the primary path for
+  // a full, correctly-shaped body) are unaffected; only the two convenience
+  // overlays need reconciling to the new field names in a follow-up.
   if (flags["job-title"] !== undefined) base["job_title"] = { text: flags["job-title"] };
   if (flags.description !== undefined) base["description"] = flags.description;
   if (flags["employment-type"] !== undefined) base["employment_type"] = flags["employment-type"];
+  // project_name is a genuinely new v2 top-level requirement (not a rename) —
+  // wired the same way as the other scalar overlays.
+  if (flags["project-name"] !== undefined) base["project_name"] = flags["project-name"];
 
   return { body: base };
 }
@@ -269,8 +298,15 @@ export async function runRecruiterSync(
 }
 
 /**
- * Run `recruiter message new --to <id> "<text>" [--attach <f>…] [--voice <f>] [--video <f>]`.
- * Write command — supports --preview. Multipart when files present.
+ * Run `recruiter message new --to <id> --subject <s> --signature <sig> "<text>" [--attach <f>…] [--voice <f>] [--video <f>]`.
+ * Write command — supports --preview.
+ *
+ * v2: JSON-only (no multipart) — `subject` and `signature` are REQUIRED
+ * (InMail-based Recruiter messaging). There is no separate voice_message/
+ * video_message body field — every attachment (file, voice, or video) rides
+ * the single `attachments[]` array as a base64 object; voice/video use
+ * `send_mode: "native"` for a platform-native bubble (`metadata.duration`
+ * is not computed client-side and is left unset).
  */
 export async function runRecruiterMessageNew(
   client: Curviate,
@@ -280,9 +316,20 @@ export async function runRecruiterMessageNew(
   const accountId = requireAccount(flags.account, out);
   const to = flags.to ?? "";
   const text = flags.text ?? "";
+  const subject = flags.subject ?? "";
+  const signature = flags.signature ?? "";
   const attachPaths = normalizeAttachPaths(flags.attach);
   const voicePath = flags.voice;
   const videoPath = flags.video;
+
+  if (!subject) {
+    out.stderr.write("error: --subject is required (v2: REQUIRED for Recruiter messaging).\n");
+    process.exit(2);
+  }
+  if (!signature) {
+    out.stderr.write("error: --signature is required (v2: REQUIRED for Recruiter messaging).\n");
+    process.exit(2);
+  }
 
   let attachBuffers: Buffer[] = [];
   let voiceBuffer: Buffer | undefined;
@@ -300,17 +347,11 @@ export async function runRecruiterMessageNew(
     throw err;
   }
 
-  // Recruiter, classic, and SN chats all use `attendees_ids` (plural).
-  const body: Record<string, unknown> = {
-    attendees_ids: [to],
-    text,
-  };
-
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "recruiter.startChat",
       args: { attendees_ids: [to] },
-      body: { ...body },
+      body: { attendees_ids: [to], text, subject, signature },
       account: accountId,
       attachments: [
         ...attachBuffers.map((buf, i) => ({
@@ -325,15 +366,26 @@ export async function runRecruiterMessageNew(
     return;
   }
 
-  if (attachBuffers.length > 0) body["attachments"] = attachBuffers;
-  if (voiceBuffer) body["voice_message"] = voiceBuffer;
-  if (videoBuffer) body["video_message"] = videoBuffer;
+  const attachments = [
+    ...attachPaths.map((p, i) => toAttachmentPayload(p, attachBuffers[i]!)),
+    ...(voiceBuffer && voicePath ? [{ ...toAttachmentPayload(voicePath, voiceBuffer), send_mode: "native" as const }] : []),
+    ...(videoBuffer && videoPath ? [{ ...toAttachmentPayload(videoPath, videoBuffer), send_mode: "native" as const }] : []),
+  ];
+
+  // Recruiter, classic, and SN chats all use `attendees_ids` (plural).
+  const body = {
+    attendees_ids: [to],
+    text,
+    subject,
+    signature,
+    ...(attachments.length > 0 ? { attachments } : {}),
+  };
 
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.recruiter.startChat(body);
+    const result = await ns.recruiter.startChat(body as RecruiterStartChatBody);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -431,27 +483,48 @@ export async function runRecruiterSearchPeople(
 }
 
 /**
- * Run `recruiter search parameters --type <t>`.
+ * Run `recruiter search parameters --source <s> --type <t> [--keywords <k>] [--project-id <id>] [--stage-id <id>]`.
  * Read command — rejects --preview.
+ *
+ * v2: getParameters (GET) is replaced by searchParameters (POST) — the body
+ * is a source-discriminated oneOf (APPLICANTS/PIPELINE require project_id;
+ * PIPELINE additionally accepts stage_id). `--source` is a free-form CLI
+ * flag, so a narrow cast stands in for full static discrimination of the
+ * union (FR-001 body-typing rule).
  */
-export async function runRecruiterGetParameters(
+export async function runRecruiterSearchParameters(
   client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
+  if (!flags.source) {
+    out.stderr.write("error: --source is required (APPLICANTS, PIPELINE, SEARCH, JOB_POSTING, or JOBS).\n");
+    process.exit(2);
+  }
+  if (!flags.type) {
+    out.stderr.write("error: --type is required.\n");
+    process.exit(2);
+  }
+
   const accountId = requireAccount(flags.account, out);
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
+  const body = {
+    source: flags.source,
+    type: flags.type,
+    ...(flags.keywords ? { keywords: flags.keywords } : {}),
+    ...(flags["project-id"] ? { project_id: flags["project-id"] } : {}),
+    ...(flags["stage-id"] ? { stage_id: flags["stage-id"] } : {}),
+  } as RecruiterSearchParametersBody;
+
   const params: Record<string, unknown> = {};
-  if (flags.type) params["type"] = flags.type;
-  if (flags.keywords) params["keywords"] = flags.keywords;
   if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
 
   try {
-    const result = await ns.recruiter.getParameters(params);
+    const result = await ns.recruiter.searchParameters(body, Object.keys(params).length > 0 ? params : undefined);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -524,26 +597,31 @@ export async function runRecruiterGetProject(
 }
 
 /**
- * Run `recruiter add-candidate <user_id> --hiring-project-id <id> [--stage <s>]`.
- * Write command — supports --preview. user_id passes verbatim.
+ * Run `recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>`.
+ * Write command — supports --preview. project_id passes verbatim.
+ *
+ * v2: addCandidate(user_id, {hiring_project_id, stage}) is replaced by the
+ * project-scoped saveCandidate(project_id, {stage_id, candidate_id}) — full
+ * body reshape (renamed command, FR-005 changelog category (a)).
  */
-export async function runRecruiterAddCandidate(
+export async function runRecruiterSaveCandidate(
   client: Curviate,
   flags: RecruiterFlags,
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
-  const userId = flags.userId ?? "";
+  const projectId = flags.projectId ?? "";
   const outOpts = resolveOutputOpts(flags);
 
-  const body: Record<string, unknown> = {};
-  if (flags["hiring-project-id"]) body["hiring_project_id"] = flags["hiring-project-id"];
-  if (flags.stage) body["stage"] = flags.stage;
+  const body: RecruiterSaveCandidateBody = {
+    stage_id: flags["stage-id"] ?? "",
+    candidate_id: flags["candidate-id"] ?? "",
+  };
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "recruiter.addCandidate",
-      args: { user_id: userId },
+      method: "recruiter.saveCandidate",
+      args: { project_id: projectId },
       body,
       account: accountId,
     });
@@ -554,7 +632,7 @@ export async function runRecruiterAddCandidate(
   const ns = client.account(accountId);
 
   try {
-    const result = await ns.recruiter.addCandidate(userId, body);
+    const result = await ns.recruiter.saveCandidate(projectId, body);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -736,6 +814,15 @@ export async function runRecruiterCreateJob(
   }
   const body = assembled.body;
 
+  // project_name is a new v2 top-level requirement (createJob always opens a
+  // brand-new project) — validated client-side the same way other newly-
+  // required fields are across this re-point (e.g. recruiter applicants
+  // --channel-id).
+  if (!body["project_name"]) {
+    out.stderr.write("error: --project-name is required (or project_name in --body-file/--body -).\n");
+    process.exit(2);
+  }
+
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "recruiter.createJob",
@@ -750,7 +837,12 @@ export async function runRecruiterCreateJob(
   const ns = client.account(accountId);
 
   try {
-    const result = await ns.recruiter.createJob(body);
+    // Narrow cast: the body is assembled from free-form JSON (--body-file/
+    // --body -) merged with scalar convenience flags; deep structural
+    // validation (job_title/company/apply_method shape, required enums) is
+    // left to the API's 400, as already documented on assembleJobCreateBody
+    // (FR-001 body-typing rule).
+    const result = await ns.recruiter.createJob(body as RecruiterCreateJobBody);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -758,8 +850,9 @@ export async function runRecruiterCreateJob(
 }
 
 /**
- * Run `recruiter job publish <job_id> [--mode <m>]`.
- * Write command — supports --preview. job_id passes verbatim.
+ * Run `recruiter job publish <project_id> <job_id> [--mode <m>]`.
+ * Write command — supports --preview. project_id/job_id pass verbatim.
+ * v2: publishJob is project-scoped (project_id leads job_id).
  */
 export async function runRecruiterPublishJob(
   client: Curviate,
@@ -767,6 +860,7 @@ export async function runRecruiterPublishJob(
   out: OutputStreams,
 ): Promise<void> {
   const accountId = requireAccount(flags.account, out);
+  const projectId = flags.projectId ?? "";
   const jobId = flags.jobId ?? "";
   const outOpts = resolveOutputOpts(flags);
 
@@ -776,7 +870,7 @@ export async function runRecruiterPublishJob(
   if (flags.preview) {
     const preview = buildPreviewOutput({
       method: "recruiter.publishJob",
-      args: { job_id: jobId },
+      args: { project_id: projectId, job_id: jobId },
       body,
       account: accountId,
     });
@@ -787,7 +881,10 @@ export async function runRecruiterPublishJob(
   const ns = client.account(accountId);
 
   try {
-    const result = await ns.recruiter.publishJob(jobId, body);
+    // Narrow cast: mode is a mode-discriminated oneOf (FREE needs nothing
+    // further; PROMOTED*/budget flags are not yet wired on this command —
+    // FR-001 body-typing rule).
+    const result = await ns.recruiter.publishJob(projectId, jobId, body as RecruiterPublishJobBody);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -832,8 +929,13 @@ export async function runRecruiterJobCheckpoint(
 }
 
 /**
- * Run `recruiter job applicants <job_id>`.
- * Read command — rejects --preview. job_id passes verbatim.
+ * Run `recruiter job applicants <project_id> --channel-id <id>`.
+ * Read command — rejects --preview. project_id passes verbatim.
+ *
+ * v2: listApplicants is project-scoped, not job-scoped (the positional here
+ * is repointed from job_id to project_id to match — a job_id in this slot
+ * would 404 against the real v2 op) and requires `channel_id` (the
+ * project's own JOB_POSTING talent-pool channel) in the body.
  */
 export async function runRecruiterListApplicants(
   client: Curviate,
@@ -842,17 +944,23 @@ export async function runRecruiterListApplicants(
 ): Promise<void> {
   rejectPreviewOnRead(flags.preview, out);
 
+  if (!flags["channel-id"]) {
+    out.stderr.write("error: --channel-id is required.\n");
+    process.exit(2);
+  }
+
   const accountId = requireAccount(flags.account, out);
-  const jobId = flags.jobId ?? "";
+  const projectId = flags.projectId ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
+  const body: RecruiterListApplicantsBody = { channel_id: flags["channel-id"] };
   const params: Record<string, unknown> = {};
   if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
   if (flags.cursor) params["cursor"] = flags.cursor;
 
   try {
-    const result = await ns.recruiter.listApplicants(jobId, Object.keys(params).length > 0 ? params : undefined);
+    const result = await ns.recruiter.listApplicants(projectId, body, Object.keys(params).length > 0 ? params : undefined);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -889,8 +997,9 @@ export async function runRecruiterGetJob(
 }
 
 /**
- * Run `recruiter applicant <applicant_id>`.
- * Read command — rejects --preview. applicant_id passes verbatim.
+ * Run `recruiter applicant <project_id> <applicant_id>`.
+ * Read command — rejects --preview. project_id/applicant_id pass verbatim.
+ * v2: getApplicant is project-scoped (project_id leads applicant_id).
  */
 export async function runRecruiterGetApplicant(
   client: Curviate,
@@ -900,12 +1009,13 @@ export async function runRecruiterGetApplicant(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
+  const projectId = flags.projectId ?? "";
   const applicantId = flags.applicantId ?? "";
   const ns = client.account(accountId);
   const outOpts = resolveOutputOpts(flags);
 
   try {
-    const result = await ns.recruiter.getApplicant(applicantId);
+    const result = await ns.recruiter.getApplicant(projectId, applicantId);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -913,8 +1023,9 @@ export async function runRecruiterGetApplicant(
 }
 
 /**
- * Run `recruiter applicant resume <applicant_id> -o <file>`.
+ * Run `recruiter applicant resume <project_id> <applicant_id> -o <file>`.
  * Read command — binary response. Rejects --preview.
+ * v2: downloadResume is project-scoped (project_id leads applicant_id).
  * @param isTTY — injectable for tests.
  */
 export async function runRecruiterDownloadResume(
@@ -926,11 +1037,12 @@ export async function runRecruiterDownloadResume(
   rejectPreviewOnRead(flags.preview, out);
 
   const accountId = requireAccount(flags.account, out);
+  const projectId = flags.projectId ?? "";
   const applicantId = flags.applicantId ?? "";
   const ns = client.account(accountId);
 
   try {
-    const data = await ns.recruiter.downloadResume(applicantId);
+    const data = await ns.recruiter.downloadResume(projectId, applicantId);
     await writeBinaryOutput(data, {
       outputPath: flags.output,
       isTTY,
@@ -983,6 +1095,8 @@ const recruiterMessageNewCommand = defineCommand({
         "Recipient's LinkedIn provider ID (AE… format, e.g. from a Recruiter search result or profile). Not resolved from a URL/slug — pass the provider ID directly.",
       required: true,
     },
+    subject: { type: "string", description: "Message subject line (required for Recruiter InMail).", required: true },
+    signature: { type: "string", description: "Sender signature (required for Recruiter InMail).", required: true },
     text: { type: "positional", description: "Opening message text." },
     attach: { type: "string", description: "File to attach (repeatable, max 7 MiB each)." },
     voice: { type: "string", description: "Voice message file (max 7 MiB)." },
@@ -1076,16 +1190,24 @@ const recruiterSearchPeopleCommand = defineCommand({
 });
 
 const recruiterSearchParametersCommand = defineCommand({
-  meta: { name: "parameters", description: "Resolve Recruiter filter parameter IDs." },
+  meta: { name: "parameters", description: "Resolve Recruiter filter parameter IDs (POST — source-scoped)." },
   args: {
     ...GLOBAL_FLAGS,
+    source: {
+      type: "string",
+      description:
+        "Filter family to resolve within: APPLICANTS or PIPELINE (both require --project-id), SEARCH, JOB_POSTING, or JOBS.",
+      required: true,
+    },
     type: {
       type: "string",
       description:
-        "Parameter type to resolve. One of: GROUPS, DEPARTMENT, HIRING_PROJECTS, SAVED_SEARCHES, SAVED_FILTERS, DEGREE.",
+        "Parameter type to resolve; the valid set depends on --source (e.g. SKILL/LOCATION/JOB_TITLE for APPLICANTS, CONTRACT/SEAT/LOCATION for JOBS).",
       required: true,
     },
     keywords: { type: "string", description: "Human term to resolve (e.g. Berlin)." },
+    "project-id": { type: "string", description: "Recruiter project ID (required for --source APPLICANTS or PIPELINE)." },
+    "stage-id": { type: "string", description: "Pipeline stage ID to filter to (only meaningful for --source PIPELINE)." },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -1102,7 +1224,7 @@ const recruiterSearchParametersCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterGetParameters(client, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterSearchParameters(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1116,7 +1238,7 @@ const recruiterSearchCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate recruiter search people [--keywords <k>]\n" +
-      "       curviate recruiter search parameters --type <t>\n",
+      "       curviate recruiter search parameters --source <s> --type <t>\n",
     );
   },
 });
@@ -1169,14 +1291,14 @@ const recruiterProjectCommand = defineCommand({
   },
 });
 
-const recruiterAddCandidateCommand = defineCommand({
-  meta: { name: "add-candidate", description: "Add a member as a candidate in a hiring project." },
+const recruiterSaveCandidateCommand = defineCommand({
+  meta: { name: "save-candidate", description: "Save a candidate to a project's pipeline at a given stage." },
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    userId: { type: "positional", description: "Member ID (AEM… format)." },
-    "hiring-project-id": { type: "string", description: "Recruiter hiring project ID.", required: true },
-    stage: { type: "string", description: "Pipeline stage (UNCONTACTED, CONTACTED, REPLIED)." },
+    projectId: { type: "positional", description: "Recruiter project ID." },
+    "stage-id": { type: "string", description: "Pipeline stage ID to save the candidate into.", required: true },
+    "candidate-id": { type: "string", description: "Candidate id or user-profile id to save.", required: true },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -1193,7 +1315,7 @@ const recruiterAddCandidateCommand = defineCommand({
     }
     const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
     const out = buildOutputStreams();
-    await runRecruiterAddCandidate(client, { ...flags, account: flags.account ?? cfg.account }, out);
+    await runRecruiterSaveCandidate(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1297,6 +1419,7 @@ const recruiterJobCreateCommand = defineCommand({
     "job-title": { type: "string", description: "Job title text (merged over the JSON as job_title.text)." },
     description: { type: "string", description: "Job description (merged over the JSON)." },
     "employment-type": { type: "string", description: "Employment type, e.g. FULL_TIME (merged over the JSON)." },
+    "project-name": { type: "string", description: "Name for the new hiring project this job opens (required).", required: true },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -1322,6 +1445,7 @@ const recruiterJobPublishCommand = defineCommand({
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
+    projectId: { type: "positional", description: "Recruiter project ID." },
     jobId: { type: "positional", description: "Job posting ID." },
     mode: { type: "string", description: "Publish mode: FREE (default), PROMOTED, or PROMOTED_PLUS." },
   },
@@ -1372,10 +1496,11 @@ const recruiterJobCheckpointCommand = defineCommand({
 });
 
 const recruiterJobApplicantsCommand = defineCommand({
-  meta: { name: "applicants", description: "List applicants for a Recruiter job posting." },
+  meta: { name: "applicants", description: "List applicants in a Recruiter project's talent pool." },
   args: {
     ...GLOBAL_FLAGS,
-    jobId: { type: "positional", description: "Job posting ID." },
+    projectId: { type: "positional", description: "Recruiter project ID." },
+    "channel-id": { type: "string", description: "The project's JOB_POSTING talent-pool channel ID (required).", required: true },
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
@@ -1434,9 +1559,9 @@ const recruiterJobCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate recruiter job create [flags…]\n" +
-      "       curviate recruiter job publish <job_id> [--mode <m>]\n" +
+      "       curviate recruiter job publish <project_id> <job_id> [--mode <m>]\n" +
       "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
-      "       curviate recruiter job applicants <job_id>\n" +
+      "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n",
     );
   },
@@ -1447,6 +1572,7 @@ const recruiterApplicantResumeCommand = defineCommand({
   args: {
     // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
     ...READ_SINGLE_FLAGS,
+    projectId: { type: "positional", description: "Recruiter project ID." },
     applicantId: { type: "positional", description: "Applicant ID." },
     output: { type: "string", alias: "o", description: "Path to write the resume file." },
   },
@@ -1479,6 +1605,7 @@ const recruiterApplicantCommand = defineCommand({
   args: {
     // Single-object read: READ_SINGLE_FLAGS omits pagination flags, keeps --fields
     ...READ_SINGLE_FLAGS,
+    projectId: { type: "positional", description: "Recruiter project ID.", required: false },
     applicantId: { type: "positional", description: "Applicant ID.", required: false },
   },
   subCommands: {
@@ -1486,10 +1613,10 @@ const recruiterApplicantCommand = defineCommand({
   },
   async run({ args }) {
     const flags = args as RecruiterFlags;
-    if (!flags.applicantId) {
+    if (!flags.projectId || !flags.applicantId) {
       process.stderr.write(
-        "Usage: curviate recruiter applicant <applicant_id>\n" +
-        "       curviate recruiter applicant resume <applicant_id> -o <file>\n",
+        "Usage: curviate recruiter applicant <project_id> <applicant_id>\n" +
+        "       curviate recruiter applicant resume <project_id> <applicant_id> -o <file>\n",
       );
       return;
     }
@@ -1520,7 +1647,7 @@ export const recruiterCommand = defineCommand({
     search: recruiterSearchCommand,
     projects: recruiterProjectsCommand,
     project: recruiterProjectCommand,
-    "add-candidate": recruiterAddCandidateCommand,
+    "save-candidate": recruiterSaveCandidateCommand,
     "add-applicant": recruiterAddApplicantCommand,
     "reject-applicant": recruiterRejectApplicantCommand,
     jobs: recruiterJobsCommand,
@@ -1533,20 +1660,20 @@ export const recruiterCommand = defineCommand({
       "       curviate recruiter message new --to <id> \"<text>\"\n" +
       "       curviate recruiter profile <identifier>\n" +
       "       curviate recruiter search people [--keywords <k>]\n" +
-      "       curviate recruiter search parameters --type <t>\n" +
+      "       curviate recruiter search parameters --source <s> --type <t>\n" +
       "       curviate recruiter projects\n" +
       "       curviate recruiter project <project_id>\n" +
-      "       curviate recruiter add-candidate <user_id> --hiring-project-id <id>\n" +
+      "       curviate recruiter save-candidate <project_id> --stage-id <id> --candidate-id <id>\n" +
       "       curviate recruiter add-applicant <user_id> --hiring-project-id <id>\n" +
       "       curviate recruiter reject-applicant <user_id> --hiring-project-id <id> --reason <r>\n" +
       "       curviate recruiter jobs\n" +
       "       curviate recruiter job create [flags…]\n" +
-      "       curviate recruiter job publish <job_id> [--mode <m>]\n" +
+      "       curviate recruiter job publish <project_id> <job_id> [--mode <m>]\n" +
       "       curviate recruiter job checkpoint <job_id> --input <v>\n" +
-      "       curviate recruiter job applicants <job_id>\n" +
+      "       curviate recruiter job applicants <project_id> --channel-id <id>\n" +
       "       curviate recruiter job get <url|id>\n" +
-      "       curviate recruiter applicant <applicant_id>\n" +
-      "       curviate recruiter applicant resume <applicant_id> -o <file>\n",
+      "       curviate recruiter applicant <project_id> <applicant_id>\n" +
+      "       curviate recruiter applicant resume <project_id> <applicant_id> -o <file>\n",
     );
   },
 });

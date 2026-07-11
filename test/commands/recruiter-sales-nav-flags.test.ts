@@ -23,7 +23,7 @@ type CommandLike = { args?: ArgsRecord; subCommands?: Record<string, CommandLike
 describe("recruiter write commands — no pagination flags in help", () => {
   it.each([
     ["message.new (start-chat)", ["message", "new"]],
-    ["add-candidate", ["add-candidate"]],
+    ["save-candidate", ["save-candidate"]],
     ["add-applicant", ["add-applicant"]],
     ["reject-applicant", ["reject-applicant"]],
     ["job.create", ["job", "create"]],
