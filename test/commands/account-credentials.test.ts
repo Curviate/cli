@@ -13,9 +13,11 @@ import type { Mock } from "vitest";
 function makeClient() {
   return {
     accounts: {
-      link: vi.fn(),
       reconnect: vi.fn(),
       update: vi.fn(),
+    },
+    auth: {
+      intent: vi.fn(),
     },
   };
 }
@@ -53,14 +55,14 @@ describe("account credentials — env-var precedence", () => {
     process.env[ENV_PASSWORD] = "FROM_ENV";
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
     const out = makeOut();
     await runAccountLink(
       client as never,
       { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", password: "FROM_FLAG", json: true } as never,
       out,
     );
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "FROM_FLAG" } }),
     );
   });
@@ -69,14 +71,14 @@ describe("account credentials — env-var precedence", () => {
     process.env[ENV_PASSWORD] = "FROM_ENV";
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
     const out = makeOut();
     await runAccountLink(
       client as never,
       { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", json: true } as never,
       out,
     );
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "FROM_ENV" } }),
     );
   });
@@ -85,14 +87,14 @@ describe("account credentials — env-var precedence", () => {
     process.env[ENV_PASSWORD] = "ENV_FALLBACK";
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
       { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", password: "", json: true } as never,
       out,
     );
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "ENV_FALLBACK" } }),
     );
   });
@@ -135,14 +137,14 @@ describe("account credentials — env-var precedence", () => {
     process.env[ENV_LI_A] = "ENV_LIA";
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
       { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "AT", "li-a": "FLAG_LIA", json: true } as never,
       out,
     );
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ cookie: { li_at: "AT", li_a: "FLAG_LIA" } }),
     );
   });
@@ -150,14 +152,14 @@ describe("account credentials — env-var precedence", () => {
   it("li_a (optional): omitted entirely (not an empty field) when neither flag nor env set", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
       { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at": "AT", json: true } as never,
       out,
     );
-    const body = (client.accounts.link as Mock).mock.calls[0]?.[0] as { cookie: Record<string, unknown> };
+    const body = (client.auth.intent as Mock).mock.calls[0]?.[0] as { cookie: Record<string, unknown> };
     expect(body.cookie).toEqual({ li_at: "AT" });
     expect(body.cookie).not.toHaveProperty("li_a");
   });
@@ -202,11 +204,11 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
   it("--password-stdin resolves the piped secret and trims a trailing newline", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     const flags = { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, json: true };
     await runAccountLink(client as never, flags as never, out, { readStdin: async () => "PWD_S\n" });
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "PWD_S" } }),
     );
     // The secret itself never lands anywhere in the parsed flags (the argv-equivalent) — only the trigger boolean does.
@@ -216,7 +218,7 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
   it("--password-stdin trims a CRLF-terminated pipe (not just a bare trailing \\n)", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
@@ -224,7 +226,7 @@ describe("account credentials — --password-stdin / --li-at-stdin", () => {
       out,
       { readStdin: async () => "PWD_S\r\n" },
     );
-    const body = (client.accounts.link as Mock).mock.calls[0]?.[0] as { credentials: { password: string } };
+    const body = (client.auth.intent as Mock).mock.calls[0]?.[0] as { credentials: { password: string } };
     expect(body.credentials.password).toBe("PWD_S");
     expect(body.credentials.password).not.toContain("\r");
   });
@@ -258,7 +260,7 @@ describe("account credentials — conflict matrix (exit 2, zero SDK calls)", () 
   ];
 
   for (const combo of combos) {
-    it(`${combo.name} -> exit 2, accounts.link never called`, async () => {
+    it(`${combo.name} -> exit 2, auth.intent never called`, async () => {
       const { runAccountLink } = await import("../../src/commands/account.js");
       const client = makeClient();
       const out = makeOut();
@@ -270,7 +272,7 @@ describe("account credentials — conflict matrix (exit 2, zero SDK calls)", () 
       } finally {
         exitSpy.mockRestore();
       }
-      expect(client.accounts.link).not.toHaveBeenCalled();
+      expect(client.auth.intent).not.toHaveBeenCalled();
     });
   }
 });
@@ -283,7 +285,7 @@ describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => 
   it("TTY: masked prompt resolves the password; stderr never echoes it", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
@@ -291,7 +293,7 @@ describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => 
       out,
       { isTTY: true, readline: async () => "PROMPTED" },
     );
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: "PROMPTED" } }),
     );
     const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
@@ -316,7 +318,7 @@ describe("account credentials — masked TTY prompt + non-TTY fail-fast", () => 
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
     expect(readStdin).not.toHaveBeenCalled();
     const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
     expect(stderrOut).toContain("password");
@@ -386,7 +388,7 @@ describe("account credentials — --preview skips prompt/fail-fast entirely", ()
       exitSpy.mockRestore();
     }
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
     const written = out.stdout.write.mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written) as { body: { credentials: Record<string, unknown> } };
     expect(parsed.body.credentials).toEqual({ email: "a@b.c" });
@@ -408,7 +410,7 @@ describe("account credentials — --preview skips prompt/fail-fast entirely", ()
       exitSpy.mockRestore();
     }
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
   });
 });
 
@@ -471,7 +473,7 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
   it("flag-sourced password sentinel never appears in captured output (success path)", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account", account_id: "acc_1" });
     const out = makeOut();
     await runAccountLink(
       client as never,
@@ -482,7 +484,7 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
       out.stdout.write.mock.calls.map((c) => c[0] as string).join("") +
       out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
     expect(combined).not.toContain(SENTINEL);
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: expect.objectContaining({ password: SENTINEL }) }),
     );
   });
@@ -490,7 +492,7 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
   it("stdin-sourced sentinel never appears in output", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const out = makeOut();
     await runAccountLink(
       client as never,
@@ -509,7 +511,7 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
     try {
       const { runAccountLink } = await import("../../src/commands/account.js");
       const client = makeClient();
-      (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+      (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
       const out = makeOut();
       await runAccountLink(
         client as never,
@@ -570,14 +572,14 @@ describe("account credentials — sentinel never leaks to stdout/stderr", () => 
   it("masking runs on a copy: a later non-preview call with the same flags still sends the real secret", async () => {
     const { runAccountLink } = await import("../../src/commands/account.js");
     const client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
     const flags = { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", password: SENTINEL, json: true };
 
     await runAccountLink(client as never, { ...flags, preview: true } as never, makeOut());
     const realOut = makeOut();
     await runAccountLink(client as never, flags as never, realOut);
 
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({ credentials: { email: "a@b.c", password: SENTINEL } }),
     );
   });

@@ -212,9 +212,10 @@ describe("router — subcommands still route after the bare-form fix", () => {
     expect(r.stdout).toMatch(/"error"/);
   });
 
-  it("recruiter job applicants <job_id> still routes correctly (job get does not shadow other job verbs)", () => {
+  it("recruiter job applicants <project_id> still routes correctly (job get does not shadow other job verbs)", () => {
     const r = run([
-      "recruiter", "job", "applicants", "job_99",
+      "recruiter", "job", "applicants", "proj_99",
+      "--channel-id", "ch_1",
       "--account", "acc_x",
       "--base-url", UNROUTABLE,
       "--json",
@@ -354,7 +355,7 @@ describe("router — unknown-flag detection vs. citty negation", () => {
     ]);
     expect(combined(r)).not.toMatch(/unknown flag/i);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("accounts.link");
+    expect(r.stdout).toContain("auth.intent");
   });
 
   it("citty's negation fallback still works for a flag not literally declared with a no- prefix", () => {

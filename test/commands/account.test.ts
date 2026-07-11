@@ -30,14 +30,18 @@ function makeClient() {
     accounts: {
       list: vi.fn(),
       get: vi.fn(),
-      link: vi.fn(),
       createConnectLink: vi.fn(),
       reconnect: vi.fn(),
       createReconnectLink: vi.fn(),
       update: vi.fn(),
       disconnect: vi.fn(),
+    },
+    auth: {
+      intent: vi.fn(),
       solveCheckpoint: vi.fn(),
       pollCheckpoint: vi.fn(),
+      requestCheckpoint: vi.fn(),
+      getSession: vi.fn(),
     },
   };
 }
@@ -443,7 +447,7 @@ describe("account link", () => {
 
   beforeEach(() => {
     client = makeClient();
-    (client.accounts.link as Mock).mockResolvedValue({ object: "account", account_id: "acc_new" });
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account", account_id: "acc_new" });
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -459,7 +463,7 @@ describe("account link", () => {
       json: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({
         seat_id: "seat_1",
         auth_method: "credentials",
@@ -479,7 +483,7 @@ describe("account link", () => {
       json: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.link).toHaveBeenCalledWith(
+    expect(client.auth.intent).toHaveBeenCalledWith(
       expect.objectContaining({
         seat_id: "seat_1",
         auth_method: "cookie",
@@ -507,7 +511,7 @@ describe("account link", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
   });
 
   it("missing --seat-id exits 2", async () => {
@@ -524,7 +528,7 @@ describe("account link", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
   });
 
   it("missing --auth-method exits 2", async () => {
@@ -541,7 +545,7 @@ describe("account link", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
   });
 
   it("--preview renders request, does not call accounts.link", async () => {
@@ -555,10 +559,10 @@ describe("account link", () => {
       preview: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.link).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.link");
+    expect(parsed.method).toBe("auth.intent");
   });
 });
 
@@ -840,7 +844,7 @@ describe("account checkpoint solve", () => {
 
   beforeEach(() => {
     client = makeClient();
-    (client.accounts.solveCheckpoint as Mock).mockResolvedValue({ object: "account", status: "active" });
+    (client.auth.solveCheckpoint as Mock).mockResolvedValue({ object: "account", status: "active" });
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -855,7 +859,7 @@ describe("account checkpoint solve", () => {
     } as AccountFlags, out);
 
     // The SDK signature is solveCheckpoint(accountId, { code }).
-    expect(client.accounts.solveCheckpoint).toHaveBeenCalledWith("acc_pending_1", { code: "123456" });
+    expect(client.auth.solveCheckpoint).toHaveBeenCalledWith("acc_pending_1", { code: "123456" });
   });
 
   it("missing account_id exits 2", async () => {
@@ -872,7 +876,7 @@ describe("account checkpoint solve", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
+    expect(client.auth.solveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("missing --code exits 2", async () => {
@@ -889,7 +893,7 @@ describe("account checkpoint solve", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
+    expect(client.auth.solveCheckpoint).not.toHaveBeenCalled();
   });
 
   it("--preview renders without calling solveCheckpoint", async () => {
@@ -901,10 +905,10 @@ describe("account checkpoint solve", () => {
       preview: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.solveCheckpoint).not.toHaveBeenCalled();
+    expect(client.auth.solveCheckpoint).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.solveCheckpoint");
+    expect(parsed.method).toBe("auth.solveCheckpoint");
     // account_id is a path/positional arg; the body carries the code.
     expect(parsed.args).toHaveProperty("accountId", "acc_pending_1");
     expect(parsed.body).toHaveProperty("code", "654321");
@@ -920,7 +924,7 @@ describe("account checkpoint poll", () => {
 
   beforeEach(() => {
     client = makeClient();
-    (client.accounts.pollCheckpoint as Mock).mockResolvedValue({ object: "checkpoint", status: "pending" });
+    (client.auth.pollCheckpoint as Mock).mockResolvedValue({ object: "checkpoint", status: "pending" });
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -933,7 +937,7 @@ describe("account checkpoint poll", () => {
       json: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.pollCheckpoint).toHaveBeenCalledWith("acc_pending_1");
+    expect(client.auth.pollCheckpoint).toHaveBeenCalledWith("acc_pending_1");
   });
 
   it("missing account_id exits 2", async () => {
@@ -950,7 +954,7 @@ describe("account checkpoint poll", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.pollCheckpoint).not.toHaveBeenCalled();
+    expect(client.auth.pollCheckpoint).not.toHaveBeenCalled();
   });
 
   it("--preview renders without calling pollCheckpoint", async () => {
@@ -961,10 +965,10 @@ describe("account checkpoint poll", () => {
       preview: true,
     } as AccountFlags, out);
 
-    expect(client.accounts.pollCheckpoint).not.toHaveBeenCalled();
+    expect(client.auth.pollCheckpoint).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.pollCheckpoint");
+    expect(parsed.method).toBe("auth.pollCheckpoint");
     expect(parsed.args).toHaveProperty("accountId", "acc_pending_1");
   });
 });

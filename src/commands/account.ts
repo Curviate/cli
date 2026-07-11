@@ -60,7 +60,14 @@ import {
   CHECKPOINT_POLL_FIRST_DELAY_MS,
   nextCheckpointPollDelayMs,
 } from "../lib/checkpoint-cadence.js";
-import type { Curviate, CurviateError } from "@curviate/sdk";
+import type { Curviate, CurviateError, paths } from "@curviate/sdk";
+
+/**
+ * `POST /v1/auth/intent` body — a narrow cast target only (see
+ * `runAccountLink`'s comment): the body is assembled dynamically from
+ * credential-resolution helpers, not a single typed literal.
+ */
+type AuthIntentBody = paths["/v1/auth/intent"]["post"]["requestBody"]["content"]["application/json"];
 
 // ps/shell-history warning template (mirrors the --api-key warning in global-flags.ts).
 const PW_WARNING = (stdinFlag: string, envVar: string) =>
@@ -462,7 +469,7 @@ async function waitForMobileApproval(
   for (;;) {
     let result: unknown;
     try {
-      result = await client.accounts.pollCheckpoint(accountId);
+      result = await client.auth.pollCheckpoint(accountId);
     } catch (err) {
       return await handleError(err, ctx.outOpts, ctx.out);
     }
@@ -537,7 +544,7 @@ async function runInteractiveCheckpointLoop(
     for (;;) {
       const code = await ctx.readline("Enter the code: ");
       try {
-        const result = await client.accounts.solveCheckpoint(accountId, { code });
+        const result = await client.auth.solveCheckpoint(accountId, { code });
         const r = result as CheckpointEnvelope;
         if (r.status === "checkpoint_required") {
           current = { ...r, account_id: r.account_id ?? accountId };
@@ -646,14 +653,20 @@ export async function runAccountLink(
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.link", args: {}, body: maskCredentialSecretsForPreview(body) });
+    const preview = buildPreviewOutput({ method: "auth.intent", args: {}, body: maskCredentialSecretsForPreview(body) });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
   let result: unknown;
   try {
-    result = await client.accounts.link(body);
+    // Narrow cast: the body is assembled dynamically across several
+    // conditionals (credentials-vs-cookie discriminated union, optional
+    // proxy/location fields, async secret resolution) — required-field
+    // validation (--seat-id/--auth-method) already runs above, and
+    // auth.intent's own 400 covers anything this doesn't catch
+    // (FR-001 body-typing rule).
+    result = await client.auth.intent(body as AuthIntentBody);
   } catch (err) {
     await handleError(err, outOpts, out);
     return;
@@ -712,7 +725,7 @@ async function runConnectSessionWaitLoop(
     // The session_id is a STRING path arg — the SDK interpolates it into
     // /v1/accounts/connect-sessions/{session_id}. Passing an object here would
     // stringify to `[object Object]` and hit a bogus path.
-    const result = await client.accounts.getConnectSession(sessionId);
+    const result = await client.auth.getSession(sessionId);
     const r = result as ConnectSessionEnvelope;
 
     if (r.status === "resolved") return { kind: "resolved", result };
@@ -890,14 +903,14 @@ export async function runAccountConnectSessionPoll(
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
-    const preview = buildPreviewOutput({ method: "accounts.getConnectSession", args: { session_id: sessionId }, body: {} });
+    const preview = buildPreviewOutput({ method: "auth.getSession", args: { session_id: sessionId }, body: {} });
     out.stdout.write(JSON.stringify(preview) + "\n");
     return;
   }
 
   if (!flags.wait) {
     try {
-      const result = await client.accounts.getConnectSession(sessionId);
+      const result = await client.auth.getSession(sessionId);
       renderSuccess(result, outOpts, out);
     } catch (err) {
       await handleError(err, outOpts, out);
@@ -1231,15 +1244,16 @@ export async function runAccountCheckpointSolve(
   }
 
   const accountId = flags["account-id"] ?? "";
-  const body: Record<string, unknown> = {
-    code: flags.code,
-  };
+  // flags.code is narrowed to `string` by the `!flags.code` exit(2) above
+  // (process.exit returns `never`), so this literal structurally satisfies
+  // AuthSolveCheckpointBody without a cast.
+  const body = { code: flags.code };
 
   const outOpts = resolveOutputOpts(flags);
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "accounts.solveCheckpoint",
+      method: "auth.solveCheckpoint",
       args: { accountId },
       body,
     });
@@ -1249,7 +1263,7 @@ export async function runAccountCheckpointSolve(
 
   let chained = false;
   try {
-    const result = await client.accounts.solveCheckpoint(accountId, body);
+    const result = await client.auth.solveCheckpoint(accountId, body);
     const r = result as CheckpointEnvelope;
     renderSuccess(result, outOpts, out);
     chained = r.status === "checkpoint_required";
@@ -1295,7 +1309,7 @@ export async function runAccountCheckpointRequest(
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "accounts.requestCheckpoint",
+      method: "auth.requestCheckpoint",
       args: { accountId },
       body: {},
     });
@@ -1304,7 +1318,7 @@ export async function runAccountCheckpointRequest(
   }
 
   try {
-    const result = await client.accounts.requestCheckpoint(accountId);
+    const result = await client.auth.requestCheckpoint(accountId);
     renderSuccess(result, outOpts, out);
   } catch (err) {
     await handleError(err, outOpts, out);
@@ -1353,7 +1367,7 @@ async function runCheckpointPollWaitLoop(
   await ctx.sleep(CHECKPOINT_POLL_FIRST_DELAY_MS);
 
   for (;;) {
-    const result = await client.accounts.pollCheckpoint(accountId);
+    const result = await client.auth.pollCheckpoint(accountId);
     const r = result as { status?: string; expires_at?: string };
 
     if (r.status === "active") return { kind: "active", result };
@@ -1402,7 +1416,7 @@ export async function runAccountCheckpointPoll(
 
   if (flags.preview) {
     const preview = buildPreviewOutput({
-      method: "accounts.pollCheckpoint",
+      method: "auth.pollCheckpoint",
       args: { accountId },
       body: {},
     });
@@ -1412,7 +1426,7 @@ export async function runAccountCheckpointPoll(
 
   if (!flags.wait) {
     try {
-      const result = await client.accounts.pollCheckpoint(accountId);
+      const result = await client.auth.pollCheckpoint(accountId);
       renderSuccess(result, outOpts, out);
     } catch (err) {
       await handleError(err, outOpts, out);

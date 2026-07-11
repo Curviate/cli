@@ -32,7 +32,9 @@ function makeClient() {
   return {
     accounts: {
       createConnectLink: vi.fn(),
-      getConnectSession: vi.fn(),
+    },
+    auth: {
+      getSession: vi.fn(),
     },
   };
 }
@@ -126,7 +128,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(resolvedSession());
+    (client.auth.getSession as Mock).mockResolvedValue(resolvedSession());
 
     await runAccountConnectLink(
       client as never,
@@ -139,7 +141,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     expect(open).toHaveBeenCalledWith(MINT_RESULT.url);
     // The session_id must be passed as a STRING (it interpolates into the SDK
     // path); an object here would stringify to `[object Object]`.
-    expect(client.accounts.getConnectSession).toHaveBeenCalledWith("cs_1");
+    expect(client.auth.getSession).toHaveBeenCalledWith("cs_1");
     expect(clock.sleep).toHaveBeenNthCalledWith(1, 1000);
 
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
@@ -154,7 +156,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock).mockResolvedValue({
+    (client.auth.getSession as Mock).mockResolvedValue({
       object: "connect_session",
       session_id: "cs_1",
       status,
@@ -184,7 +186,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(PENDING_SESSION);
+    (client.auth.getSession as Mock).mockResolvedValue(PENDING_SESSION);
 
     const exitSpy = makeExitSpy();
     try {
@@ -202,7 +204,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     }
     // The --timeout override (500ms) elapses before the first poll response
     // (which arrives at t=1000, after the fixed initial delay) — one call only.
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
   });
 
   it("with no --timeout, the wait bound defaults to the session's own expires_at", async () => {
@@ -213,7 +215,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     // expires_at (t=1500ms) falls between the first poll (t=1000, not yet
     // expired) and the second (t=2500, past expiry) — proves the default
     // bound is read from the response, not a hardcoded fallback.
-    (client.accounts.getConnectSession as Mock).mockResolvedValue({
+    (client.auth.getSession as Mock).mockResolvedValue({
       ...PENDING_SESSION,
       expires_at: new Date(1500).toISOString(),
     });
@@ -232,7 +234,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(2);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(2);
   });
 
   it("the sleep-arg cadence crosses the 30s fast/slow boundary at the right elapsed threshold", async () => {
@@ -240,7 +242,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock).mockImplementation(async () => {
+    (client.auth.getSession as Mock).mockImplementation(async () => {
       if (clock.now() >= CHECKPOINT_POLL_FAST_WINDOW_MS + 5000) {
         return resolvedSession();
       }
@@ -275,7 +277,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock)
+    (client.auth.getSession as Mock)
       .mockResolvedValueOnce(PENDING_SESSION)
       .mockResolvedValueOnce(resolvedSession());
 
@@ -296,7 +298,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock)
+    (client.auth.getSession as Mock)
       .mockResolvedValueOnce(PENDING_SESSION)
       .mockResolvedValueOnce(resolvedSession());
 
@@ -316,7 +318,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     const out = makeOut();
     const clock = makeAdvancingClock();
     const open = vi.fn().mockResolvedValue(undefined);
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(resolvedSession());
+    (client.auth.getSession as Mock).mockResolvedValue(resolvedSession());
 
     await runAccountConnectLink(
       client as never,
@@ -326,7 +328,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     );
 
     expect(open).not.toHaveBeenCalled();
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
   });
 
   it("--no-wait opens the browser but skips the wait loop, exits 0 immediately", async () => {
@@ -343,7 +345,7 @@ describe("account connect-link — TTY + interactive open+wait", () => {
     );
 
     expect(open).toHaveBeenCalledTimes(1);
-    expect(client.accounts.getConnectSession).not.toHaveBeenCalled();
+    expect(client.auth.getSession).not.toHaveBeenCalled();
     expect(clock.sleep).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(JSON.parse(written)).toMatchObject({ object: "hosted_auth_url", session_id: "cs_1" });
@@ -377,7 +379,7 @@ describe("account connect-link — non-TTY / --no-interactive (agent path)", () 
 
     expect(open).not.toHaveBeenCalled();
     expect(sleep).not.toHaveBeenCalled();
-    expect(client.accounts.getConnectSession).not.toHaveBeenCalled();
+    expect(client.auth.getSession).not.toHaveBeenCalled();
 
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain(MINT_RESULT.url);
@@ -489,7 +491,7 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
   it("calls getConnectSession once with the session_id, prints the body, exit 0 regardless of status", async () => {
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(PENDING_SESSION);
+    (client.auth.getSession as Mock).mockResolvedValue(PENDING_SESSION);
 
     await runAccountConnectSessionPoll(
       client as never,
@@ -497,12 +499,12 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
       out,
     );
 
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
     // Regression guard: the CLI passes the session_id as a bare STRING, not an
     // object. Passing `{ session_id }` would interpolate to
     // `/v1/accounts/connect-sessions/[object Object]` (the fixed bug).
-    expect(client.accounts.getConnectSession).toHaveBeenCalledWith("cs_1");
-    const [seenArg] = (client.accounts.getConnectSession as Mock).mock.calls[0] as [unknown];
+    expect(client.auth.getSession).toHaveBeenCalledWith("cs_1");
+    const [seenArg] = (client.auth.getSession as Mock).mock.calls[0] as [unknown];
     expect(typeof seenArg).toBe("string");
     expect(`/v1/accounts/connect-sessions/${seenArg}`).toBe("/v1/accounts/connect-sessions/cs_1");
     expect(`/v1/accounts/connect-sessions/${seenArg}`).not.toContain("[object Object]");
@@ -522,7 +524,7 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.getConnectSession).not.toHaveBeenCalled();
+    expect(client.auth.getSession).not.toHaveBeenCalled();
   });
 
   it("--preview renders the request without calling getConnectSession", async () => {
@@ -535,10 +537,10 @@ describe("account connect-session poll — one-shot (no --wait)", () => {
       out,
     );
 
-    expect(client.accounts.getConnectSession).not.toHaveBeenCalled();
+    expect(client.auth.getSession).not.toHaveBeenCalled();
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const parsed = JSON.parse(written);
-    expect(parsed.method).toBe("accounts.getConnectSession");
+    expect(parsed.method).toBe("auth.getSession");
     // session_id is a positional arg, not a body field.
     expect(parsed.args).toMatchObject({ session_id: "cs_1" });
   });
@@ -555,7 +557,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     const clock = makeAdvancingClock();
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(resolvedSession());
+    (client.auth.getSession as Mock).mockResolvedValue(resolvedSession());
 
     await runAccountConnectSessionPoll(
       client as never,
@@ -564,7 +566,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
       { isOutputTTY: false, sleep: clock.sleep, now: clock.now },
     );
 
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
     expect(clock.sleep).toHaveBeenNthCalledWith(1, 1000);
     const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     expect(stderrText).toContain("Account connected: acc_final");
@@ -576,7 +578,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     const clock = makeAdvancingClock();
-    (client.accounts.getConnectSession as Mock).mockResolvedValue({ ...PENDING_SESSION, status });
+    (client.auth.getSession as Mock).mockResolvedValue({ ...PENDING_SESSION, status });
 
     const exitSpy = makeExitSpy();
     try {
@@ -598,7 +600,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
     const clock = makeAdvancingClock();
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(PENDING_SESSION);
+    (client.auth.getSession as Mock).mockResolvedValue(PENDING_SESSION);
 
     const exitSpy = makeExitSpy();
     try {
@@ -614,7 +616,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
   });
 
   it("--timeout must be numeric — a non-numeric value exits 2 before any getConnectSession call", async () => {
@@ -634,13 +636,13 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
     } finally {
       exitSpy.mockRestore();
     }
-    expect(client.accounts.getConnectSession).not.toHaveBeenCalled();
+    expect(client.auth.getSession).not.toHaveBeenCalled();
   });
 
   it("without --wait, a single poll call is unaffected (back-compat, --wait defaults off)", async () => {
     const { runAccountConnectSessionPoll } = await import("../../src/commands/account.js");
     const out = makeOut();
-    (client.accounts.getConnectSession as Mock).mockResolvedValue(PENDING_SESSION);
+    (client.auth.getSession as Mock).mockResolvedValue(PENDING_SESSION);
 
     await runAccountConnectSessionPoll(
       client as never,
@@ -648,7 +650,7 @@ describe("account connect-session poll --wait — adaptive-cadence loop", () => 
       out,
     );
 
-    expect(client.accounts.getConnectSession).toHaveBeenCalledTimes(1);
+    expect(client.auth.getSession).toHaveBeenCalledTimes(1);
   });
 });
 
