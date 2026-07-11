@@ -664,8 +664,7 @@ export async function runAccountLink(
     // conditionals (credentials-vs-cookie discriminated union, optional
     // proxy/location fields, async secret resolution) — required-field
     // validation (--seat-id/--auth-method) already runs above, and
-    // auth.intent's own 400 covers anything this doesn't catch
-    // (FR-001 body-typing rule).
+    // auth.intent's own 400 covers anything this doesn't catch.
     result = await client.auth.intent(body as AuthIntentBody);
   } catch (err) {
     await handleError(err, outOpts, out);

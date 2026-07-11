@@ -50,10 +50,10 @@ import { readFile } from "node:fs/promises";
 import type { Curviate, CurviateError, paths } from "@curviate/sdk";
 
 /**
- * Local type aliases for the recruiter bodies that are "genuinely
- * impractical" to build as fully-typed literals (deep discriminated unions,
+ * Local type aliases for the recruiter bodies that are genuinely
+ * impractical to build as fully-typed literals (deep discriminated unions,
  * or a body sourced from free-form user JSON) — used for a single narrow
- * cast at the call site per FR-001's body-typing rule.
+ * cast at the call site instead.
  */
 type RecruiterStartChatBody = paths["/v1/{account_id}/recruiter/chats"]["post"]["requestBody"]["content"]["application/json"];
 type RecruiterSearchParametersBody = paths["/v1/{account_id}/recruiter/search/parameters"]["post"]["requestBody"]["content"]["application/json"];
@@ -490,7 +490,7 @@ export async function runRecruiterSearchPeople(
  * is a source-discriminated oneOf (APPLICANTS/PIPELINE require project_id;
  * PIPELINE additionally accepts stage_id). `--source` is a free-form CLI
  * flag, so a narrow cast stands in for full static discrimination of the
- * union (FR-001 body-typing rule).
+ * union.
  */
 export async function runRecruiterSearchParameters(
   client: Curviate,
@@ -601,8 +601,8 @@ export async function runRecruiterGetProject(
  * Write command — supports --preview. project_id passes verbatim.
  *
  * v2: addCandidate(user_id, {hiring_project_id, stage}) is replaced by the
- * project-scoped saveCandidate(project_id, {stage_id, candidate_id}) — full
- * body reshape (renamed command, FR-005 changelog category (a)).
+ * project-scoped saveCandidate(project_id, {stage_id, candidate_id}) — a
+ * full body reshape, and the command is renamed to match.
  */
 export async function runRecruiterSaveCandidate(
   client: Curviate,
@@ -840,8 +840,7 @@ export async function runRecruiterCreateJob(
     // Narrow cast: the body is assembled from free-form JSON (--body-file/
     // --body -) merged with scalar convenience flags; deep structural
     // validation (job_title/company/apply_method shape, required enums) is
-    // left to the API's 400, as already documented on assembleJobCreateBody
-    // (FR-001 body-typing rule).
+    // left to the API's 400, as already documented on assembleJobCreateBody.
     const result = await ns.recruiter.createJob(body as RecruiterCreateJobBody);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
@@ -882,8 +881,7 @@ export async function runRecruiterPublishJob(
 
   try {
     // Narrow cast: mode is a mode-discriminated oneOf (FREE needs nothing
-    // further; PROMOTED*/budget flags are not yet wired on this command —
-    // FR-001 body-typing rule).
+    // further; PROMOTED*/budget flags are not yet wired on this command).
     const result = await ns.recruiter.publishJob(projectId, jobId, body as RecruiterPublishJobBody);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {

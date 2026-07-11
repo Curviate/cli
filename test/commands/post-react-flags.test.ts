@@ -2,7 +2,7 @@
  * post react --as-organization flag wiring
  *
  * v2: PostReactBody is { reaction, react_as? } — `comment_id` is REMOVED
- * (comment-level reactions moved to the comments.* group, sdk/007); the CLI
+ * (comment-level reactions moved to the comments.* group); the CLI
  * --as-organization flag maps onto the renamed `react_as` body field.
  *
  * post react --as-organization <org> → body contains react_as

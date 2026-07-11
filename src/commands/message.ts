@@ -12,7 +12,7 @@
  *   message inmail --to <url|slug|provider-id|urn> --subject <s> "<text>" — send InMail (write)
  *   message inmail-balance                                      — get InMail credit balance (read)
  *
- * v2 (sdk/007): get/edit/delete/react/attachment are re-homed under
+ * v2: get/edit/delete/react/attachment are re-homed under
  * /chats/{chat_id}/messages/{message_id} — every one of them now takes a
  * leading chat_id as well as message_id. --surface has no v2 home on
  * sendInMail (the body is just recipient_urn/subject/text) and is dropped.

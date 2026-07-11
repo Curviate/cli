@@ -333,7 +333,7 @@ export async function runSalesNavGetParameters(
 
   // `type` is a free-form CLI string flag validated against the served enum
   // server-side — a narrow cast here is the pragmatic alternative to
-  // hand-duplicating the enum union client-side (FR-001 body-typing rule).
+  // hand-duplicating the enum union client-side.
   const params: SNGetParametersQuery = { type: flags.type as SNGetParametersQuery["type"] };
   if (flags.keywords) params.keywords = flags.keywords;
   if (flags.limit) params.limit = parseInt(flags.limit, 10);

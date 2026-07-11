@@ -12,9 +12,9 @@
  * <id> for `respond` and `cancel` is an invitation_id — passed verbatim, NOT resolved.
  * All subcommands are account-scoped.
  *
- * v2 (sdk/007): the old combined `invites.respond(id, {action, shared_secret})`
+ * v2: the old combined `invites.respond(id, {action, shared_secret})`
  * split into two dedicated, BODYLESS ops — `invites.accept` / `invites.decline`.
- * `respond` keeps its noun (cli/008 FR-002 — noun tree stable) but now
+ * `respond` keeps its noun (the command surface stays stable) but now
  * branches on --action to call the right one; --shared-secret has no v2 home
  * (the accept/decline ops take no body at all) and is no longer accepted.
  */

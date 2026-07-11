@@ -13,7 +13,7 @@
  * post_id passes through verbatim — NOT resolved via resolveIdentifier.
  * All subcommands are account-scoped.
  *
- * v2 (sdk/007): posts.create/posts.react are re-pointed here — --video-thumbnail
+ * v2: posts.create/posts.react are re-pointed here — --video-thumbnail
  * has no v2 home (dropped, same class as profile's --notify) and attachments
  * are base64 JSON objects, not multipart. --comment-id on `post react` is
  * also dropped: comment-level reactions moved to the comments.* group

@@ -31,8 +31,8 @@ import type { Curviate, CurviateError, paths } from "@curviate/sdk";
  * | account_status), each with its own `events`/`data` enum arrays. `source`,
  * `events`, and `data` are free-form CLI flags (comma-split strings), so
  * proving the literal-union match statically isn't practical here — a single
- * narrow cast at this body-argument call site stands in (FR-001 body-typing
- * rule); the server validates the enum values on any mismatch.
+ * narrow cast at this body-argument call site stands in; the server
+ * validates the enum values on any mismatch.
  */
 type WebhookCreateBody = paths["/v1/webhooks"]["post"]["requestBody"]["content"]["application/json"];
 

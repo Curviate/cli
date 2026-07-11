@@ -6,7 +6,7 @@
  * logged and never echoed; `--preview` renders attachments as
  * `<name> (N bytes)` via lib/preview.ts.
  *
- * v2 wire shape (sdk/007): every write with attachments is `application/json`
+ * v2 wire shape: every write with attachments is `application/json`
  * — there is NO multipart op on the served surface. Attachments travel as
  * base64-encoded objects (`{content, content_type, filename}`, sometimes with
  * `send_mode`/`metadata` for native voice/video bubbles). `toAttachmentPayload`

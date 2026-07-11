@@ -600,7 +600,7 @@ export async function runSearchParameters(
 
   // `type` is a free-form CLI string flag validated against the served enum
   // server-side — a narrow cast here is the pragmatic alternative to
-  // hand-duplicating the enum union client-side (FR-001 body-typing rule).
+  // hand-duplicating the enum union client-side.
   const query: SearchParametersQuery = {
     type: flags.type as SearchParametersQuery["type"],
     keywords: flags.keywords,

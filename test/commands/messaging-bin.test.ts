@@ -78,9 +78,9 @@ describe("stdin guard — empty stdin exits 2 without sending a request", () => 
     expect(r.stdout.trim()).toBe("");
   });
 
-  it("message edit <msg_id> - with empty stdin: exit 2, no preview rendered", () => {
+  it("message edit <chat_id> <msg_id> - with empty stdin: exit 2, no preview rendered", () => {
     const r = run(
-      ["message", "edit", "msg_abc", "-", "--preview", "--account", "acc_1"],
+      ["message", "edit", "chat_9", "msg_abc", "-", "--preview", "--account", "acc_1"],
       { input: "" },
     );
     expect(r.status).toBe(2);
@@ -93,7 +93,6 @@ describe("stdin guard — empty stdin exits 2 without sending a request", () => 
       [
         "message", "inmail",
         "--to", "ACoAAA123",
-        "--surface", "classic",
         "--subject", "Hi",
         "-",
         "--preview",
@@ -147,9 +146,9 @@ describe("stdin content — bare '-' binds to TEXT positional and reads stdin", 
     expect(body.text).toBe("Hello via stdin");
   });
 
-  it("message edit <msg_id> - reads stdin and passes it as body.text for editMessage", () => {
+  it("message edit <chat_id> <msg_id> - reads stdin and passes it as body.text for editMessage", () => {
     const r = run(
-      ["message", "edit", "msg_abc", "-", "--preview", "--account", "acc_1"],
+      ["message", "edit", "chat_9", "msg_abc", "-", "--preview", "--account", "acc_1"],
       { input: "Edited body\n" },
     );
     expect(r.status).toBe(0);
@@ -164,7 +163,6 @@ describe("stdin content — bare '-' binds to TEXT positional and reads stdin", 
       [
         "message", "inmail",
         "--to", "ACoAAA123",
-        "--surface", "classic",
         "--subject", "Greetings",
         "-",
         "--preview",
