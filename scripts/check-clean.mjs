@@ -1,6 +1,6 @@
 // check:clean — anti-leak guard for the public repo.
 //
-// Greps the entire package source (excluding node_modules/, dist/) for patterns
+// Greps the package source (excluding node_modules/, dist/) for patterns
 // that must never appear in a public repository:
 //   - Internal spec/doc reference codes: FR-N, AC-N, NFR-N, TS-N, ADR-N
 //   - Internal path prefixes: sdk/N, api/N, core/N, infra/N, mcp/N, cli/N
@@ -12,6 +12,15 @@
 //
 // Exits 0 when clean, non-zero and prints every offending line when not.
 // Wire this as `pnpm check:clean` and invoke it from the prepack / verify:dist flow.
+//
+// --dist mode: `node scripts/check-clean.mjs --dist` scans ONLY the built
+// dist/ output (the default run excludes dist/ entirely) with the identical
+// pattern set. Source-level exclusions (e.g. inline comments explaining a
+// pattern) don't protect the bundle — a leak can survive minification or be
+// re-introduced by a dependency, so the assembled output gets its own pass.
+// dist/ must already exist (run `pnpm build` first) — the mode fails closed
+// rather than silently reporting 0 hits over a directory that isn't there.
+// Chained into `prepack` AFTER the build step so no publish can skip it.
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, extname } from "node:path";
@@ -20,6 +29,24 @@ import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(__dirname, "..");
+
+const distMode = process.argv.includes("--dist");
+const scanRoot = distMode ? join(pkgRoot, "dist") : pkgRoot;
+const modeLabel = distMode ? "--dist" : "source";
+
+if (distMode) {
+  let distStat;
+  try {
+    distStat = await stat(scanRoot);
+  } catch {
+    console.error(`check:clean --dist FAIL — dist/ not found at ${scanRoot}. Run \`pnpm build\` first.`);
+    process.exit(1);
+  }
+  if (!distStat.isDirectory()) {
+    console.error(`check:clean --dist FAIL — ${scanRoot} exists but is not a directory.`);
+    process.exit(1);
+  }
+}
 
 // Directories to skip entirely (relative to pkgRoot).
 const SKIP_DIRS = new Set(["node_modules", "dist"]);
@@ -101,7 +128,7 @@ async function collectFiles(dir) {
   return results;
 }
 
-const files = await collectFiles(pkgRoot);
+const files = await collectFiles(scanRoot);
 let totalHits = 0;
 
 for (const file of files) {
@@ -132,8 +159,8 @@ for (const file of files) {
 }
 
 if (totalHits > 0) {
-  console.error(`\ncheck:clean FAIL — ${totalHits} leak(s) found. Strip the references above before publishing.`);
+  console.error(`\ncheck:clean [${modeLabel}] FAIL — ${totalHits} leak(s) found. Strip the references above before publishing.`);
   process.exit(1);
 }
 
-console.error("check:clean OK — no internal references found.");
+console.error(`check:clean [${modeLabel}] OK — no internal references found.`);
