@@ -91,6 +91,16 @@ describe("recruiter list commands — DOES have pagination flags (negative contr
     expect(args, `recruiter ${path.join(" ")} must have --cursor`).toHaveProperty("cursor");
     expect(args, `recruiter ${path.join(" ")} must have --all`).toHaveProperty("all");
   });
+
+  it("recruiter search (the group itself, bare <url> form) — retains pagination flags", async () => {
+    const { recruiterCommand } = await import("../../src/commands/recruiter.js");
+    const subCmds = (recruiterCommand as unknown as CommandLike).subCommands ?? {};
+    const args = subCmds["search"]?.args ?? {};
+
+    expect(args, "recruiter search must have --limit").toHaveProperty("limit");
+    expect(args, "recruiter search must have --cursor").toHaveProperty("cursor");
+    expect(args, "recruiter search must have --all").toHaveProperty("all");
+  });
 });
 
 describe("sales-nav write commands — no pagination flags in help", () => {
@@ -144,5 +154,15 @@ describe("sales-nav list commands — DOES have pagination flags (negative contr
     expect(args, `sales-nav ${path.join(" ")} must have --limit`).toHaveProperty("limit");
     expect(args, `sales-nav ${path.join(" ")} must have --cursor`).toHaveProperty("cursor");
     expect(args, `sales-nav ${path.join(" ")} must have --all`).toHaveProperty("all");
+  });
+
+  it("sales-nav search (the group itself, bare <url> form) — retains pagination flags", async () => {
+    const { salesNavCommand } = await import("../../src/commands/sales-nav.js");
+    const subCmds = (salesNavCommand as unknown as CommandLike).subCommands ?? {};
+    const args = subCmds["search"]?.args ?? {};
+
+    expect(args, "sales-nav search must have --limit").toHaveProperty("limit");
+    expect(args, "sales-nav search must have --cursor").toHaveProperty("cursor");
+    expect(args, "sales-nav search must have --all").toHaveProperty("all");
   });
 });

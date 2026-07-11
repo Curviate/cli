@@ -36,6 +36,7 @@ function makeSalesNavNs() {
       searchPeople: vi.fn(),
       searchCompanies: vi.fn(),
       getParameters: vi.fn(),
+      searchFromUrl: vi.fn(),
       startChat: vi.fn(),
       getProfile: vi.fn(),
       saveLead: vi.fn(),
@@ -499,6 +500,89 @@ describe("sales-nav search parameters", () => {
       exitSpy.mockRestore();
     }
     expect(ns.salesNavigator.getParameters).not.toHaveBeenCalled();
+  });
+});
+
+// ─── sales-nav search <url> ────────────────────────────────────────────────
+
+describe("sales-nav search <url>", () => {
+  let ns: ReturnType<typeof makeSalesNavNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeSalesNavNs();
+    client = makeClient(ns);
+    (ns.salesNavigator.searchFromUrl as Mock).mockResolvedValue({ data: [] });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("calls salesNavigator.searchFromUrl with {url} body and no pagination params by default", async () => {
+    const { runSalesNavSearchFromUrl } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchFromUrl(client as never, {
+      account: "acc_1",
+      url: "https://www.linkedin.com/sales/search/people?...",
+      json: true,
+    }, out);
+
+    expect(ns.salesNavigator.searchFromUrl).toHaveBeenCalledWith(
+      { url: "https://www.linkedin.com/sales/search/people?..." },
+      undefined,
+    );
+  });
+
+  it("--limit/--cursor pass through as query params, not in the body", async () => {
+    const { runSalesNavSearchFromUrl } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchFromUrl(client as never, {
+      account: "acc_1",
+      url: "https://www.linkedin.com/sales/search/people?...",
+      limit: "10",
+      cursor: "cur_1",
+      json: true,
+    }, out);
+
+    expect(ns.salesNavigator.searchFromUrl).toHaveBeenCalledWith(
+      { url: "https://www.linkedin.com/sales/search/people?..." },
+      { limit: 10, cursor: "cur_1" },
+    );
+  });
+
+  it("--all streams all pages", async () => {
+    (ns.salesNavigator.searchFromUrl as Mock)
+      .mockResolvedValueOnce({ data: [{ id: "1" }], cursor: "cur_1" })
+      .mockResolvedValueOnce({ data: [{ id: "2" }], cursor: null });
+
+    const { runSalesNavSearchFromUrl } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+
+    await runSalesNavSearchFromUrl(client as never, { account: "acc_1", url: "https://linkedin.com/x", all: true, json: true }, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("\n");
+    const lines = written.trim().split("\n").filter(Boolean);
+    expect(lines.length).toBe(2);
+  });
+
+  it("rejects --preview (read command)", async () => {
+    const { runSalesNavSearchFromUrl } = await import("../../src/commands/sales-nav.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runSalesNavSearchFromUrl(client as never, { account: "acc_1", url: "https://linkedin.com/x", preview: true }, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.salesNavigator.searchFromUrl).not.toHaveBeenCalled();
   });
 });
 

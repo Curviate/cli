@@ -47,6 +47,8 @@ import type { Curviate, CurviateError, paths } from "@curviate/sdk";
 
 /** `GET /v1/{account_id}/sales-navigator/search/parameters` query — `type` required, `keywords` optional. */
 type SNGetParametersQuery = paths["/v1/{account_id}/sales-navigator/search/parameters"]["get"]["parameters"]["query"];
+/** `POST /v1/{account_id}/sales-navigator/search` body — `url` is the only accepted field. */
+type SNSearchFromUrlBody = paths["/v1/{account_id}/sales-navigator/search"]["post"]["requestBody"]["content"]["application/json"];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,6 +76,7 @@ type SalesNavFlags = {
   video?: string;
   type?: string;
   keywords?: string;
+  url?: string;
   // search filter escape hatch + curated named flags
   filters?: string;
   "filters-file"?: string;
@@ -341,6 +344,58 @@ export async function runSalesNavGetParameters(
   try {
     const result = await ns.salesNavigator.getParameters(params);
     renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `sales-nav search <url> [--all] [--limit] [--cursor]`.
+ * Read command — rejects --preview. Paginated. Runs a pasted Sales Navigator
+ * search/list URL directly; the response is polymorphic (discriminated by
+ * its own `object`) and rendered verbatim, no client-side branching.
+ */
+export async function runSalesNavSearchFromUrl(
+  client: Curviate,
+  flags: SalesNavFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const url = flags.url ?? "";
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const limit = flags.limit ? parseInt(flags.limit, 10) : undefined;
+  const cursor = flags.cursor;
+
+  const body: SNSearchFromUrlBody = { url };
+  const params: Record<string, unknown> = {};
+  if (limit !== undefined) params["limit"] = limit;
+  if (cursor) params["cursor"] = cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) => {
+        const { cursor: c, limit: l, ...restP } = p;
+        const callParams: Record<string, unknown> = {};
+        if (c) callParams["cursor"] = c;
+        if (l) callParams["limit"] = l;
+        void restP;
+        return ns.salesNavigator.searchFromUrl(body, callParams) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      };
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        onTruncated: (n) => out.stderr.write(`Streaming truncated at ${n} page(s). Use --all --max-pages or --cursor for manual paging.\n`),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.salesNavigator.searchFromUrl(body, Object.keys(params).length > 0 ? params : undefined);
+      renderSuccess(result, outOpts, out);
+    }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -880,19 +935,48 @@ const salesNavSearchParametersCommand = defineCommand({
 });
 
 const salesNavSearchCommand = defineCommand({
-  meta: { name: "search", description: "Sales Navigator search operations." },
-  args: { ...GLOBAL_FLAGS },
+  meta: { name: "search", description: "Sales Navigator search operations. Also runs a pasted Sales Navigator search/list URL directly." },
+  args: {
+    ...GLOBAL_FLAGS,
+    url: {
+      type: "positional",
+      required: false,
+      description: "A pasted Sales Navigator search or list URL. Runs it directly (salesNavigator.searchFromUrl).",
+    },
+  },
   subCommands: {
     people: salesNavSearchPeopleCommand,
     companies: salesNavSearchCompaniesCommand,
     parameters: salesNavSearchParametersCommand,
   },
-  async run() {
-    process.stderr.write(
-      "Usage: curviate sales-nav search people [--keywords <k>]\n" +
-      "       curviate sales-nav search companies [--keywords <k>]\n" +
-      "       curviate sales-nav search parameters --type <t>\n",
-    );
+  async run({ args }) {
+    const flags = args as SalesNavFlags;
+
+    // Bare form: `sales-nav search <url>` runs the URL directly. No url → print usage.
+    if (!flags.url) {
+      process.stderr.write(
+        "Usage: curviate sales-nav search <url>\n" +
+        "       curviate sales-nav search people [--keywords <k>]\n" +
+        "       curviate sales-nav search companies [--keywords <k>]\n" +
+        "       curviate sales-nav search parameters --type <t>\n",
+      );
+      return;
+    }
+
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runSalesNavSearchFromUrl(client, { ...flags, account: flags.account ?? cfg.account }, out);
   },
 });
 
@@ -1101,6 +1185,7 @@ export const salesNavCommand = defineCommand({
       "       curviate sales-nav search people [--keywords <k>]\n" +
       "       curviate sales-nav search companies [--keywords <k>]\n" +
       "       curviate sales-nav search parameters --type <t>\n" +
+      "       curviate sales-nav search <url>\n" +
       "       curviate sales-nav message new --to <id> \"<text>\"\n" +
       "       curviate sales-nav profile <identifier>\n" +
       "       curviate sales-nav save-lead --list <id> <user_id>\n" +
