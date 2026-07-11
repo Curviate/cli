@@ -16,11 +16,12 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { normalizeChatId } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
+import { buildPreviewOutput } from "../lib/preview.js";
 import { streamAll } from "../lib/paginate.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
@@ -188,6 +189,36 @@ export async function runInboxGet(
 
   try {
     const result = await ns.messaging.getChat(chatId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `inbox mark-read <chat_id>` — messaging.markChatRead(chatId, { read: true }).
+ * Write command (mutation) — supports --preview. <chat_id> accepts a thread URL
+ * or a bare provider id (normalized client-side, zero network calls).
+ */
+export async function runInboxMarkRead(
+  client: Curviate,
+  flags: InboxFlags,
+  out: OutputStreams,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const chatId = normalizeChatId(flags.chatId ?? "");
+  const body = { read: true };
+
+  if (flags.preview) {
+    const preview = buildPreviewOutput({ method: "messaging.markChatRead", args: { chat_id: chatId }, body, account: accountId });
+    out.stdout.write(JSON.stringify(preview) + "\n");
+    return;
+  }
+
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await ns.messaging.markChatRead(chatId, body);
     renderSuccess(result, outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -399,6 +430,32 @@ const inboxGetCommand = defineCommand({
   },
 });
 
+const inboxMarkReadCommand = defineCommand({
+  meta: { name: "mark-read", description: "Mark a chat as read." },
+  args: {
+    // Write command: WRITE_SINGLE_FLAGS omits pagination flags, keeps --fields
+    ...WRITE_SINGLE_FLAGS,
+    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
+  },
+  async run({ args }) {
+    const flags = args as InboxFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runInboxMarkRead(client, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 const inboxMessagesCommand = defineCommand({
   meta: { name: "messages", description: "List messages in a chat." },
   args: {
@@ -503,6 +560,7 @@ export const inboxCommand = defineCommand({
   subCommands: {
     list: inboxListCommand,
     get: inboxGetCommand,
+    "mark-read": inboxMarkReadCommand,
     messages: inboxMessagesCommand,
     sync: inboxSyncCommand,
     "sync-chat": inboxSyncChatCommand,
@@ -512,6 +570,7 @@ export const inboxCommand = defineCommand({
       "Usage: curviate inbox <subcommand>\n" +
       "  list\n" +
       "  get <chat_id>\n" +
+      "  mark-read <chat_id>\n" +
       "  messages <chat_id>\n" +
       "  sync\n" +
       "  sync-chat <chat_id>\n",
