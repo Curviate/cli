@@ -298,6 +298,26 @@ describe("router — usage/routing errors exit 2", () => {
     const r = run(["profile", "jdoe", "bogus", "--account", "acc_x"]);
     expect(r.status).toBe(2);
   });
+
+  it("bare `connect` (no id, no subcommand) exits 2 — missing required positional, not a silent 0", () => {
+    // The M3-cited finding: `connect`'s <id> is functionally required for the
+    // bare form; the group's own usage-printing run() must not fall through
+    // to Node's default exit 0. See test/dispatch-bare-group.test.ts for the
+    // full class of commands this generalizes to (profile/message/search).
+    const r = run(["connect"]);
+    expect(r.status).toBe(2);
+    expect(combined(r)).toMatch(/Usage: curviate connect/);
+  });
+
+  it("bare `account` (pure group, no bare positional) stays exit 0 — showing the subcommand menu is not a usage error", () => {
+    // Contrast case: account has no intent-shaped bare form at all (every
+    // action requires a keyword: list/get/link/…), so there is no positional
+    // to be "missing". This end-to-end pairing with the connect case above
+    // pins both halves of the convention against the real built binary.
+    const r = run(["account"]);
+    expect(r.status).toBe(0);
+    expect(combined(r)).toMatch(/Usage: curviate account/);
+  });
 });
 
 describe("router — id-first reroute reaches the subcommand, not the bare form (D4a)", () => {

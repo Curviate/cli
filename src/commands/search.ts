@@ -892,7 +892,11 @@ export const searchCommand = defineCommand({
         "       curviate search jobs [--keywords <k>]\n" +
         "       curviate search parameters --type <t> --keywords <k>\n",
       );
-      return;
+      // <url> is functionally required for the bare form — a missing
+      // required positional is a usage error (exit 2), not a silent success.
+      // `required: false` on the citty arg def exists only so this richer
+      // usage block can run instead of citty's generic one-liner.
+      process.exit(2);
     }
 
     const cfg = await resolveEffectiveConfig({

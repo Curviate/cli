@@ -1010,7 +1010,11 @@ export const profileCommand = defineCommand({
         "       curviate profile update [--headline|--bio|--first-name|--last-name|--skills|--picture]\n" +
         "       curviate profile endorse <id> --endorsement-id <id>\n",
       );
-      return;
+      // <id> is functionally required for the bare form — a missing required
+      // positional is a usage error (exit 2), not a silent success.
+      // `required: false` on the citty arg def exists only so this richer
+      // usage block can run instead of citty's generic one-liner.
+      process.exit(2);
     }
 
     const cfg = await resolveEffectiveConfig({

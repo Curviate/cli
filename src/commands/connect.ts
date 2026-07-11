@@ -551,7 +551,12 @@ export const connectCommand = defineCommand({
         "       curviate connect decline <invitation_id>\n" +
         "       curviate connect cancel <invitation_id>\n",
       );
-      return;
+      // <id> is functionally required for the bare form (there is no valid
+      // "connect to nothing" action) — a missing required positional is a
+      // usage error, not a silent success. `required: false` on the citty
+      // arg def above exists only so this richer usage block can run instead
+      // of citty's generic one-liner; it does not make the id optional.
+      process.exit(2);
     }
 
     const cfg = await resolveEffectiveConfig({
