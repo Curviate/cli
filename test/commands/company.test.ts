@@ -217,7 +217,7 @@ describe("company slim mode (no --verbose)", () => {
     website: "https://acme.com",
     establishment_year: 2000,
     locations: [
-      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true },
+      { city: "Austin", country_code: "US", postal_code: "78701", area: "TX", is_headquarter: true },
     ],
     insights: { headcount: 500, headcount_range: { from: 201 } },
     follower_count: 12000,
@@ -263,7 +263,7 @@ describe("company slim mode (no --verbose)", () => {
 
     const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
     const result = JSON.parse(written) as Record<string, unknown>;
-    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701" });
+    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701", area: "TX" });
   });
 });
 

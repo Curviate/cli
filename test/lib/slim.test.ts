@@ -79,15 +79,23 @@ describe("synthesizeCurrentPosition", () => {
 // ---------------------------------------------------------------------------
 
 describe("synthesizeHeadquarters", () => {
-  // Real v2 CompanyProfile `locations[]` item shape (per the SDK's generated
-  // types): { is_headquarter?, country_code?, city?, postal_code? }. There is
-  // no `country` and no `area` key on the real wire.
-  it("finds is_headquarter:true entry and extracts city/country_code/postal_code", () => {
+  // Real v2 CompanyProfile `locations[]` item shape: { is_headquarter?,
+  // country_code?, city?, postal_code?, area?, street? } — `country_code`/
+  // `postal_code`/`area`/`street` all verified live (staging, `company
+  // microsoft --verbose`). `area` (region/state, e.g. "Washington") is real
+  // and frequently populated (~29% of Microsoft's 45 locations, including
+  // its HQ entry) even though the SDK's generated `.d.ts` for this endpoint
+  // doesn't declare it — the type under-documents the wire here; `area` was
+  // already part of the pre-fix v1-shaped output and stays. `street` is also
+  // real on the wire but was never part of the slim output and stays
+  // verbose-only (out of scope for this fix — no prior surface to restore).
+  // There is no `country` key (fictitious v1 name) — `country_code` is real.
+  it("finds is_headquarter:true entry and extracts city/country_code/postal_code/area", () => {
     const result = synthesizeHeadquarters([
-      { city: "Berlin", country_code: "DE", postal_code: "10115", is_headquarter: false },
-      { city: "Munich", country_code: "DE", postal_code: "80333", is_headquarter: true },
+      { city: "Berlin", country_code: "DE", postal_code: "10115", area: "Berlin", is_headquarter: false },
+      { city: "Munich", country_code: "DE", postal_code: "80333", area: "Bavaria", is_headquarter: true },
     ]);
-    expect(result).toEqual({ city: "Munich", country_code: "DE", postal_code: "80333" });
+    expect(result).toEqual({ city: "Munich", country_code: "DE", postal_code: "80333", area: "Bavaria" });
   });
 
   it("no is_headquarter:true entry → null", () => {
@@ -103,26 +111,41 @@ describe("synthesizeHeadquarters", () => {
 
   it("postal_code absent in hq → postal_code null", () => {
     const result = synthesizeHeadquarters([
-      { city: "Austin", country_code: "US", is_headquarter: true },
+      { city: "Austin", country_code: "US", area: "TX", is_headquarter: true },
     ]);
     expect(result!.postal_code).toBeNull();
   });
 
   it("country_code absent in hq → country_code null", () => {
     const result = synthesizeHeadquarters([
-      { city: "Austin", postal_code: "78701", is_headquarter: true },
+      { city: "Austin", postal_code: "78701", area: "TX", is_headquarter: true },
     ]);
     expect(result!.country_code).toBeNull();
   });
 
-  it("does not leak extra keys, and never re-introduces the fictitious v1 country/area keys", () => {
+  it("area absent in hq → area null (area is genuinely optional — most locations lack it)", () => {
     const result = synthesizeHeadquarters([
-      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true, zip: "78701" },
+      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true },
+    ]);
+    expect(result!.area).toBeNull();
+  });
+
+  it("does not leak extra keys (zip, is_headquarter, street), and never re-introduces the fictitious v1 country key", () => {
+    const result = synthesizeHeadquarters([
+      {
+        city: "Austin",
+        country_code: "US",
+        postal_code: "78701",
+        area: "TX",
+        is_headquarter: true,
+        zip: "78701",
+        street: "500 Congress Ave",
+      },
     ]);
     expect(result).not.toHaveProperty("zip");
     expect(result).not.toHaveProperty("is_headquarter");
+    expect(result).not.toHaveProperty("street");
     expect(result).not.toHaveProperty("country");
-    expect(result).not.toHaveProperty("area");
   });
 });
 
@@ -452,7 +475,7 @@ describe("slimCompany", () => {
     establishment_year: 2000,
     follower_count: 12000,
     locations: [
-      { city: "Austin", country_code: "US", postal_code: "78701", is_headquarter: true },
+      { city: "Austin", country_code: "US", postal_code: "78701", area: "TX", is_headquarter: true },
       { city: "New York", country_code: "US", postal_code: "10001", is_headquarter: false },
     ],
     insights: {
@@ -536,9 +559,9 @@ describe("slimCompany", () => {
     expect(result["industry"]).toEqual(["Technology"]);
   });
 
-  it("headquarters synthesized from is_headquarter location (city/country_code/postal_code)", () => {
+  it("headquarters synthesized from is_headquarter location (city/country_code/postal_code/area)", () => {
     const result = slimCompany(fullCompany);
-    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701" });
+    expect(result["headquarters"]).toEqual({ city: "Austin", country_code: "US", postal_code: "78701", area: "TX" });
   });
 
   it("headquarters is null when no is_headquarter location", () => {

@@ -67,16 +67,22 @@ export function synthesizeCurrentPosition(
  * Synthesize a `headquarters` object from the `locations` array.
  *
  * Finds the entry with `is_headquarter: true` and extracts
- * `{city, country_code, postal_code}` — the real v2 CompanyProfile
- * `locations[]` item shape (per the SDK's generated types). There is no
- * `country` and no `area` key on the real wire; `country_code` and
- * `postal_code` are the actual fields (v1-shaped `country`/`area` were
- * fictitious and always projected null).
+ * `{city, country_code, postal_code, area}` — the real v2 CompanyProfile
+ * `locations[]` item shape. `country_code`/`postal_code` are the real fields
+ * (there is no `country` key — that v1-shaped name was fictitious and always
+ * projected null). `area` (region/state, e.g. "Washington") IS real and
+ * frequently populated — verified live against staging (`company microsoft
+ * --verbose`: ~29% of its 45 locations carry `area`, including its own HQ
+ * entry) — even though the SDK's generated `.d.ts` for this endpoint doesn't
+ * declare it; the type under-documents the wire here. `area` was already
+ * part of the pre-fix output, so it stays (only `country`→`country_code`
+ * needed fixing on that front); `street` is also real on the wire but was
+ * never part of this projection and stays verbose-only.
  * Returns null when no headquarters entry is present.
  */
 export function synthesizeHeadquarters(
   locations: unknown[],
-): { city: string | null; country_code: string | null; postal_code: string | null } | null {
+): { city: string | null; country_code: string | null; postal_code: string | null; area: string | null } | null {
   if (!Array.isArray(locations)) return null;
   const hq = locations.find(
     (l) => (l as Record<string, unknown>)["is_headquarter"] === true,
@@ -86,6 +92,7 @@ export function synthesizeHeadquarters(
     city: (hq["city"] as string | null | undefined) ?? null,
     country_code: (hq["country_code"] as string | null | undefined) ?? null,
     postal_code: (hq["postal_code"] as string | null | undefined) ?? null,
+    area: (hq["area"] as string | null | undefined) ?? null,
   };
 }
 
@@ -682,10 +689,11 @@ export function slimJob(data: unknown): Record<string, unknown> {
  * Exact fields returned (11):
  *   id, name, public_identifier, profile_url, industry,
  *   employee_count, employee_count_range, website, establishment_year,
- *   headquarters ({city,country_code,postal_code}|null), follower_count
+ *   headquarters ({city,country_code,postal_code,area}|null), follower_count
  *
  * v1-drift fixes (real v2 CompanyProfile shape — verified against the SDK's
- * generated types, the wire truth):
+ * generated types AND a live staging probe, since the type under-documents
+ * `locations[]`; see synthesizeHeadquarters):
  *   - `employee_count` ← `insights.headcount` (was reading a nonexistent
  *     top-level `employee_count`, always null).
  *   - `employee_count_range` ← `insights.headcount_range`, projected to
