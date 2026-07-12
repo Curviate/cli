@@ -326,10 +326,16 @@ async function buildAuthBody(
       readStdin: ctx.readStdin,
       readSingleLine: ctx.readSingleLine,
       required: true,
-      // The interactive prompt/fail-fast only engages once --email is present
-      // (nothing meaningful to prompt toward yet otherwise) — and never
-      // under --preview (a client-side render must not prompt or exit).
+      // The masked-prompt/fail-fast tiers (3/4) only engage once --email is
+      // present (nothing meaningful to prompt toward yet otherwise) — and
+      // never under --preview (a client-side render must not prompt or
+      // exit).
       allowInteractive: !ctx.previewMode && Boolean(flags.email),
+      // Tier-1b's own gate is preview-only, deliberately NOT email-gated: a
+      // user who passed --password-stdin on a TTY gets the read regardless
+      // of --email — an email-less body still fails downstream validation,
+      // as expected, rather than the flag being silently ignored.
+      allowInteractiveStdinRead: !ctx.previewMode,
       failMessage: "no password — pass --password, --password-stdin, or set CURVIATE_LINKEDIN_PASSWORD",
       prompt: { isTTY: ctx.isTTY, readline: ctx.readline, promptText: "LinkedIn password: " },
       out: ctx.out,
