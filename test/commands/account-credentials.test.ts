@@ -418,6 +418,229 @@ describe("account credentials — ps/shell-history warnings on secret value flag
 });
 
 // ---------------------------------------------------------------------------
+// TTY-mode stdin: single line, no EOF wait, no echo (regression anchor)
+//
+// The bug: on a live terminal, --password-stdin/--li-at-stdin always read
+// to EOF — which a real terminal never sends on Enter (only Ctrl-D) — so
+// the command hung after a paste. It also risked echoing the pasted text.
+// The fix reads one line (paste + Enter resolves immediately) through a
+// masked, no-echo reader whenever stdin is an interactive TTY, leaving the
+// piped/redirected (non-TTY) path and the env-var path untouched.
+// ---------------------------------------------------------------------------
+
+describe("account credentials — TTY-mode stdin (paste + Enter, no EOF wait, no echo)", () => {
+  it("password: --password-stdin on a TTY resolves the typed value; stderr shows the cue, never the secret", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "TTY_PWD");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, json: true } as never,
+      out,
+      { isTTY: true, readSingleLine },
+    );
+    expect(client.auth.intent).toHaveBeenCalledWith(
+      expect.objectContaining({ credentials: { email: "a@b.c", password: "TTY_PWD" } }),
+    );
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+    const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).not.toContain("TTY_PWD");
+    expect(stderrOut).toMatch(/paste/i);
+  });
+
+  it("li_at: --li-at-stdin on a TTY resolves the typed value; stderr shows the cue, never the secret", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "TTY_LIAT");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, json: true } as never,
+      out,
+      { isTTY: true, readSingleLine },
+    );
+    expect(client.auth.intent).toHaveBeenCalledWith(expect.objectContaining({ cookie: { li_at: "TTY_LIAT" } }));
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+    const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).not.toContain("TTY_LIAT");
+    expect(stderrOut).toMatch(/paste/i);
+  });
+
+  it("guard: piped (non-TTY) --password-stdin is unaffected — still reads to EOF, never touches the single-line reader", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, json: true } as never,
+      out,
+      { readStdin: async () => "PIPED_PW\n", readSingleLine }, // isTTY omitted -> defaults non-TTY
+    );
+    expect(client.auth.intent).toHaveBeenCalledWith(
+      expect.objectContaining({ credentials: { email: "a@b.c", password: "PIPED_PW" } }),
+    );
+    expect(readSingleLine).not.toHaveBeenCalled();
+  });
+
+  it("guard: env path is unaffected — no stdin flag passed at all, no TTY reader/prompt/stdin stub consulted", async () => {
+    process.env[ENV_PASSWORD] = "envpw";
+    try {
+      const { runAccountLink } = await import("../../src/commands/account.js");
+      const client = makeClient();
+      (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+      const out = makeOut();
+      const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+      const readline = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+      const readStdin = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+      await runAccountLink(
+        client as never,
+        { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", json: true } as never,
+        out,
+        { isTTY: true, readSingleLine, readline, readStdin },
+      );
+      expect(client.auth.intent).toHaveBeenCalledWith(
+        expect.objectContaining({ credentials: { email: "a@b.c", password: "envpw" } }),
+      );
+      expect(readSingleLine).not.toHaveBeenCalled();
+      expect(readline).not.toHaveBeenCalled();
+      expect(readStdin).not.toHaveBeenCalled();
+    } finally {
+      delete process.env[ENV_PASSWORD];
+    }
+  });
+
+  describe("empty TTY line falls through the full precedence order (env, then prompt/fail-fast) — not a shortcut to the prompt", () => {
+    afterEach(clearSecretEnv);
+
+    it("password: empty line, no env set -> falls to the masked-prompt tier (not straight to fail-fast, not a silently-empty secret)", async () => {
+      const { runAccountLink } = await import("../../src/commands/account.js");
+      const client = makeClient();
+      (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+      const out = makeOut();
+      const readSingleLine = vi.fn(async () => "");
+      const readline = vi.fn(async () => "PROMPTED_AFTER_EMPTY_LINE");
+      await runAccountLink(
+        client as never,
+        { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, json: true } as never,
+        out,
+        { isTTY: true, readSingleLine, readline },
+      );
+      expect(readSingleLine).toHaveBeenCalledTimes(1);
+      expect(readline).toHaveBeenCalledTimes(1);
+      expect(client.auth.intent).toHaveBeenCalledWith(
+        expect.objectContaining({ credentials: { email: "a@b.c", password: "PROMPTED_AFTER_EMPTY_LINE" } }),
+      );
+    });
+
+    it("li_at: empty line, no env set -> exits 2 immediately (no prompt tier for li_at)", async () => {
+      const { runAccountLink } = await import("../../src/commands/account.js");
+      const client = makeClient();
+      const out = makeOut();
+      const readSingleLine = vi.fn(async () => "");
+      const exitSpy = mockExit();
+      try {
+        await expect(
+          runAccountLink(
+            client as never,
+            { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, json: true } as never,
+            out,
+            { isTTY: true, readSingleLine },
+          ),
+        ).rejects.toThrow("process.exit(2)");
+      } finally {
+        exitSpy.mockRestore();
+      }
+      expect(client.auth.intent).not.toHaveBeenCalled();
+      expect(readSingleLine).toHaveBeenCalledTimes(1);
+      const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
+      expect(stderrOut).toContain("li_at");
+    });
+
+    it("password: empty line, WITH env set -> resolves from env (tier 2); the masked prompt is never consulted", async () => {
+      process.env[ENV_PASSWORD] = "envpw";
+      const { runAccountLink } = await import("../../src/commands/account.js");
+      const client = makeClient();
+      (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+      const out = makeOut();
+      const readSingleLine = vi.fn(async () => "");
+      const readline = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+      await runAccountLink(
+        client as never,
+        { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, json: true } as never,
+        out,
+        { isTTY: true, readSingleLine, readline },
+      );
+      expect(client.auth.intent).toHaveBeenCalledWith(
+        expect.objectContaining({ credentials: { email: "a@b.c", password: "envpw" } }),
+      );
+      expect(readSingleLine).toHaveBeenCalledTimes(1);
+      expect(readline).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --preview suppresses the TTY-mode stdin read entirely — no cue, no block,
+// no reader call. The piped (non-TTY) --preview path is unaffected.
+// ---------------------------------------------------------------------------
+
+describe("account credentials — --preview suppresses the TTY-mode stdin read entirely", () => {
+  it("password: --preview + --password-stdin on a TTY never calls the reader, never writes a cue, renders masked", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, preview: true } as never,
+      out,
+      { isTTY: true, readSingleLine },
+    );
+    expect(readSingleLine).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
+    expect(out.stderr.write).not.toHaveBeenCalled();
+    const written = out.stdout.write.mock.calls.map((c) => c[0] as string).join("");
+    expect(written).not.toContain("SHOULD_NOT_BE_CALLED");
+  });
+
+  it("cookie: --preview + --li-at-stdin on a TTY never calls the reader, never blocks", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "cookie", "user-agent": "UA", "li-at-stdin": true, preview: true } as never,
+      out,
+      { isTTY: true, readSingleLine },
+    );
+    expect(readSingleLine).not.toHaveBeenCalled();
+    expect(client.auth.intent).not.toHaveBeenCalled();
+    expect(out.stderr.write).not.toHaveBeenCalled();
+  });
+
+  it("guard: --preview + piped (non-TTY) --password-stdin is unaffected — still reads to EOF and masks the result", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    const out = makeOut();
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "credentials", email: "a@b.c", "password-stdin": true, preview: true } as never,
+      out,
+      { isTTY: false, readStdin: async () => "PIPED_PREVIEW_PW\n" },
+    );
+    const written = out.stdout.write.mock.calls.map((c) => c[0] as string).join("");
+    expect(written).toContain("••••");
+    expect(written).not.toContain("PIPED_PREVIEW_PW");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // sentinel never leaks; --preview masks per-secret; masking
 // runs on a copy (a later non-preview call still sends the real secret).
 // ---------------------------------------------------------------------------
