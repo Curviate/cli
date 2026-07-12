@@ -40,9 +40,15 @@ export const STDIN_TTY_CUE = "Reading secret from stdin (paste + Enter): ";
  * `defaultReadStdin`'s role for `readStdin`. Always masked: the raw-mode
  * branch of `readlineSync` is the only mechanism here that suppresses echo
  * (the non-mask fallback does not), so this must never drop `{ mask: true }`.
+ *
+ * Passes an EMPTY prompt to `readlineSync`, not the cue: the caller (below)
+ * already wrote `STDIN_TTY_CUE` to `out.stderr` before invoking this reader.
+ * `readlineSync` itself writes its `prompt` argument to stderr too, so
+ * passing the cue text through here would print it a second time on a real
+ * terminal — the injected `out.stderr` write is the single visible cue.
  */
-function defaultReadSingleLine(cue: string): Promise<string> {
-  return readlineSync(cue, { mask: true });
+function defaultReadSingleLine(): Promise<string> {
+  return readlineSync("", { mask: true });
 }
 
 export interface ResolveSecretPrompt {

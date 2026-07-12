@@ -427,7 +427,11 @@ function resolveCredentialIO(io: CredentialIO): {
     readStdin: io.readStdin ?? defaultReadStdin,
     // Always the masked, no-echo raw-mode branch — never a bare readlineSync
     // pass-through, which would default mask to false and echo the secret.
-    readSingleLine: io.readSingleLine ?? ((cue: string) => readlineSync(cue, { mask: true })),
+    // Prompt is deliberately EMPTY, not `cue`: credential-resolve.ts already
+    // wrote STDIN_TTY_CUE to out.stderr before calling this reader, and
+    // readlineSync itself writes its `prompt` argument to stderr too — the
+    // cue text would otherwise print twice on a real terminal.
+    readSingleLine: io.readSingleLine ?? (() => readlineSync("", { mask: true })),
     sleep: io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
     now: io.now ?? (() => Date.now()),
     open: io.open ?? defaultOpen,
