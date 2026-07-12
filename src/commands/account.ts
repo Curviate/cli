@@ -266,6 +266,14 @@ export interface CredentialIO {
   readline?: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
   /** Injectable stdin reader for --password-stdin/--li-at-stdin. Defaults to lib/stdin.ts's defaultReadStdin. */
   readStdin?: () => Promise<string>;
+  /**
+   * Injectable single-line reader for an interactive-TTY --password-stdin/
+   * --li-at-stdin read (a live terminal never sends EOF on Enter, so that
+   * case must read one line, not to EOF). Defaults to
+   * lib/readline.ts's readlineSync in its masked, no-echo raw-mode branch —
+   * never the non-mask fallback, which does not suppress echo.
+   */
+  readSingleLine?: (cue: string) => Promise<string>;
   /** Injectable sleep for the interactive mobile-app-approval poll sub-loop. Defaults to a real setTimeout. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the poll sub-loop's elapsed-time/timeout arithmetic. Defaults to Date.now. */
@@ -293,7 +301,14 @@ export interface CredentialIO {
  */
 async function buildAuthBody(
   flags: AccountFlags,
-  ctx: { out: OutputStreams; isTTY: boolean; readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>; readStdin: () => Promise<string>; previewMode: boolean },
+  ctx: {
+    out: OutputStreams;
+    isTTY: boolean;
+    readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
+    readStdin: () => Promise<string>;
+    readSingleLine: (cue: string) => Promise<string>;
+    previewMode: boolean;
+  },
 ): Promise<Record<string, unknown>> {
   const body: Record<string, unknown> = {};
 
@@ -307,7 +322,9 @@ async function buildAuthBody(
       flagValue: flags.password,
       stdinRequested: flags["password-stdin"],
       envVar: "CURVIATE_LINKEDIN_PASSWORD",
+      isTTY: ctx.isTTY,
       readStdin: ctx.readStdin,
+      readSingleLine: ctx.readSingleLine,
       required: true,
       // The interactive prompt/fail-fast only engages once --email is present
       // (nothing meaningful to prompt toward yet otherwise) — and never
@@ -332,7 +349,9 @@ async function buildAuthBody(
       flagValue: flags["li-at"],
       stdinRequested: flags["li-at-stdin"],
       envVar: "CURVIATE_LINKEDIN_LI_AT",
+      isTTY: ctx.isTTY,
       readStdin: ctx.readStdin,
+      readSingleLine: ctx.readSingleLine,
       required: true,
       allowInteractive: !ctx.previewMode,
       failMessage: "no li_at — pass --li-at, --li-at-stdin, or set CURVIATE_LINKEDIN_LI_AT",
@@ -390,6 +409,7 @@ function resolveCredentialIO(io: CredentialIO): {
   isOutputTTY: boolean;
   readline: (prompt: string, opts?: { mask?: boolean }) => Promise<string>;
   readStdin: () => Promise<string>;
+  readSingleLine: (cue: string) => Promise<string>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   open: (url: string) => Promise<unknown>;
@@ -399,6 +419,9 @@ function resolveCredentialIO(io: CredentialIO): {
     isOutputTTY: io.isOutputTTY ?? (process.stdout.isTTY ?? false),
     readline: io.readline ?? readlineSync,
     readStdin: io.readStdin ?? defaultReadStdin,
+    // Always the masked, no-echo raw-mode branch — never a bare readlineSync
+    // pass-through, which would default mask to false and echo the secret.
+    readSingleLine: io.readSingleLine ?? ((cue: string) => readlineSync(cue, { mask: true })),
     sleep: io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))),
     now: io.now ?? (() => Date.now()),
     open: io.open ?? defaultOpen,
@@ -641,6 +664,7 @@ export async function runAccountLink(
     isTTY: resolvedIo.isTTY,
     readline: resolvedIo.readline,
     readStdin: resolvedIo.readStdin,
+    readSingleLine: resolvedIo.readSingleLine,
     previewMode: flags.preview ?? false,
   });
 

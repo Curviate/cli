@@ -20,9 +20,29 @@
  */
 
 import { defaultReadStdin } from "./stdin.js";
+import { readlineSync } from "./readline.js";
 
 export interface OutStreams {
   stderr: { write: (s: string) => void };
+}
+
+/**
+ * Cue written to stderr before a tier-1b interactive-TTY stdin read — the
+ * terminal never sends EOF on Enter, so a live-terminal `--*-stdin` read
+ * takes exactly one line instead of waiting to EOF; this line tells the
+ * human what's happening. Exported so callers/tests can assert on it without
+ * duplicating the literal string.
+ */
+export const STDIN_TTY_CUE = "Reading secret from stdin (paste + Enter): ";
+
+/**
+ * Library-internal default for the single-line-reader seam — mirrors
+ * `defaultReadStdin`'s role for `readStdin`. Always masked: the raw-mode
+ * branch of `readlineSync` is the only mechanism here that suppresses echo
+ * (the non-mask fallback does not), so this must never drop `{ mask: true }`.
+ */
+function defaultReadSingleLine(cue: string): Promise<string> {
+  return readlineSync(cue, { mask: true });
 }
 
 export interface ResolveSecretPrompt {
@@ -40,8 +60,27 @@ export interface ResolveSecretParams {
   stdinRequested?: boolean;
   /** Env var name checked at tier 2. */
   envVar: string;
+  /**
+   * `stdin.isTTY` — top-level (not nested in `prompt`), injectable so tests
+   * never touch the real terminal. Gates the tier-1b `stdinRequested`
+   * branch: TTY reads a single line via `readSingleLine`; non-TTY reads to
+   * EOF via `readStdin`, unchanged. Deliberately separate from
+   * `prompt.isTTY` (tier 3's masked-fallback gate, password-only) — the two
+   * are gated by different questions (whether a stdin flag was passed, vs.
+   * whether nothing at all was given) and must not be conflated. Default
+   * false when omitted.
+   */
+  isTTY?: boolean;
   /** Injectable stdin reader (production: `lib/stdin.ts`'s `defaultReadStdin`). */
   readStdin?: () => Promise<string>;
+  /**
+   * Injectable single-line reader for the tier-1b interactive-TTY stdin
+   * read (production: `lib/readline.ts`'s `readlineSync(cue, {mask:true})`
+   * — the raw-mode, no-echo branch). A dedicated seam, never a reuse of
+   * `readStdin` (a fundamentally different read shape — one line vs. to
+   * EOF) or `prompt.readline` (a different gate, tier 3 vs. tier 1b).
+   */
+  readSingleLine?: (cue: string) => Promise<string>;
   /** Whether this secret must resolve to something (password, li_at) or may be omitted (li_a, proxy password). Default false. */
   required?: boolean;
   /** Error message written to stderr before exiting 2 when a required secret has no source. */
@@ -73,15 +112,42 @@ export async function resolveSecret(params: ResolveSecretParams): Promise<string
 
   // Tier 1b: stdin (mutually exclusive with the value flag — conflicts are
   // rejected upstream by checkCredentialConflicts before resolution starts).
+  //
+  // Mode-aware: a live terminal never sends EOF on Enter, so a naive
+  // to-EOF read hangs forever on a TTY. Non-TTY (piped/redirected) keeps the
+  // original to-EOF read, byte-for-byte. An interactive TTY instead reads a
+  // single line (paste + Enter resolves immediately) through the dedicated
+  // single-line-reader seam — never through `readStdin`, which would still
+  // hang on a live terminal past EOF.
   if (params.stdinRequested) {
-    const reader = params.readStdin ?? defaultReadStdin;
-    const raw = await reader();
-    const trimmed = raw.trim();
-    if (trimmed !== "") {
-      return trimmed;
+    if (params.isTTY) {
+      // Suppressed entirely under --preview (allowInteractive === false): no
+      // cue, no block, no reader call — a client-side render must never
+      // prompt or read from the terminal. Falls through to the next tier
+      // exactly as if nothing had been typed.
+      if (params.allowInteractive !== false) {
+        params.out.stderr.write(STDIN_TTY_CUE);
+        const reader = params.readSingleLine ?? defaultReadSingleLine;
+        const raw = await reader(STDIN_TTY_CUE);
+        // The raw-mode reader resolves un-trimmed — trimming is this
+        // resolver's job (matches the non-TTY EOF tier's own trim).
+        const trimmed = raw.trim();
+        if (trimmed !== "") {
+          return trimmed;
+        }
+        // An empty line (bare Enter) falls through to the next tier, same
+        // as an explicitly empty flag/env value.
+      }
+    } else {
+      const reader = params.readStdin ?? defaultReadStdin;
+      const raw = await reader();
+      const trimmed = raw.trim();
+      if (trimmed !== "") {
+        return trimmed;
+      }
+      // An explicitly requested-but-empty stdin read falls through, same as
+      // an explicitly empty flag/env value — never silently send "".
     }
-    // An explicitly requested-but-empty stdin read falls through, same as
-    // an explicitly empty flag/env value — never silently send "".
   }
 
   // Tier 2: environment variable (non-empty).
