@@ -210,6 +210,65 @@ describe("resolveSecret — required: masked prompt + non-TTY fail-fast", () => 
     expect(readline).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // allowInteractiveStdinRead — tier-1b's own gate, decoupled from
+  // allowInteractive (which continues to gate tiers 3/4 only).
+  // -------------------------------------------------------------------------
+
+  it("allowInteractiveStdinRead=true still consults the TTY stdin reader even when allowInteractive=false (e.g. credentials with no --email yet)", async () => {
+    const readSingleLine = vi.fn(async () => "STDIN_VALUE");
+    const readline = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    const value = await resolveSecret({
+      stdinRequested: true,
+      isTTY: true,
+      envVar: ENV,
+      readSingleLine,
+      required: true,
+      // Tier 3/4 suppressed (mirrors "credentials, no --email yet")...
+      allowInteractive: false,
+      // ...but tier-1b's own gate is independently true.
+      allowInteractiveStdinRead: true,
+      failMessage: "no secret",
+      prompt: { isTTY: true, readline, promptText: "Enter: " },
+      out: makeOut(),
+    });
+    expect(value).toBe("STDIN_VALUE");
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+    expect(readline).not.toHaveBeenCalled();
+  });
+
+  it("allowInteractiveStdinRead=false suppresses the TTY stdin reader even when allowInteractive=true (--preview)", async () => {
+    const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    const value = await resolveSecret({
+      stdinRequested: true,
+      isTTY: true,
+      envVar: ENV,
+      readSingleLine,
+      required: false,
+      allowInteractive: true,
+      allowInteractiveStdinRead: false,
+      out: makeOut(),
+    });
+    expect(value).toBeUndefined();
+    expect(readSingleLine).not.toHaveBeenCalled();
+  });
+
+  it("allowInteractiveStdinRead omitted defaults to allowInteractive (no divergence for callers that don't need it, e.g. li_at)", async () => {
+    const readSingleLine = vi.fn(async () => "SHOULD_NOT_BE_CALLED");
+    const value = await resolveSecret({
+      stdinRequested: true,
+      isTTY: true,
+      envVar: ENV,
+      readSingleLine,
+      required: false,
+      allowInteractive: false,
+      // allowInteractiveStdinRead intentionally omitted.
+      out: makeOut(),
+    });
+    expect(value).toBeUndefined();
+    expect(readSingleLine).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

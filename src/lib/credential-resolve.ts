@@ -93,8 +93,26 @@ export interface ResolveSecretParams {
    * back instead. Used for `--preview` (a client-side render must never
    * prompt or exit) and for a `credentials` call still missing `--email`
    * (nothing meaningful to prompt toward yet). Default true.
+   *
+   * Also the tier-1b default gate (see `allowInteractiveStdinRead` below)
+   * when that field is omitted — most callers (li_at, cookie secrets) have
+   * no reason for the two gates to diverge.
    */
   allowInteractive?: boolean;
+  /**
+   * Tier-1b's OWN gate for the interactive-TTY `stdinRequested` read —
+   * preview-only, deliberately decoupled from `allowInteractive`. The
+   * `credentials` password call gates tier 3 (masked prompt) and tier 4
+   * (fail-fast) on `!preview && Boolean(email)` — nothing meaningful to
+   * prompt/fail toward without an email yet — but tier-1b must still fire on
+   * `--password-stdin` whenever the run isn't a preview, `--email` or not:
+   * the user explicitly asked for a stdin read, and suppressing it based on
+   * an unrelated flag would silently swallow a real paste (any resulting
+   * email-less body still gets rejected downstream, as expected). Defaults
+   * to `allowInteractive` when omitted, so callers with no such divergence
+   * (li_at) need not pass it.
+   */
+  allowInteractiveStdinRead?: boolean;
   out: OutStreams;
 }
 
@@ -121,11 +139,16 @@ export async function resolveSecret(params: ResolveSecretParams): Promise<string
   // hang on a live terminal past EOF.
   if (params.stdinRequested) {
     if (params.isTTY) {
-      // Suppressed entirely under --preview (allowInteractive === false): no
-      // cue, no block, no reader call — a client-side render must never
-      // prompt or read from the terminal. Falls through to the next tier
-      // exactly as if nothing had been typed.
-      if (params.allowInteractive !== false) {
+      // Suppressed entirely under --preview (allowInteractiveStdinRead ===
+      // false, defaulting to allowInteractive): no cue, no block, no reader
+      // call — a client-side render must never prompt or read from the
+      // terminal. Falls through to the next tier exactly as if nothing had
+      // been typed. Preview-only — deliberately NOT the same gate as tier 3
+      // (see `allowInteractiveStdinRead`'s doc comment): an explicit
+      // --*-stdin read must still fire even when tier 3/4 are suppressed for
+      // an unrelated reason (e.g. `credentials` with no --email yet).
+      const stdinReadAllowed = params.allowInteractiveStdinRead ?? params.allowInteractive;
+      if (stdinReadAllowed !== false) {
         params.out.stderr.write(STDIN_TTY_CUE);
         const reader = params.readSingleLine ?? defaultReadSingleLine;
         const raw = await reader(STDIN_TTY_CUE);

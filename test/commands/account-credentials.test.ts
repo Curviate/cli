@@ -585,6 +585,41 @@ describe("account credentials — TTY-mode stdin (paste + Enter, no EOF wait, no
 });
 
 // ---------------------------------------------------------------------------
+// Tier-1b's gate is preview-only, decoupled from tier 3/4's email-inclusive
+// gate (qa corner B). --password-stdin on a TTY with no --email and no
+// --preview must still consult the reader — the email gate only applies to
+// the masked-prompt (tier 3) and fail-fast (tier 4) tiers, never to an
+// explicit --*-stdin read the user asked for.
+// ---------------------------------------------------------------------------
+
+describe("account credentials — tier-1b TTY stdin read is gated by preview only, not --email", () => {
+  it("password: --password-stdin on a TTY with NO --email, not preview -> the reader IS consulted (cue written, stub called)", async () => {
+    const { runAccountLink } = await import("../../src/commands/account.js");
+    const client = makeClient();
+    (client.auth.intent as Mock).mockResolvedValue({ object: "account" });
+    const out = makeOut();
+    const readSingleLine = vi.fn(async () => "TTY_PWD_NO_EMAIL");
+    await runAccountLink(
+      client as never,
+      { "seat-id": "seat_1", "auth-method": "credentials", "password-stdin": true, json: true } as never,
+      out,
+      { isTTY: true, readSingleLine },
+    );
+    // The reader was consulted despite no --email — tier-1b is gated by
+    // preview only.
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+    const stderrOut = out.stderr.write.mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrOut).toMatch(/paste/i);
+    // The resolved password still reaches the body — downstream/server-side
+    // validation is what would reject an email-less credentials body, not
+    // this resolver silently dropping the read.
+    expect(client.auth.intent).toHaveBeenCalledWith(
+      expect.objectContaining({ credentials: { password: "TTY_PWD_NO_EMAIL" } }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // --preview suppresses the TTY-mode stdin read entirely — no cue, no block,
 // no reader call. The piped (non-TTY) --preview path is unaffected.
 // ---------------------------------------------------------------------------
