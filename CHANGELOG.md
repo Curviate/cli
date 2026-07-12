@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.15.2] - 2026-07-12
+
+A patch release fixing an interactive-terminal hang on `account link`.
+
+### Fixed
+
+- **`account link --password-stdin` / `--li-at-stdin` no longer hang on an
+  interactive terminal.** These flags previously read stdin to EOF, which a
+  human paste + Enter never produces on a TTY — the command hung
+  indefinitely and the pasted secret echoed on-screen. The read is now
+  mode-aware: piped/redirected stdin (non-TTY) is unchanged (read to EOF,
+  trimmed); an interactive TTY now prints a single cue line, then reads one
+  no-echo line — paste + Enter resolves immediately, including a paste whose
+  clipboard content ends in a trailing newline. An empty line still falls
+  through to the normal resolution order (env var, then the password
+  prompt / `li_at` fail-fast).
+- **`--preview` never blocks on a terminal read.** Under `--preview`, the
+  interactive stdin read is suppressed entirely, matching every other
+  preview-mode command.
+
 ## [0.15.1] - 2026-07-11
 
 A patch release of agent-experience (AX) and developer-experience (DX)
