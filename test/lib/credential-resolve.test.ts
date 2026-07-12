@@ -213,6 +213,84 @@ describe("resolveSecret — required: masked prompt + non-TTY fail-fast", () => 
 });
 
 // ---------------------------------------------------------------------------
+// resolveSecret — TTY-mode stdin: single line, no EOF wait (regression anchor)
+//
+// The hang this guards against: on a live terminal, `--password-stdin` used
+// to always await the injected `readStdin` to EOF — but a real terminal
+// never sends EOF on Enter (only on Ctrl-D), so the read never returned. The
+// fix routes an interactive-TTY stdin read through a DEDICATED single-line
+// reader seam instead, which resolves on the first line.
+//
+// Modeled honestly against the actual seam shape: `readStdin` is a plain
+// `() => Promise<string>` with no stream/events to fire — so the hang is
+// modeled as a promise that never settles, not a fake stream. Both cases
+// race the resolveSecret() call against a short timer and assert the
+// resolution wins — i.e. the call must settle well inside the bound instead
+// of hanging on the never-resolving `readStdin`.
+// ---------------------------------------------------------------------------
+
+/** Race a promise against a short timer; reports which one settled first. */
+function raceAgainstTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<{ settled: true; value: T } | { settled: false }> {
+  return Promise.race([
+    promise.then((value) => ({ settled: true as const, value })),
+    new Promise<{ settled: false }>((resolve) => setTimeout(() => resolve({ settled: false }), ms)),
+  ]);
+}
+
+describe("resolveSecret — TTY-mode stdin (single line, no EOF wait)", () => {
+  const ENV = "CURVIATE_TEST_SECRET_TTY_STDIN";
+  afterEach(() => {
+    delete process.env[ENV];
+  });
+
+  it("password: on an interactive TTY the call resolves via the single-line reader well inside a short bound, never waiting on the EOF reader", async () => {
+    const readSingleLine = vi.fn(async () => "TTY_PWD");
+    const outcome = await raceAgainstTimeout(
+      resolveSecret({
+        stdinRequested: true,
+        envVar: ENV,
+        isTTY: true,
+        readSingleLine,
+        // Models the live-terminal EOF hang honestly: a promise that never
+        // settles, against the real `readStdin` seam shape (no stream to
+        // emit events on).
+        readStdin: () => new Promise(() => {}),
+        required: true,
+        failMessage: "no secret",
+        out: makeOut(),
+      }),
+      200,
+    );
+    expect(outcome).toEqual({ settled: true, value: "TTY_PWD" });
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+  });
+
+  it("li_at: same TTY behavior with NO prompt config supplied at all — the top-level TTY signal alone routes to the single-line reader, independent of the password-only masked-prompt fallback", async () => {
+    const readSingleLine = vi.fn(async () => "TTY_LIAT");
+    const outcome = await raceAgainstTimeout(
+      resolveSecret({
+        stdinRequested: true,
+        envVar: ENV,
+        isTTY: true,
+        readSingleLine,
+        readStdin: () => new Promise(() => {}),
+        required: true,
+        failMessage: "no li_at",
+        out: makeOut(),
+        // Deliberately no `prompt` — li_at never gets a masked-fallback
+        // prompt tier, by design.
+      }),
+      200,
+    );
+    expect(outcome).toEqual({ settled: true, value: "TTY_LIAT" });
+    expect(readSingleLine).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // checkCredentialConflicts — the 5-way conflict matrix
 // ---------------------------------------------------------------------------
 
