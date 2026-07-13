@@ -10,6 +10,12 @@
 //   - Internal codenames/paths: redarc, rdc_ (not rdc_live_), @curviate/shared, apps/server
 //   - Substrate vendor name (assembled from fragments to avoid the literal appearing here)
 //
+// Scans both extensioned source files (see SCAN_EXTS) and a fixed allowlist
+// of extensionless dotfiles (see SCAN_DOTFILES, e.g. .gitignore) — the latter
+// exist because Node's path.extname() reports no extension for them
+// (extname(".gitignore") === ""), so the extension-based filter alone would
+// silently skip a leak sitting in a comment inside one of these files.
+//
 // Exits 0 when clean, non-zero and prints every offending line when not.
 // Wire this as `pnpm check:clean` and invoke it from the prepack / verify:dist flow.
 //
@@ -53,6 +59,10 @@ const SKIP_DIRS = new Set(["node_modules", "dist"]);
 
 // File extensions to scan.
 const SCAN_EXTS = new Set([".ts", ".mjs", ".js", ".md", ".json"]);
+
+// Extensionless dotfiles to scan explicitly, matched by exact basename
+// (SCAN_EXTS can't catch these — see the module header comment).
+const SCAN_DOTFILES = new Set([".gitignore", ".npmrc", ".nvmrc", ".env.example", ".editorconfig"]);
 
 // The vendor name assembled from parts so the literal never appears in this file.
 const vendorName = ["uni", "pi", "le"].join("");
@@ -121,7 +131,10 @@ async function collectFiles(dir) {
       // Skip directories in the exclusion set (check both the name and relative path).
       if (SKIP_DIRS.has(entry.name) || SKIP_DIRS.has(rel)) continue;
       results.push(...(await collectFiles(abs)));
-    } else if (entry.isFile() && SCAN_EXTS.has(extname(entry.name))) {
+    } else if (
+      entry.isFile() &&
+      (SCAN_EXTS.has(extname(entry.name)) || SCAN_DOTFILES.has(entry.name))
+    ) {
       results.push(abs);
     }
   }
