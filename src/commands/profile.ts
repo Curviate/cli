@@ -32,7 +32,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, WRITE_SINGLE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveMemberProviderId, resolveMemberOrMeProviderId } from "../lib/member-id.js";
 import { parseSectionsFlag } from "../lib/sections.js";
@@ -793,6 +793,119 @@ export async function runProfileFollowing(
   }
 }
 
+/**
+ * Run `profile subscription` — profile.subscription (scalar read).
+ * A self-read of the connected account's own premium subscription: no target
+ * param, never touches a third party. A free account (has_premium:false,
+ * plan_title:null, empty subscriptions) is a valid result, not an error.
+ */
+export async function runProfileSubscription(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  rejectAllOnNonPaginated(flags.all, out);
+  const accountId = requireAccount(flags.account, out);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await client.account(accountId).profile.subscription();
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `profile analytics` — profile.analytics (scalar read).
+ * The connected account's own headline metrics over LinkedIn's fixed windows
+ * (viewers 90d, impressions 7d, search last completed week, followers running
+ * total). A `count` of 0 is a real zero; a per-metric null means that card was
+ * unavailable.
+ */
+export async function runProfileAnalytics(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  rejectAllOnNonPaginated(flags.all, out);
+  const accountId = requireAccount(flags.account, out);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await client.account(accountId).profile.analytics();
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `profile ssi` — profile.ssi (scalar read).
+ * The connected account's own Social Selling Index: overall score, the four
+ * pillars, and industry/network percentile ranks. A low score on a
+ * low-activity account is a normal result; a zero-activity account returns all
+ * scalars null with active_seat false.
+ */
+export async function runProfileSsi(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  rejectAllOnNonPaginated(flags.all, out);
+  const accountId = requireAccount(flags.account, out);
+  const outOpts = resolveOutputOpts(flags);
+  try {
+    const result = await client.account(accountId).profile.ssi();
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `profile visitors [--limit] [--cursor] [--all]` — profile.visitors
+ * (paginated read). Lists people who recently viewed the connected account's
+ * own profile, classified by disclosure fidelity (identified / semi-anonymous
+ * / aggregate). Page with the returned cursor: a non-null cursor means more
+ * may exist even if a page held zero identified individuals; walk until cursor
+ * is null.
+ */
+export async function runProfileVisitors(
+  client: Curviate,
+  flags: SubFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+  const params: ListQuery = {};
+  if (flags.limit) params.limit = parseInt(flags.limit, 10);
+  if (flags.cursor) params.cursor = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: ListQuery) => ns.profile.visitors(p);
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.profile.visitors(params);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -983,6 +1096,60 @@ const profileFollowingCommand = defineCommand({
   },
 });
 
+const profileSubscriptionCommand = defineCommand({
+  meta: {
+    name: "subscription",
+    description:
+      "Read your connected account's own premium subscription — entitlements, primary plan title, and management links. " +
+      "A free account is a valid result (has_premium:false, plan_title:null, no subscriptions), not an error. Read-only self-action; notifies no one.",
+  },
+  args: { ...READ_SINGLE_FLAGS },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileSubscription);
+  },
+});
+
+const profileAnalyticsCommand = defineCommand({
+  meta: {
+    name: "analytics",
+    description:
+      "Read your connected account's own performance headline metrics — profile viewers, followers, post impressions, and search appearances. " +
+      "Each metric is a headline scalar over a fixed LinkedIn window (viewers 90d, impressions 7d, search last completed week, followers running total); there is no window selector. " +
+      "A count of 0 is a real zero; a per-metric null means that card was unavailable. Read-only self-action.",
+  },
+  args: { ...READ_SINGLE_FLAGS },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileAnalytics);
+  },
+});
+
+const profileVisitorsCommand = defineCommand({
+  meta: {
+    name: "visitors",
+    description:
+      "List people who recently viewed your connected account's own profile, cursor-paginated, each classified by disclosure fidelity (identified | semi-anonymous | aggregate). " +
+      "A Premium account sees identified viewers; a free account is capped at a lower fidelity (still a success, never a permission error). " +
+      "Walk the cursor: a non-null cursor means more may exist even if a page held zero identified individuals; page until cursor is null. Use --all to stream every page as NDJSON. Read-only self-action.",
+  },
+  args: { ...GLOBAL_FLAGS },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileVisitors);
+  },
+});
+
+const profileSsiCommand = defineCommand({
+  meta: {
+    name: "ssi",
+    description:
+      "Read your connected account's own Social Selling Index — the overall score, its four pillar breakdowns, and industry/network percentile ranks. " +
+      "A low score on a low-activity account is a normal result; a zero-activity account returns all scalars null with active_seat false. Scores keep full float precision. Read-only self-action.",
+  },
+  args: { ...READ_SINGLE_FLAGS },
+  async run({ args }) {
+    await withClient(args as SubFlags, runProfileSsi);
+  },
+});
+
 export const profileCommand = defineCommand({
   meta: { name: "profile", description: "LinkedIn profile operations." },
   args: {
@@ -1011,6 +1178,10 @@ export const profileCommand = defineCommand({
     unfollow: profileUnfollowCommand,
     followers: profileFollowersCommand,
     following: profileFollowingCommand,
+    subscription: profileSubscriptionCommand,
+    analytics: profileAnalyticsCommand,
+    visitors: profileVisitorsCommand,
+    ssi: profileSsiCommand,
   },
   async run({ args }) {
     const flags = args as ProfileFlags;
@@ -1024,7 +1195,8 @@ export const profileCommand = defineCommand({
         "       curviate profile followers <id> | following <id>\n" +
         "       curviate profile follow <id> | unfollow <id>\n" +
         "       curviate profile update [--headline|--bio|--first-name|--last-name|--skills|--picture]\n" +
-        "       curviate profile endorse <id> --endorsement-id <id>\n",
+        "       curviate profile endorse <id> --endorsement-id <id>\n" +
+        "       curviate profile subscription | analytics | ssi | visitors   (your own account's insights)\n",
       );
       // <id> is functionally required for the bare form — a missing required
       // positional is a usage error (exit 2), not a silent success.

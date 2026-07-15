@@ -39,6 +39,12 @@ const main = defineCommand({
     // ---------------------------------------------------------------------------
     profile: () =>
       import("./commands/profile.js").then((m) => m.profileCommand),
+    groups: () =>
+      import("./commands/groups.js").then((m) => m.groupsCommand),
+    feed: () =>
+      import("./commands/feed.js").then((m) => m.feedCommand),
+    notifications: () =>
+      import("./commands/notifications.js").then((m) => m.notificationsCommand),
     company: () =>
       import("./commands/company.js").then((m) => m.companyCommand),
     job: () =>
