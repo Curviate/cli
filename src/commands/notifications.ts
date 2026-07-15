@@ -8,11 +8,18 @@
  *
  * Both writes are self-actions — they act only on the account's OWN cards and
  * never notify or touch a third party. Both are idempotent and effective within
- * a few seconds: deleting (or show-lessing) a card that is already gone succeeds,
- * not an error; only a card_urn that never existed on this account 404s. A
- * `list` re-read immediately after a write may still show the card for a moment
- * — that is not a failure signal. Following the destructive-write convention
- * (see `job close`): --preview renders the request, and there is no confirmation
+ * a few seconds for an ORGANIC card (network-activity — a repost/comment/
+ * reaction by your network): deleting (or show-lessing) a card that is already
+ * gone succeeds, not an error; only a card_urn that never existed on this
+ * account 404s. A `list` re-read immediately after a write may still show the
+ * card for a moment — that is not a failure signal. `delete` on an
+ * editorial/promotional card is honest about its limits: LinkedIn most likely
+ * re-injects those cards, so a 200 is a correct accepted-request response, not
+ * a guarantee the card stays gone — `show-less` is the reliable way to
+ * suppress promo content (live-verified: an editorial card's delete was
+ * accepted but the card persisted 15+ minutes, while show-less on the same
+ * mutation path removed it). Following the destructive-write convention (see
+ * `job close`): --preview renders the request, and there is no confirmation
  * prompt (the idempotent, reversible-in-spirit semantics make one redundant).
  *
  * Both writes take the card's ENTITY urn (`urn:li:fsd_notificationCard:(…)`, the
@@ -262,7 +269,8 @@ const notificationsDeleteCommand = defineCommand({
     name: "delete",
     description:
       "Delete one of your connected account's own notification cards by its card urn — a self-action, notifies no one, cannot be undone. " +
-      "Safe to retry: idempotent (deleting an already-gone card succeeds); only a card_urn that never existed 404s. Effective within a few seconds; a list re-read immediately after may still show the card briefly. " +
+      "Safe to retry: idempotent (deleting an already-gone card succeeds); only a card_urn that never existed 404s. Effective within a few seconds for an ORGANIC card (network-activity — a repost/comment/reaction by your network); a list re-read immediately after may still show the card briefly. " +
+      "CAVEAT: LinkedIn may re-inject an editorial/promotional card, so its deletion may not stick even though the request itself succeeds — use `show-less` instead to suppress promo content. " +
       "Pass the card_urn (urn:li:fsd_notificationCard:(…)) from a `notifications list` item — NOT object_urn. Use --preview to render the request without sending.",
   },
   args: {

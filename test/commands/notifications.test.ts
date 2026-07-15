@@ -111,6 +111,38 @@ describe("notifications delete", () => {
   });
 });
 
+describe("notifications delete — --help text honesty (WP6 must-fix 2)", () => {
+  it("keeps the effective-within-seconds statement for organic cards", async () => {
+    const { notificationsCommand } = await import("../../src/commands/notifications.js");
+    const desc = (notificationsCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["delete"]!.meta.description;
+    expect(desc).toMatch(/effective within a few seconds/i);
+  });
+
+  it("adds the honest caveat that LinkedIn may re-inject editorial/promotional cards", async () => {
+    const { notificationsCommand } = await import("../../src/commands/notifications.js");
+    const desc = (notificationsCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["delete"]!.meta.description;
+    expect(desc).toMatch(/re-inject/i);
+    expect(desc).toMatch(/editorial|promo/i);
+  });
+
+  it("recommends show-less for suppressing promo content", async () => {
+    const { notificationsCommand } = await import("../../src/commands/notifications.js");
+    const desc = (notificationsCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["delete"]!.meta.description;
+    expect(desc).toMatch(/show-less/);
+  });
+
+  it("does not change the delete command's exit-code or response-passthrough behavior", async () => {
+    const ns = makeNs();
+    const client = makeClient(ns);
+    (ns.notifications.delete as Mock).mockResolvedValue({ object: "notification_delete_result", deleted: true });
+    const { runNotificationsDelete } = await import("../../src/commands/notifications.js");
+    const out = makeOut();
+    await runNotificationsDelete(client as never, { account: "acc_1", json: true, cardUrn: CARD_URN } as Flags, out);
+    expect(ns.notifications.delete).toHaveBeenCalledWith(CARD_URN);
+    expect((JSON.parse(stdout(out)) as { deleted: boolean }).deleted).toBe(true);
+  });
+});
+
 describe("notifications show-less", () => {
   let ns: ReturnType<typeof makeNs>;
   let client: ReturnType<typeof makeClient>;
