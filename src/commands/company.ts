@@ -26,7 +26,7 @@
  */
 
 import { defineCommand } from "citty";
-import { GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { GLOBAL_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
 import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
@@ -37,6 +37,8 @@ import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type CompanyFlags = {
   id?: string;
+  chatId?: string;
+  messageId?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -54,6 +56,10 @@ type CompanyFlags = {
   sections?: string;
   keywords?: string;
   location?: string;
+  // company inbox search (Beta) — exactly one mode per call
+  query?: string;
+  topic?: string;
+  unread?: boolean;
 };
 
 type OutputStreams = {
@@ -293,6 +299,339 @@ export async function runCompanyJobs(
   }
 }
 
+/**
+ * Run `company managed [--limit] [--cursor] [--all]` — companies.managed.
+ * Lists the pages the connected account administers (no identifier — a self
+ * read). The `id` on each page is the numeric provider_id the followers /
+ * invitable-followers / employees / posts / jobs sub-resources consume.
+ */
+export async function runCompanyManaged(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.managed(p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.managed(params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company followers <id> [--limit] [--cursor] [--all]` — companies.followers.
+ * The connected account must administer the page. `<id>` accepts a URL/slug/
+ * numeric id — a URL/slug is resolved to the numeric provider_id first.
+ */
+export async function runCompanyFollowers(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.followers(identifier, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.followers(identifier, params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company invitable-followers <id> [--limit] [--cursor] [--all]` —
+ * companies.invitableFollowers. Lists the account's connections invitable to
+ * follow the page. The account must administer the page. `<id>` resolves like
+ * `company followers`.
+ */
+export async function runCompanyInvitableFollowers(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.invitableFollowers(identifier, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.invitableFollowers(identifier, params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company chats <id> [--limit] [--cursor] [--all]` — companies.chats (Beta).
+ * Lists the conversations in a company page's admin message inbox. The account
+ * must administer the page. `<id>` resolves like `company followers`. Content
+ * passes through verbatim and is never stored.
+ */
+export async function runCompanyChats(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.chats(identifier, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.chats(identifier, params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company chat <id> <chat_id>` — companies.chat (Beta, scalar read).
+ * The account must administer the page. `<id>` resolves like `company followers`.
+ */
+export async function runCompanyChat(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  if (flags.all) {
+    out.stderr.write("error: --all is not supported on non-paginated commands.\n");
+    process.exit(2);
+  }
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const chatId = flags.chatId ?? "";
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    const result = await ns.companies.chat(identifier, chatId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company messages <id> <chat_id> [--limit] [--cursor] [--all]` —
+ * companies.messages (Beta). Lists a company-inbox conversation's messages,
+ * newest first. The account must administer the page. Content passes through
+ * verbatim and is never stored.
+ */
+export async function runCompanyMessages(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const chatId = flags.chatId ?? "";
+
+  const params: Record<string, unknown> = {};
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.messages(identifier, chatId, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.messages(identifier, chatId, params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company message <id> <chat_id> <message_id>` — companies.message (Beta,
+ * scalar read). The account must administer the page. Content passes through
+ * verbatim and is never stored.
+ */
+export async function runCompanyMessage(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  if (flags.all) {
+    out.stderr.write("error: --all is not supported on non-paginated commands.\n");
+    process.exit(2);
+  }
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const chatId = flags.chatId ?? "";
+  const messageId = flags.messageId ?? "";
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    const result = await ns.companies.message(identifier, chatId, messageId);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+/**
+ * Run `company search-chats <id> (--query <q> | --topic <t> | --unread)
+ * [--limit] [--cursor] [--all]` — companies.searchChats (Beta).
+ * EXACTLY ONE mode per call (free-text `query`, a `topic` card, or `unread`
+ * only) — the three are mutually exclusive; a client-side arity check rejects
+ * zero or multiple modes with exit 2 before any call. `<id>` resolves like
+ * `company followers`.
+ */
+export async function runCompanySearchChats(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+
+  // Exactly one of --query / --topic / --unread.
+  const modes = [flags.query, flags.topic, flags.unread ? "unread" : undefined].filter(
+    (m) => m !== undefined && m !== "",
+  );
+  if (modes.length !== 1) {
+    out.stderr.write(
+      "error: company search-chats needs exactly one of --query <q>, --topic <t>, or --unread (they are mutually exclusive).\n",
+    );
+    process.exit(2);
+  }
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const params: Record<string, unknown> = {};
+  if (flags.query) params["query"] = flags.query;
+  if (flags.topic) params["topic"] = flags.topic;
+  if (flags.unread) params["unread"] = true;
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+    if (flags.all) {
+      const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+      const fn = (p: Record<string, unknown>) =>
+        ns.companies.searchChats(identifier, p) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+      return;
+    }
+    const result = await ns.companies.searchChats(identifier, params);
+    renderSuccess(result, outOpts, out);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -375,6 +714,158 @@ const companyJobsCommand = defineCommand({
   },
 });
 
+/** Shared config/client boilerplate for a subcommand's run(). */
+async function withClient(
+  flags: CompanyFlags,
+  fn: (client: Curviate, flags: CompanyFlags, out: OutputStreams) => Promise<void>,
+): Promise<void> {
+  const cfg = await resolveEffectiveConfig({
+    apiKey: flags["api-key"],
+    baseUrl: flags["base-url"],
+    timeout: flags.timeout,
+    account: flags.account,
+    profile: flags.profile,
+  });
+  if (!cfg.apiKey) {
+    process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+    process.exit(3);
+  }
+  const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+  const out = buildOutputStreams();
+  await fn(client, { ...flags, account: flags.account ?? cfg.account }, out);
+}
+
+const companyManagedCommand = defineCommand({
+  meta: {
+    name: "managed",
+    description:
+      "List the LinkedIn pages your connected account administers. The id on each page is the numeric provider_id the followers / invitable-followers / employees / posts / jobs sub-resources consume. " +
+      "An empty list is valid (you administer no pages). Paginate with the returned cursor (--all streams every page).",
+  },
+  args: { ...GLOBAL_FLAGS },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyManaged);
+  },
+});
+
+const companyFollowersCommand = defineCommand({
+  meta: {
+    name: "followers",
+    description:
+      "List a company page's followers, newest first. Your connected account must administer the page (see `company managed`). " +
+      "<id> accepts a URL/slug/numeric id — a URL/slug is resolved to the numeric provider_id first. Paginate with the returned cursor (--all streams every page).",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyFollowers);
+  },
+});
+
+const companyInvitableFollowersCommand = defineCommand({
+  meta: {
+    name: "invitable-followers",
+    description:
+      "List your connected account's connections who are invitable to follow the company page. Your account must administer the page. " +
+      "<id> accepts a URL/slug/numeric id (resolved to the numeric id first). An empty list is valid (nobody is currently invitable). Paginate with the returned cursor (--all streams every page).",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyInvitableFollowers);
+  },
+});
+
+const companyChatsCommand = defineCommand({
+  meta: {
+    name: "chats",
+    description:
+      "Beta — list the conversations in a company page's admin message inbox, newest-activity-first. Your connected account must administer the page. " +
+      "<id> accepts a URL/slug/numeric id (resolved first). Paginate with the returned cursor (--all streams every page). " +
+      "Beta caveat: single-page listing is verified; deep pagination (many pages / large cursor round-trips) is still being validated against a busier inbox.",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyChats);
+  },
+});
+
+const companyChatCommand = defineCommand({
+  meta: {
+    name: "chat",
+    description:
+      "Beta — retrieve one conversation from a company page's admin inbox. Your connected account must administer the page. <id> accepts a URL/slug/numeric id (resolved first).",
+  },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+    chatId: { type: "positional", description: "The company-inbox conversation id." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyChat);
+  },
+});
+
+const companyMessagesCommand = defineCommand({
+  meta: {
+    name: "messages",
+    description:
+      "Beta — list a company-inbox conversation's messages, newest first. Your connected account must administer the page. Content passes through verbatim and is never stored. " +
+      "<id> accepts a URL/slug/numeric id (resolved first). Paginate with the returned cursor (--all streams every page).",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+    chatId: { type: "positional", description: "The company-inbox conversation id." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyMessages);
+  },
+});
+
+const companyMessageCommand = defineCommand({
+  meta: {
+    name: "message",
+    description:
+      "Beta — retrieve one message from a company-inbox conversation. Your connected account must administer the page. Content passes through verbatim and is never stored. <id> accepts a URL/slug/numeric id (resolved first).",
+  },
+  args: {
+    ...READ_SINGLE_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+    chatId: { type: "positional", description: "The company-inbox conversation id." },
+    messageId: { type: "positional", description: "The message id within that conversation." },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanyMessage);
+  },
+});
+
+const companySearchChatsCommand = defineCommand({
+  meta: {
+    name: "search-chats",
+    description:
+      "Beta — search or filter a company page's admin inbox. Pass EXACTLY ONE mode: --query <text> (matches participant names and message content), --topic <card> (1-5 or its name), or --unread. The three are mutually exclusive. " +
+      "Your connected account must administer the page. <id> accepts a URL/slug/numeric id (resolved first). Paginate with the returned cursor (--all streams every page).",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id) — a slug/URL is resolved to the numeric id first." },
+    query: { type: "string", description: "Free-text mode — matches participant names and message content. Mutually exclusive with --topic/--unread." },
+    topic: { type: "string", description: "Topic-card mode — one inbox topic (1-5 or its name). Mutually exclusive with --query/--unread." },
+    unread: { type: "boolean", description: "Unread-only mode. Mutually exclusive with --query/--topic.", default: false },
+  },
+  async run({ args }) {
+    await withClient(args as CompanyFlags, runCompanySearchChats);
+  },
+});
+
 export const companyCommand = defineCommand({
   meta: { name: "company", description: "Fetch a company profile by URL, slug, or numeric id, and its sub-resources." },
   args: {
@@ -386,6 +877,14 @@ export const companyCommand = defineCommand({
     employees: companyEmployeesCommand,
     posts: companyPostsCommand,
     jobs: companyJobsCommand,
+    managed: companyManagedCommand,
+    followers: companyFollowersCommand,
+    "invitable-followers": companyInvitableFollowersCommand,
+    chats: companyChatsCommand,
+    chat: companyChatCommand,
+    messages: companyMessagesCommand,
+    message: companyMessageCommand,
+    "search-chats": companySearchChatsCommand,
   },
   async run({ args }) {
     const flags = args as CompanyFlags;

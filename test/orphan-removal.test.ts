@@ -31,10 +31,15 @@ describe("orphan commands are removed from their group", () => {
     expect(subs).toHaveProperty("connect-session");
   });
 
-  it("company no longer registers followers", async () => {
+  it("company re-registers followers (re-added on the v2 surface) alongside its new sub-resources", async () => {
     const subs = await subCommandsOf("../src/commands/company.js", "companyCommand");
-    expect(subs).not.toHaveProperty("followers");
+    expect(subs).toHaveProperty("followers");
     expect(subs).toHaveProperty("employees");
+    // The rest of the v2 companies extension is present too.
+    expect(subs).toHaveProperty("managed");
+    expect(subs).toHaveProperty("invitable-followers");
+    expect(subs).toHaveProperty("chats");
+    expect(subs).toHaveProperty("search-chats");
   });
 
   it("inbox no longer registers sync / sync-chat (mark-read kept)", async () => {

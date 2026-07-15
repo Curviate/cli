@@ -48,10 +48,10 @@ type AnyCommand = CommandDef;
  * keyword being swallowed as a bare id (the bare-positional groups: connect,
  * profile, company). Exit stays 2 — this only enriches the diagnostic.
  *
- * The tokens here are the exact removed/renamed keywords from the 0.15.0
- * release; none is a current subcommand, and none is a plausible bare
- * identifier (a member slug, company id, or invitation id is never literally
- * "respond"/"connections"/"followers"), so intercepting them is safe.
+ * The tokens here are the exact removed/renamed keywords still absent from the
+ * surface; none is a current subcommand, and none is a plausible bare
+ * identifier (a member slug or invitation id is never literally
+ * "respond"/"connections"/"reconnect"), so intercepting them is safe.
  */
 const REMOVED_COMMANDS: Record<string, Record<string, string>> = {
   post: {
@@ -86,9 +86,6 @@ const REMOVED_COMMANDS: Record<string, Record<string, string>> = {
   },
   webhook: {
     "state-diff": "`webhook state-diff` was removed with no replacement.",
-  },
-  company: {
-    followers: "`company followers` was removed with no replacement.",
   },
 };
 

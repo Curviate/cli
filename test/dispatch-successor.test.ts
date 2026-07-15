@@ -56,7 +56,6 @@ describe("successorHint — the removed/renamed map", () => {
     ["recruiter", "project-jobs", "recruiter project-job"],
     ["sales-nav", "sync", "sync"],
     ["webhook", "state-diff", "state-diff"],
-    ["company", "followers", "followers"],
   ];
 
   it.each(cases)("%s %s → hint mentions %s", (group, token, expected) => {
@@ -69,6 +68,10 @@ describe("successorHint — the removed/renamed map", () => {
     expect(successorHint("connect", "john-doe")).toBeNull();
     expect(successorHint("profile", "some-slug")).toBeNull();
     expect(successorHint("company", "1035")).toBeNull();
+  });
+
+  it("returns null for `company followers` — re-added as a real subcommand on the v2 surface", () => {
+    expect(successorHint("company", "followers")).toBeNull();
   });
 
   it("returns null for an unknown group", () => {
@@ -110,8 +113,6 @@ describe("resolveLeaf — removed command under a BARE-POSITIONAL group hints in
     ["connect respond", asCmd(connectCommand), ["respond"], "connect accept"],
     ["connect respond --decline x", asCmd(connectCommand), ["respond", "--decline", "x"], "connect decline"],
     ["profile connections", asCmd(profileCommand), ["connections"], "profile relations"],
-    ["company followers", asCmd(companyCommand), ["followers"], "followers"],
-    ["company followers 123", asCmd(companyCommand), ["followers", "123"], "followers"],
   ];
 
   it.each(cases)("%s → exit 2, stderr carries the hint (not a bare-id swallow)", async (_label, tree, rawArgs, expected) => {
@@ -141,5 +142,12 @@ describe("resolveLeaf — a real subcommand or valid bare id is UNAFFECTED by th
     const meta = typeof leaf.meta === "function" ? await (leaf.meta as () => Promise<{ name?: string }>)() : leaf.meta;
     expect((meta as { name?: string }).name).toBe("connect");
     expect(leafArgs).toEqual(["john-doe"]);
+  });
+
+  it("company followers <id> now descends to the re-added followers subcommand (not a removed-hint)", async () => {
+    const { leaf, leafArgs } = await resolveLeaf(asCmd(companyCommand), ["followers", "112013061"]);
+    const meta = typeof leaf.meta === "function" ? await (leaf.meta as () => Promise<{ name?: string }>)() : leaf.meta;
+    expect((meta as { name?: string }).name).toBe("followers");
+    expect(leafArgs).toEqual(["112013061"]);
   });
 });
