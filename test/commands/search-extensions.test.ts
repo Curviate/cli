@@ -11,7 +11,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { Mock } from "vitest";
 
 function makeNs() {
   return { search: { groups: vi.fn(), services: vi.fn(), getServiceParameters: vi.fn() } };
@@ -26,9 +25,6 @@ function mockExit() {
   return vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
     throw new Error(`process.exit(${code})`);
   });
-}
-function stdout(out: ReturnType<typeof makeOut>): string {
-  return (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
 }
 type Flags = Record<string, unknown>;
 

@@ -118,7 +118,12 @@ describe("compile — the gate bites (negative control)", () => {
     const { code, output } = typecheckFixture("test/coupling/fixtures/stale-call-shim-removed.ts");
     expect(code, `expected a compile failure, got:\n${output}`).not.toBe(0);
     expect(output).toContain("stale-call-shim-removed.ts");
-    expect(output).toMatch(/error TS2339: Property 'profiles' does not exist/);
+    // The stale `profiles` property does not exist on the client surface, so
+    // tsc fails. Since the v2 surface now carries a real `profile` namespace
+    // (a near-match), tsc emits the "did you mean 'profile'?" variant (TS2551)
+    // rather than the plain "property does not exist" (TS2339) — both are the
+    // same coupling failure. Accept either.
+    expect(output).toMatch(/error TS(2339|2551): Property 'profiles' does not exist/);
   });
 
   it("shim PRESENT: the identical stale call type-checks green", () => {
