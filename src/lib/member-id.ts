@@ -32,8 +32,8 @@
  * A third entry point resolves in the OPPOSITE direction — a provider id
  * FORWARD to a public identifier (vanity slug) — for the one endpoint that
  * rejects a provider id instead of requiring one:
- *   - `resolveMemberPublicIdentifier` — `groups list --member` (WP6 must-fix
- *     1). The endpoint's `profile` filter builds a `/in/<vanity>/…` URL
+ *   - `resolveMemberPublicIdentifier` — `groups list --member`. The
+ *     endpoint's `profile` filter builds a `/in/<vanity>/…` URL
  *     server-side; fed a raw provider id it builds a bogus URL and silently
  *     returns an empty list (exit 0, `items: []`) — indistinguishable from a
  *     real empty result. A provider-id-shaped input is resolved to its

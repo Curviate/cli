@@ -846,6 +846,10 @@ export async function runProfileAnalytics(
  * pillars, and industry/network percentile ranks. A low score on a
  * low-activity account is a normal result; a zero-activity account returns all
  * scalars null with active_seat false.
+ *
+ * `calculated_at` is passed through verbatim — the CLI applies no mapping to
+ * it. 0/null is the server's own documented "no watermark / computed on
+ * read" sentinel (see the SDK's ProfileSsi type), not a CLI bug.
  */
 export async function runProfileSsi(
   client: Curviate,
@@ -1142,7 +1146,8 @@ const profileSsiCommand = defineCommand({
     name: "ssi",
     description:
       "Read your connected account's own Social Selling Index — the overall score, its four pillar breakdowns, and industry/network percentile ranks. " +
-      "A low score on a low-activity account is a normal result; a zero-activity account returns all scalars null with active_seat false. Scores keep full float precision. Read-only self-action.",
+      "A low score on a low-activity account is a normal result; a zero-activity account returns all scalars null with active_seat false. Scores keep full float precision. " +
+      "calculated_at is a wire freshness watermark (epoch ms) passed through as-is — treat 0 or null as 'no watermark / computed on read', not a 1970 date. Read-only self-action.",
   },
   args: { ...READ_SINGLE_FLAGS },
   async run({ args }) {

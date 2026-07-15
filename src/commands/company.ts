@@ -818,6 +818,8 @@ const companyMessagesCommand = defineCommand({
     name: "messages",
     description:
       "Beta — list a company-inbox conversation's messages, newest first. Your connected account must administer the page. Content passes through verbatim and is never stored. " +
+      "Each item already carries sender: {id, name} — no separate `company message <id>` fetch is needed to know who sent a message. " +
+      "There is no is_sender boolean on this endpoint; determine direction by comparing sender.id to your own connected account's member id. " +
       "<id> accepts a URL/slug/numeric id (resolved first). Paginate with the returned cursor (--all streams every page).",
   },
   args: {

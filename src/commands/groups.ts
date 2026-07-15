@@ -124,7 +124,7 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
  * filter). A provider-id-shaped `--member` is resolved to its public
  * identifier first (see resolveMemberPublicIdentifier) — the endpoint's
  * `profile` filter silently 200s with an empty list on a raw provider id, a
- * failure indistinguishable from a real empty result (WP6 must-fix 1).
+ * failure indistinguishable from a real empty result.
  */
 export async function runGroupsList(
   client: Curviate,

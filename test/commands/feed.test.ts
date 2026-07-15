@@ -97,3 +97,12 @@ describe("feed home", () => {
     }
   });
 });
+
+describe("feed home --help text (WP6 nice-to-have 3)", () => {
+  it("documents that text is null by design on the default sort and points to `post get`", async () => {
+    const { feedCommand } = await import("../../src/commands/feed.js");
+    const desc = (feedCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["home"]!.meta.description;
+    expect(desc).toMatch(/text is null by design/);
+    expect(desc).toMatch(/post get <activity_urn_id>/);
+  });
+});

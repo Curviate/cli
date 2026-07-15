@@ -201,11 +201,32 @@ describe("company messages / message (Beta)", () => {
     expect(ns.companies.messages).toHaveBeenCalledWith("112013061", "chat_1", { limit: 20 });
   });
 
+  it("messages: each item's sender {id, name} passes through verbatim — already present in the SDK list response, no extra call needed (WP6 nice-to-have 4)", async () => {
+    (ns.companies.messages as Mock).mockResolvedValue({
+      object: "company_chat_message_list",
+      items: [{ id: "m1", conversation_id: "chat_1", sender: { id: "ACoAA_x", name: "Sophie Keller" }, sent_at: 1, text: "hi" }],
+      cursor: null,
+    });
+    const { runCompanyMessages } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    await runCompanyMessages(client as never, { account: "acc_1", json: true, id: "112013061", chatId: "chat_1" } as Flags, out);
+    expect(ns.companies.messages).toHaveBeenCalledTimes(1); // no N+1 fetch to populate sender
+    const result = JSON.parse(stdout(out)) as { items: Array<{ sender: { id: string; name: string } }> };
+    expect(result.items[0]!.sender).toEqual({ id: "ACoAA_x", name: "Sophie Keller" });
+  });
+
   it("message retrieves one message (id + chat_id + message_id)", async () => {
     const { runCompanyMessage } = await import("../../src/commands/company.js");
     const out = makeOut();
     await runCompanyMessage(client as never, { account: "acc_1", json: true, id: "112013061", chatId: "chat_1", messageId: "m1" } as Flags, out);
     expect(ns.companies.message).toHaveBeenCalledWith("112013061", "chat_1", "m1");
+  });
+
+  it("messages --help documents that sender is already populated per item, and that is_sender is absent (WP6 nice-to-have 4)", async () => {
+    const { companyCommand } = await import("../../src/commands/company.js");
+    const desc = (companyCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["messages"]!.meta.description;
+    expect(desc).toMatch(/sender: \{id, name\}/);
+    expect(desc).toMatch(/no is_sender boolean/i);
   });
 });
 

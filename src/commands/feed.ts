@@ -140,7 +140,8 @@ const feedHomeCommand = defineCommand({
       "Read your connected account's LinkedIn home feed as agent-actionable posts. " +
       "--sort recent (default) is reverse-chronological and always available; --sort relevant is LinkedIn's ranked 'top' feed (a throttled budget — can rate-limit). " +
       "The feed is an unbounded, reordering stream with no total count — walk it with the returned cursor until cursor is null (--all streams every page as NDJSON). " +
-      "When a --cursor is supplied its carrier sets the sort and --sort is ignored. Each post carries the numeric activity id for the `post` group.",
+      "When a --cursor is supplied its carrier sets the sort and --sort is ignored. Each post carries the numeric activity id for the `post` group. " +
+      "The feed is an index on the default recent sort — text is null by design (the body is never resolved there); hydrate the full post body via `post get <activity_urn_id>`. --sort relevant resolves text inline, so no hydration call is needed on that sort.",
   },
   args: {
     ...GLOBAL_FLAGS,

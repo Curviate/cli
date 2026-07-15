@@ -226,6 +226,32 @@ describe("profile ssi", () => {
       exit.mockRestore();
     }
   });
+
+  it("calculated_at: 0 passes through verbatim — the CLI applies no mapping to it (WP6 nice-to-have 5: it is the wire value, not a CLI bug)", async () => {
+    (ns.profile.ssi as Mock).mockResolvedValue({
+      object: "profile_ssi",
+      overall: 0,
+      pillars: { establish_brand: 0, find_people: 0, engage_insights: 0, build_relationships: 0 },
+      industry_rank: null,
+      network_rank: null,
+      active_seat: false,
+      calculated_at: 0,
+    });
+    const { runProfileSsi } = await import("../../src/commands/profile.js");
+    const out = makeOut();
+    await runProfileSsi(client as never, { account: "acc_1", json: true } as Flags, out);
+    const result = JSON.parse(writtenStdout(out)) as Record<string, unknown>;
+    expect(result["calculated_at"]).toBe(0);
+  });
+});
+
+describe("profile ssi --help text (WP6 nice-to-have 5)", () => {
+  it("documents calculated_at as a wire watermark where 0/null means no watermark", async () => {
+    const { profileCommand } = await import("../../src/commands/profile.js");
+    const desc = (profileCommand as { subCommands: Record<string, { meta: { description: string } }> }).subCommands["ssi"]!.meta.description;
+    expect(desc).toMatch(/calculated_at/);
+    expect(desc).toMatch(/no watermark/i);
+  });
 });
 
 describe("profile visitors", () => {
