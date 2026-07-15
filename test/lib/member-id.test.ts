@@ -6,7 +6,13 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { resolveMemberProviderId, resolveMemberOrMeProviderId, MEMBER_PROVIDER_ID_RE } from "../../src/lib/member-id.js";
+import {
+  resolveMemberProviderId,
+  resolveMemberOrMeProviderId,
+  resolveMemberPublicIdentifier,
+  MemberResolutionError,
+  MEMBER_PROVIDER_ID_RE,
+} from "../../src/lib/member-id.js";
 
 function makeNs(getResult?: Record<string, unknown>) {
   return {
@@ -99,5 +105,39 @@ describe("resolveMemberOrMeProviderId — post user-posts / post user-reactions 
     const err = new Error("not found");
     (ns.users.get as ReturnType<typeof vi.fn>).mockRejectedValue(err);
     await expect(resolveMemberOrMeProviderId(ns, "no-such-member")).rejects.toBe(err);
+  });
+});
+
+describe("resolveMemberPublicIdentifier — groups list --member (WP6 must-fix 1, forward direction)", () => {
+  it("a vanity slug passes through with zero SDK calls (unchanged path)", async () => {
+    const ns = makeNs();
+    const result = await resolveMemberPublicIdentifier(ns, "sophie-keller");
+    expect(result).toBe("sophie-keller");
+    expect(ns.users.get).not.toHaveBeenCalled();
+  });
+
+  it("a full /in/ member URL is normalized to its slug with zero SDK calls (unchanged path)", async () => {
+    const ns = makeNs();
+    const result = await resolveMemberPublicIdentifier(ns, "https://www.linkedin.com/in/sophie-keller/");
+    expect(result).toBe("sophie-keller");
+    expect(ns.users.get).not.toHaveBeenCalled();
+  });
+
+  it("a provider-id-shaped input resolves via a single users.get READ to public_identifier", async () => {
+    const ns = makeNs({ object: "user_profile", id: "ACoAAA_x", public_identifier: "sophie-keller" });
+    const result = await resolveMemberPublicIdentifier(ns, "ACoAAA_x");
+    expect(result).toBe("sophie-keller");
+    expect(ns.users.get).toHaveBeenCalledWith("ACoAAA_x", {});
+  });
+
+  it("throws MemberResolutionError when users.get itself fails (e.g. 404)", async () => {
+    const ns = makeNs();
+    (ns.users.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("not found"));
+    await expect(resolveMemberPublicIdentifier(ns, "ACoAAA_x")).rejects.toBeInstanceOf(MemberResolutionError);
+  });
+
+  it("throws MemberResolutionError when users.get succeeds but public_identifier is absent", async () => {
+    const ns = makeNs({ object: "user_profile", id: "ACoAAA_x" });
+    await expect(resolveMemberPublicIdentifier(ns, "ACoAAA_x")).rejects.toBeInstanceOf(MemberResolutionError);
   });
 });

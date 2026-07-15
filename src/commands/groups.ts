@@ -2,17 +2,26 @@
  * `curviate groups` — LinkedIn groups reads.
  *
  * Subcommands:
- *   groups list [--member <vanity>]        — the groups a member belongs to (read, paginated)
- *   groups get <group>                     — one group's full detail (read, scalar)
- *   groups members <group> [--name <q>]    — a group's member roster (read, paginated)
+ *   groups list [--member <vanity|url|provider-id>]  — the groups a member belongs to (read, paginated)
+ *   groups get <group>                               — one group's full detail (read, scalar)
+ *   groups members <group> [--name <q>]               — a group's member roster (read, paginated)
  *
  * All three are read commands: --preview is a usage error (exit 2).
  *
  * `groups list` reads the connected account's own groups by default; pass
- * `--member <vanity-or-url>` to read another member's public group set (a
- * documented partial read). `--member` maps to the endpoint's `profile` filter
- * — the CLI's own `--profile` flag is reserved for config-profile selection, so
- * a distinct flag name avoids the collision.
+ * `--member` to read another member's public group set (a documented partial
+ * read). `--member` accepts a vanity slug, a full /in/ URL, or a provider id
+ * (ACoAA…/ADoAA…/AEoAA…) — the endpoint's own `profile` filter only accepts a
+ * vanity slug/URL (it builds a `/in/<vanity>/…` request server-side), so a
+ * provider id is resolved to its public identifier first via
+ * `resolveMemberPublicIdentifier` (lib/member-id.ts) — the same
+ * provider-id-shaped-input detection `profile follow`/`unfollow` use, just in
+ * the opposite direction. Fed a raw provider id unresolved, the endpoint
+ * previously 200'd with a silent `items: []` — indistinguishable from a real
+ * empty list; an unresolvable identifier now exits 2 with a clear message
+ * instead. `--member` maps to the endpoint's `profile` filter — the CLI's own
+ * `--profile` flag is reserved for config-profile selection, so a distinct
+ * flag name avoids the collision.
  *
  * `groups members --name <q>` is the folded-in member search — the SAME
  * endpoint with a name filter applied, not a separate command. The `<group>`
@@ -22,6 +31,7 @@
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
 import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
+import { resolveMemberPublicIdentifier, MemberResolutionError } from "../lib/member-id.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
@@ -108,9 +118,13 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
 // ---------------------------------------------------------------------------
 
 /**
- * Run `groups list [--member <vanity>] [--limit] [--cursor] [--all]` — groups.list.
+ * Run `groups list [--member <vanity|url|provider-id>] [--limit] [--cursor] [--all]` — groups.list.
  * Reads the connected account's own groups by default; `--member` targets
- * another member's public group set (mapped to the endpoint's `profile` filter).
+ * another member's public group set (mapped to the endpoint's `profile`
+ * filter). A provider-id-shaped `--member` is resolved to its public
+ * identifier first (see resolveMemberPublicIdentifier) — the endpoint's
+ * `profile` filter silently 200s with an empty list on a raw provider id, a
+ * failure indistinguishable from a real empty result (WP6 must-fix 1).
  */
 export async function runGroupsList(
   client: Curviate,
@@ -124,7 +138,18 @@ export async function runGroupsList(
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params: ListQuery = {};
-  if (flags.member) params.profile = flags.member;
+  if (flags.member) {
+    try {
+      params.profile = await resolveMemberPublicIdentifier(ns, flags.member);
+    } catch (err: unknown) {
+      if (err instanceof MemberResolutionError) {
+        out.stderr.write("error: pass a vanity slug or /in/ URL, or a resolvable provider id.\n");
+        process.exit(2);
+        return;
+      }
+      throw err;
+    }
+  }
   if (flags.limit) params.limit = parseInt(flags.limit, 10);
   if (flags.cursor) params.cursor = flags.cursor;
 
@@ -241,14 +266,15 @@ const groupsListCommand = defineCommand({
     name: "list",
     description:
       "List the LinkedIn groups a member belongs to, each enriched to full group detail. " +
-      "Reads your connected account's own groups by default; pass --member <vanity-or-url> to read another member's public group set (a partial read — that member's interests-groups section). " +
+      "Reads your connected account's own groups by default; pass --member <vanity | /in/ URL | provider id> to read another member's public group set (a partial read — that member's interests-groups section). " +
+      "A provider id (ACoAA…/ADoAA…/AEoAA…) is resolved to a public identifier automatically before the request; an unresolvable identifier exits 2 rather than silently returning an empty list. " +
       "The id on each group is what `groups get` / `groups members` consume. Paginate with the returned cursor (--all streams every page as NDJSON; walk until cursor is null).",
   },
   args: {
     ...GLOBAL_FLAGS,
     member: {
       type: "string",
-      description: "Target another member's groups: a vanity slug or a full /in/<vanity> URL. Omit to read your own account's groups.",
+      description: "Target another member's groups: a vanity slug, a full /in/<vanity> URL, or a provider id (ACoAA…/ADoAA…/AEoAA…, auto-resolved to a public identifier). Omit to read your own account's groups.",
     },
   },
   async run({ args }) {
@@ -299,9 +325,9 @@ export const groupsCommand = defineCommand({
   async run() {
     process.stderr.write(
       "Usage: curviate groups <subcommand>\n" +
-      "  list [--member <vanity>]            list the groups a member belongs to (your own by default)\n" +
-      "  get <group>                         one group's full detail\n" +
-      "  members <group> [--name <query>]    a group's members (--name folds in member search)\n",
+      "  list [--member <vanity|url|provider-id>]  list the groups a member belongs to (your own by default)\n" +
+      "  get <group>                               one group's full detail\n" +
+      "  members <group> [--name <query>]          a group's members (--name folds in member search)\n",
     );
   },
 });

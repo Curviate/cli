@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Mock } from "vitest";
 
 function makeNs() {
   return { search: { groups: vi.fn(), services: vi.fn(), getServiceParameters: vi.fn() } };
