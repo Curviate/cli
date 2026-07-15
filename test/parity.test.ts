@@ -1,6 +1,6 @@
 /**
  * SDK-parity test — asserts the CLI provides exactly one primary command for
- * each of the SDK's 115 public resource methods (the full v2 surface).
+ * each of the SDK's 141 public resource methods (the full v2 surface).
  *
  * Mechanism:
  *   1. A declared manifest maps CLI command paths to "namespace.method" strings.
@@ -178,9 +178,54 @@ const PARITY_MANIFEST: Record<string, string> = {
   "comment reactions": "comments.listReactions",
   "comment unreact":   "comments.removeReaction",
   "comment user":      "comments.listUserComments",
+
+  // profile insights (4) — the SDK `profile` namespace (the acting account's own
+  // insight surface), mounted as subcommands of the `profile` noun. Distinct from
+  // the `users`-backed member reads above (`profile get`/`relations`/…).
+  "profile subscription": "profile.subscription",
+  "profile analytics":    "profile.analytics",
+  "profile visitors":     "profile.visitors",
+  "profile ssi":          "profile.ssi",
+
+  // groups (3)
+  "groups list":    "groups.list",
+  "groups get":     "groups.get",
+  "groups members": "groups.members",
+
+  // feed (1)
+  "feed home": "feed.home",
+
+  // notifications (3)
+  "notifications list":      "notifications.list",
+  "notifications delete":    "notifications.delete",
+  "notifications show-less": "notifications.showLess",
+
+  // companies extensions (8) — managed pages, followers/invitable-followers, and
+  // the company-page admin inbox (Beta).
+  "company managed":             "companies.managed",
+  "company followers":           "companies.followers",
+  "company invitable-followers": "companies.invitableFollowers",
+  "company chats":               "companies.chats",
+  "company chat":                "companies.chat",
+  "company messages":            "companies.messages",
+  "company message":             "companies.message",
+  "company search-chats":        "companies.searchChats",
+
+  // search extensions (3)
+  "search groups":             "search.groups",
+  "search services":           "search.services",
+  "search service-parameters": "search.getServiceParameters",
+
+  // messaging extension (1) — inbox free-text search, under the `message` noun.
+  "message search": "messaging.searchChats",
+
+  // posts extensions (3) — the connected account's own saved-posts bookmark list.
+  "post saved":  "posts.listSaved",
+  "post save":   "posts.save",
+  "post unsave": "posts.unsave",
 };
 
-const EXPECTED_METHOD_COUNT = 115;
+const EXPECTED_METHOD_COUNT = 141;
 
 // ---------------------------------------------------------------------------
 // SDK method enumeration via client instance prototype inspection
@@ -215,6 +260,10 @@ async function buildSdkMethodSet(): Promise<Set<string>> {
     ["jobs", scoped.jobs],
     ["companies", scoped.companies],
     ["comments", scoped.comments],
+    ["profile", scoped.profile],
+    ["groups", scoped.groups],
+    ["feed", scoped.feed],
+    ["notifications", scoped.notifications],
   ];
 
   const methods = new Set<string>();
