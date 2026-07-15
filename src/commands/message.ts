@@ -29,7 +29,8 @@
  */
 
 import { defineCommand } from "citty";
-import { WRITE_FLAGS, READ_SINGLE_FLAGS } from "../lib/global-flags.js";
+import { WRITE_FLAGS, READ_SINGLE_FLAGS, GLOBAL_FLAGS } from "../lib/global-flags.js";
+import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
 import { resolveIdentifier, normalizeChatId } from "../lib/identifier.js";
 import { resolveTextOrStdin } from "../lib/stdin.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
@@ -52,6 +53,8 @@ type MessageFlags = {
   subject?: string;
   output?: string;
   attach?: string | string[];
+  /** Free-text search term for `message search`. */
+  query?: string;
   account?: string;
   json?: boolean;
   fields?: string;
@@ -59,6 +62,7 @@ type MessageFlags = {
   cursor?: string;
   all?: boolean;
   "max-pages"?: string;
+  "page-delay"?: string;
   preview?: boolean;
   "api-key"?: string;
   "base-url"?: string;
@@ -884,6 +888,88 @@ const messageInMailBalanceCommand = defineCommand({
   },
 });
 
+// SDK-signature-derived argument type for the inbox search endpoint.
+type SearchChatsArg = Parameters<ReturnType<Curviate["account"]>["messaging"]["searchChats"]>[0];
+
+/**
+ * Run `message search <query> [--limit] [--cursor] [--all]` — messaging.searchChats.
+ * Free-text search of the connected account's own inbox — matches participant
+ * names AND message content. Read command; rejects --preview. Note LinkedIn's
+ * search is token-prefix: a term that matches no inbox token returns an empty
+ * list (a genuine no-match), not an error. Paginate with the returned cursor;
+ * --all streams every page.
+ */
+export async function runMessageSearch(
+  client: Curviate,
+  flags: MessageFlags,
+  out: OutputStreams,
+): Promise<void> {
+  rejectPreviewOnRead(flags.preview, out);
+  const query = flags.query ?? "";
+  if (!query) {
+    out.stderr.write("error: <query> is required for `message search` (e.g. `message search \"sophie\"`).\n");
+    process.exit(2);
+  }
+
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+  const all = flags.all ?? false;
+  const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
+
+  const params: Record<string, unknown> = { query };
+  if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
+  if (flags.cursor) params["cursor"] = flags.cursor;
+
+  try {
+    if (all) {
+      const fn = (p: Record<string, unknown>) => ns.messaging.searchChats(p as SearchChatsArg) as Promise<{ items?: unknown[]; cursor?: string | null }>;
+      for await (const item of streamAll(fn, params, {
+        maxPages,
+        out,
+        pageDelayMs: pageDelayFromFlags(flags),
+      })) {
+        out.stdout.write(JSON.stringify(item) + "\n");
+      }
+    } else {
+      const result = await ns.messaging.searchChats(params as SearchChatsArg);
+      renderSuccess(result, outOpts, out);
+    }
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
+const messageSearchCommand = defineCommand({
+  meta: {
+    name: "search",
+    description:
+      "Free-text search your connected account's own inbox — matches participant names AND message content (e.g. `message search \"sophie\"`). " +
+      "LinkedIn's search is token-prefix: a term matching no inbox token returns an empty list (a genuine no-match), not an error. Paginate with the returned cursor (--all streams every page).",
+  },
+  args: {
+    ...GLOBAL_FLAGS,
+    query: { type: "positional", description: "The search term (quote multi-word terms). Matches participant names and message content." },
+  },
+  async run({ args }) {
+    const flags = args as MessageFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runMessageSearch(client, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 export const messageCommand = defineCommand({
   meta: { name: "message", description: "Send and manage LinkedIn messages." },
   args: {
@@ -903,6 +989,7 @@ export const messageCommand = defineCommand({
     attachment: messageAttachmentCommand,
     inmail: messageInMailCommand,
     "inmail-balance": messageInMailBalanceCommand,
+    search: messageSearchCommand,
   },
   async run({ args }) {
     const flags = args as MessageFlags;
@@ -917,7 +1004,8 @@ export const messageCommand = defineCommand({
         "       curviate message react <chat_id> <message_id> <emoji>\n" +
         "       curviate message attachment <chat_id> <message_id> <attachment_id> [-o <file>]\n" +
         "       curviate message inmail --to <id> --subject <s> \"<text>\"\n" +
-        "       curviate message inmail-balance\n",
+        "       curviate message inmail-balance\n" +
+        "       curviate message search \"<query>\"\n",
       );
       // <chat_id> is functionally required for the bare form — a missing
       // required positional is a usage error (exit 2), not a silent success.
