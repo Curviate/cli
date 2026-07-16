@@ -118,7 +118,15 @@ describe("compile — the gate bites (negative control)", () => {
     const { code, output } = typecheckFixture("test/coupling/fixtures/stale-call-shim-removed.ts");
     expect(code, `expected a compile failure, got:\n${output}`).not.toBe(0);
     expect(output).toContain("stale-call-shim-removed.ts");
-    expect(output).toMatch(/error TS2339: Property 'profiles' does not exist/);
+    // TS2339 (plain "does not exist") or TS2551 (does not exist, WITH a "did
+    // you mean" suggestion) — which one fires depends on whether a
+    // Levenshtein-close property name exists on the type at compile time (the
+    // SDK's account-scoped surface now also carries a distinct `profile`
+    // singular namespace alongside `users`, which is close enough to the
+    // stale `profiles` reference to earn a suggestion). Either code proves
+    // the same thing this negative control exists to prove: the stale
+    // reference fails to compile once the shim is removed.
+    expect(output).toMatch(/error TS(2339|2551): Property 'profiles' does not exist/);
   });
 
   it("shim PRESENT: the identical stale call type-checks green", () => {

@@ -6,6 +6,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [0.16.0] - 2026-07-17
+
+A minor release adding the `inboxes` command group. No breaking changes —
+built against `@curviate/sdk` 0.16.0.
+
+### Added
+
+- **New `inboxes` command group (Beta).** `inboxes list [--kind personal|company]
+  [--company-id <id>]` discovers the account's personal inbox plus, when the
+  company product is attached, one entry per company page × folder (id like
+  `COMPANY_83734124_PRIMARY`) — a flat, non-paginated read (rejects `--all`).
+  `inboxes chats <inbox_id> [--limit] [--cursor] [--all]` lists a single
+  inbox's conversations, cursor-paginated like every other list command.
+  Every returned chat id is send-ready — reply with the existing
+  `message send <chat_id> "<text>"`; a company inbox's chat id (e.g.
+  `COMPANY_83734124_2-…`) sends AS THE PAGE, no separate flag needed. Company
+  inboxes are reply-only and cannot start a new conversation. Distinct from
+  the existing `inbox` command group (a friendlier front door to the
+  account's own message-thread inbox — `messaging.listChats`/`getChat`/
+  `markChatRead`/`messages`); `inboxes` (plural) wraps the newer
+  inbox-*discovery* resource, so both groups coexist without a naming
+  collision.
+- **`PREMIUM_CONFLICT` and `REAUTH_REQUIRED` mapped to exit code 8**
+  (account/connection state) in the error→exit table — the two new SDK error
+  codes surfacing from `account link`'s underlying `auth.intent` call: a seat
+  resolving to both individual-Premium tiers at once, and a scope-changing
+  reconnect attempted with a cookie instead of credentials.
+
 ## [0.15.2] - 2026-07-12
 
 A patch release fixing an interactive-terminal hang on `account link`.
