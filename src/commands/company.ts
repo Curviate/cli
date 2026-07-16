@@ -32,7 +32,14 @@ import { resolveIdentifier } from "../lib/identifier.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
-import { slimCompany, slimSearchPeople, slimSearchPosts, slimSearchJobs } from "../lib/slim.js";
+import {
+  slimCompany,
+  slimSearchPeople,
+  slimSearchPosts,
+  slimSearchJobs,
+  reencodeInvitableFollowers,
+  reencodeInviteTokenItem,
+} from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type CompanyFlags = {
@@ -388,6 +395,12 @@ export async function runCompanyFollowers(
  * companies.invitableFollowers. Lists the account's connections invitable to
  * follow the page. The account must administer the page. `<id>` resolves like
  * `company followers`.
+ *
+ * `invite_token` is re-encoded as base64 unconditionally — in every output
+ * mode, including `--all`/`--verbose` — since the raw wire value can carry
+ * bytes that render as mojibake verbatim (see `reencodeInvitableFollowers` in
+ * lib/slim.ts). The item shape otherwise has no `name`/`headline`; triage a
+ * candidate via `profile <id>` (documented on the `--help` text below).
  */
 export async function runCompanyInvitableFollowers(
   client: Curviate,
@@ -415,12 +428,12 @@ export async function runCompanyInvitableFollowers(
         out,
         pageDelayMs: pageDelayFromFlags(flags),
       })) {
-        out.stdout.write(JSON.stringify(item) + "\n");
+        out.stdout.write(JSON.stringify(reencodeInviteTokenItem(item as Record<string, unknown>)) + "\n");
       }
       return;
     }
     const result = await ns.companies.invitableFollowers(identifier, params);
-    renderSuccess(result, outOpts, out);
+    renderSuccess(reencodeInvitableFollowers(result), outOpts, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -769,7 +782,9 @@ const companyInvitableFollowersCommand = defineCommand({
     name: "invitable-followers",
     description:
       "List your connected account's connections who are invitable to follow the company page. Your account must administer the page. " +
-      "<id> accepts a URL/slug/numeric id (resolved to the numeric id first). An empty list is valid (nobody is currently invitable). Paginate with the returned cursor (--all streams every page).",
+      "<id> accepts a URL/slug/numeric id (resolved to the numeric id first). An empty list is valid (nobody is currently invitable). Paginate with the returned cursor (--all streams every page). " +
+      "Each item carries only id, profile_urn, and invite_token — no name or headline, so you cannot triage from this list alone; hydrate a candidate via `profile <id>` (id is the same profile id). " +
+      "invite_token is base64-encoded (the raw wire value can contain bytes that render unsafely verbatim); it is opaque and not currently consumed by any write endpoint.",
   },
   args: {
     ...GLOBAL_FLAGS,

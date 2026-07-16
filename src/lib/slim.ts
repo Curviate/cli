@@ -770,3 +770,61 @@ export function slimCompany(data: unknown): Record<string, unknown> {
     follower_count: d["follower_count"] ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// company invitable-followers — invite_token JSON/terminal-safety (WP6-B Fix 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-encode a wire `invite_token` value as base64.
+ *
+ * The real wire's `invite_token` (`GET .../invitable-followers`) is an
+ * opaque per-suggestion correlation token that can carry raw binary bytes.
+ * Embedding it verbatim into JSON output renders as mojibake in a terminal
+ * (observed live: `"ÐêÇ>…"`) and risks a broken copy/paste. No write
+ * endpoint on the current API surface consumes `invite_token` (there is no
+ * follow-invite POST anywhere under `/v1/{account_id}/companies` in the
+ * generated OpenAPI types) — but base64 is applied unconditionally rather
+ * than only when a consumer exists: it is JSON-safe, terminal-safe,
+ * ASCII-only, and a lossless encoding of exactly the string bytes the SDK
+ * handed the CLI, so it round-trips via
+ * `Buffer.from(encoded, "base64").toString("utf8")` if a future write ever
+ * needs the original value.
+ *
+ * `null`/absent pass through unchanged — only a genuine non-empty string is
+ * re-encoded, so "the read did not surface one" stays visibly `null` rather
+ * than becoming a base64 encoding of the string `"null"`.
+ */
+export function encodeInviteToken(token: unknown): unknown {
+  if (typeof token !== "string" || token.length === 0) return token;
+  return Buffer.from(token, "utf8").toString("base64");
+}
+
+/**
+ * Re-encode a single invitable-followers item's `invite_token`, leaving
+ * every other field (`id`, `profile_urn`) untouched. A no-op when the item
+ * carries no `invite_token` key at all.
+ */
+export function reencodeInviteTokenItem<T extends Record<string, unknown>>(item: T): T {
+  if (!("invite_token" in item)) return item;
+  return { ...item, invite_token: encodeInviteToken(item["invite_token"]) };
+}
+
+/**
+ * Re-encode `invite_token` across an invitable-followers list envelope's
+ * `items[]`. Applied unconditionally in `runCompanyInvitableFollowers`
+ * (NOT wired through the `--verbose` slim-bypass mechanism) — the raw value
+ * is unsafe to print in every output mode, so there is no "verbose" form
+ * that should ever re-expose it unencoded.
+ */
+export function reencodeInvitableFollowers(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(reencodeInviteTokenItem)
+    : [];
+
+  return { ...d, items };
+}
