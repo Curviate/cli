@@ -772,6 +772,59 @@ export function slimCompany(data: unknown): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// company managed (WP6-B Fix 4a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `company managed` item.
+ *
+ * The raw item (`GET /v1/{account_id}/companies/managed`) carries a
+ * ~45-entry `capabilities[]` plus a `permissions{}` convenience projection —
+ * observed live at ~5331B per page, genuinely too big for a default. Those
+ * two are dropped here and reachable only via `--verbose` (the full raw item,
+ * unslimmed). Every small identifying/triage scalar stays, including `id`
+ * (what `company followers <id>` / `company chats <id>` / `company
+ * invitable-followers <id>` / `company employees|posts|jobs <id>` consume)
+ * and `can_invite_to_follow` (the gate those write-adjacent flows check) —
+ * this is a size cut on the two noisy fields, not an information cut on the
+ * rest.
+ */
+export function slimCompanyManagedItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: item["id"] ?? null,
+    entity_urn: item["entity_urn"] ?? null,
+    name: item["name"] ?? null,
+    universal_name: item["universal_name"] ?? null,
+    logo_url: item["logo_url"] ?? null,
+    follower_count: item["follower_count"] ?? null,
+    visitor_count: item["visitor_count"] ?? null,
+    page_type: item["page_type"] ?? null,
+    is_following: item["is_following"] ?? null,
+    is_admin: item["is_admin"] ?? null,
+    can_invite_to_follow: item["can_invite_to_follow"] ?? null,
+    url: item["url"] ?? null,
+    roles: Array.isArray(item["roles"]) ? item["roles"] : [],
+  };
+}
+
+/**
+ * Slim-default projection for the `company managed` list envelope.
+ * Projects each item via slimCompanyManagedItem; preserves envelope shape
+ * (cursor, paging, etc.).
+ */
+export function slimCompanyManaged(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimCompanyManagedItem)
+    : [];
+
+  return { ...d, items };
+}
+
+// ---------------------------------------------------------------------------
 // company invitable-followers — invite_token JSON/terminal-safety (WP6-B Fix 2)
 // ---------------------------------------------------------------------------
 

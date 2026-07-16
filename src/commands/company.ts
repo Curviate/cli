@@ -37,6 +37,7 @@ import {
   slimSearchPeople,
   slimSearchPosts,
   slimSearchJobs,
+  slimCompanyManaged,
   reencodeInvitableFollowers,
   reencodeInviteTokenItem,
 } from "../lib/slim.js";
@@ -311,6 +312,13 @@ export async function runCompanyJobs(
  * Lists the pages the connected account administers (no identifier — a self
  * read). The `id` on each page is the numeric provider_id the followers /
  * invitable-followers / employees / posts / jobs sub-resources consume.
+ *
+ * Default output is slimmed (WP6-B Fix 4a): the raw item's ~45-entry
+ * `capabilities[]` plus `permissions{}` (observed live at ~5331B/page) are
+ * genuinely too big for a default and are dropped; every other field
+ * (`id`, `name`, `follower_count`, `can_invite_to_follow`, and the rest of
+ * the small identifying scalars) stays — see `slimCompanyManaged` in
+ * lib/slim.ts. `--verbose` bypasses the slim and returns the full raw item.
  */
 export async function runCompanyManaged(
   client: Curviate,
@@ -342,7 +350,7 @@ export async function runCompanyManaged(
       return;
     }
     const result = await ns.companies.managed(params);
-    renderSuccess(result, outOpts, out);
+    renderSuccess(result, { ...outOpts, slim: slimCompanyManaged }, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -753,7 +761,8 @@ const companyManagedCommand = defineCommand({
     name: "managed",
     description:
       "List the LinkedIn pages your connected account administers. The id on each page is the numeric provider_id the followers / invitable-followers / employees / posts / jobs sub-resources consume. " +
-      "An empty list is valid (you administer no pages). Paginate with the returned cursor (--all streams every page).",
+      "An empty list is valid (you administer no pages). Paginate with the returned cursor (--all streams every page). " +
+      "Default output is slim (id, name, follower_count, can_invite_to_follow, and the other small scalars); pass --verbose for the full item including capabilities[] and permissions{} (~45 entries, large).",
   },
   args: { ...GLOBAL_FLAGS },
   async run({ args }) {

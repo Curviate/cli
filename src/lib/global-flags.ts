@@ -75,7 +75,9 @@ export const GLOBAL_FLAGS = {
   },
   verbose: {
     type: "boolean" as const,
-    description: "Output the full SDK response instead of the slim default.",
+    description:
+      "When this command has a slim default, return the complete response instead. " +
+      "No-op on a command with no slim default (most of the CLI) — check this command's own description for whether it applies.",
     default: false,
   },
 } as const;
