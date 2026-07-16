@@ -890,44 +890,36 @@ export function reencodeInvitableFollowers(data: unknown): Record<string, unknow
  * Slim-default projection for a single `message search` item
  * (`GET /v1/{account_id}/chats/search`, `messaging.searchChats`).
  *
- * This is the richest/noisiest response in the whole 26-command CLI surface —
- * a near-raw substrate passthrough (almost no field-level docs upstream, a
- * typo'd field `is_mentionned`, redundant type/boolean pairs) rather than a
- * hand-curated product shape like every other list endpoint.
+ * IMPORTANT: this projects the LIVE substrate response, not the (richer) SDK
+ * type. The SDK type over-declares fields — `user{}`, `last_message_timestamp`,
+ * `last_message.timestamp`, `last_message.is_sender`, read-receipt/UI-state
+ * metadata, etc. — that the live `search-chats` endpoint does NOT actually
+ * return. An earlier version of this projector was built from the SDK type
+ * and synthesized those as null, which is a footgun for a typed agent (e.g.
+ * `item.user.display_name` reads null instead of the field simply being
+ * absent). This projector reads and emits ONLY fields the live endpoint
+ * actually sends — it never invents an always-null key.
  *
- * Exact fields returned: object, id, name, type, unread_count,
- * last_message_timestamp, user_id, user{id, display_name, profile_url},
- * last_message{id, sender_id, text, timestamp, is_sender}.
+ * Exact fields the live endpoint returns per item: object, account_id, id,
+ * name, type, is_group, is_1to1, unread_count, user_id,
+ * last_message{object, account_id, id, text, sender_id, attachments[]}.
+ * (No `user{}` object, no `last_message_timestamp`, no
+ * `last_message.timestamp`/`is_sender`, no read-receipt/reaction/folder/
+ * pin/mute/provider metadata — those exist on the SDK type but are absent
+ * on this live endpoint.)
  *
- * Dropped (verbose-only): account_id (redundant with the scoped connection);
- * is_group/is_1to1/is_channel (redundant with `type`, which stays);
- * is_pinned/is_readonly/is_archived/muted_until/folders[]/provider/created_at
- * (UI-preference/platform metadata, not triage); on last_message:
- * chat_id/account_id (redundant with parent id/scoping),
- * attachments[] (a nested descriptor array — an agent that wants attachments
- * already has the message id to fetch them specifically),
- * is_seen/is_delivered/is_edited/is_mentionned/reactions[]/reaction_count/
- * provider (read-receipt/reaction internals — near-zero inbox-triage value);
- * on user: type/public_picture_url (minor, verbose-only).
+ * Default keeps: object, id, name, type, unread_count, user_id,
+ * last_message{id, sender_id, text} — identity (name + user_id), priority
+ * (unread_count), content (last_message.text), and the retrieval id/chain
+ * (id → `inbox messages <id>`, last_message.id → `message get <id> <msg_id>`).
  *
- * Kept: `user.id` + `last_message.text` are the retrieval-id/triage pair a
- * default MUST carry per the founder's bar (identify the counterpart, read
- * the preview that justified surfacing the chat).
+ * Dropped (verbose-only): account_id, is_group, is_1to1 (redundant with
+ * `type`, which stays); on last_message: account_id (redundant with the
+ * scoped connection), attachments[] (a nested descriptor array — an agent
+ * that wants attachments already has the message id to fetch them
+ * specifically).
  */
 export function slimMessageSearchItem(item: Record<string, unknown>): Record<string, unknown> {
-  const rawUser =
-    item["user"] !== null && item["user"] !== undefined && typeof item["user"] === "object"
-      ? (item["user"] as Record<string, unknown>)
-      : null;
-  const user =
-    rawUser !== null
-      ? {
-          id: rawUser["id"] ?? null,
-          display_name: rawUser["display_name"] ?? null,
-          profile_url: rawUser["profile_url"] ?? null,
-        }
-      : null;
-
   const rawLastMessage =
     item["last_message"] !== null && item["last_message"] !== undefined && typeof item["last_message"] === "object"
       ? (item["last_message"] as Record<string, unknown>)
@@ -938,8 +930,6 @@ export function slimMessageSearchItem(item: Record<string, unknown>): Record<str
           id: rawLastMessage["id"] ?? null,
           sender_id: rawLastMessage["sender_id"] ?? null,
           text: rawLastMessage["text"] ?? null,
-          timestamp: rawLastMessage["timestamp"] ?? null,
-          is_sender: rawLastMessage["is_sender"] ?? null,
         }
       : null;
 
@@ -949,9 +939,7 @@ export function slimMessageSearchItem(item: Record<string, unknown>): Record<str
     name: item["name"] ?? null,
     type: item["type"] ?? null,
     unread_count: item["unread_count"] ?? null,
-    last_message_timestamp: item["last_message_timestamp"] ?? null,
     user_id: item["user_id"] ?? null,
-    user,
     last_message: lastMessage,
   };
 }

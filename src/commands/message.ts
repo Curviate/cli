@@ -949,7 +949,7 @@ const messageSearchCommand = defineCommand({
     description:
       "Free-text search your connected account's own inbox — matches participant names AND message content (e.g. `message search \"sophie\"`). " +
       "LinkedIn's search is token-prefix: a term matching no inbox token returns an empty list (a genuine no-match), not an error. Paginate with the returned cursor (--all streams every page). " +
-      "Default output is slim (id, name, type, unread_count, user, and a trimmed last_message preview); pass --verbose for the full raw item including read-receipt/UI-state/attachment internals.",
+      "Default output is slim (id, name, type, unread_count, user_id, and a trimmed last_message preview); pass --verbose for the full raw item including account_id/is_group/is_1to1 and last_message.attachments.",
   },
   args: {
     ...GLOBAL_FLAGS,

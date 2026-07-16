@@ -95,62 +95,41 @@ describe("message search", () => {
     expect(ns.messaging.searchChats).toHaveBeenNthCalledWith(2, { query: "a", cursor: "c1" });
   });
 
-  // Curation 1 (LinkedIn-Actions M3 verbosity curation, founder-approved,
-  // binding model: generous SUFFICIENT default + --verbose exposes only
-  // deep/noisy extras). `message search` is the richest/noisiest response in
-  // the whole 26-command set — a raw substrate passthrough with a typo'd
-  // field (is_mentionned) and read-receipt/UI-state/attachment internals.
-  // Default keeps who/what/unread/recency/direction/id; the rest moves to
-  // --verbose only. See slimMessageSearch in lib/slim.ts.
+  // Curation 2 (LinkedIn-Actions M3, post-qa-live-reverify fix).
+  // The original curation (see git history) was built from the SDK TYPE,
+  // which over-declares fields the live `search-chats` endpoint does NOT
+  // return (`user{}`, `last_message_timestamp`, `last_message.timestamp`,
+  // `last_message.is_sender`, read-receipt/UI-state/reaction/folder
+  // metadata) — the slim projector synthesized those as null, a footgun for
+  // a typed agent reading e.g. `item.user.display_name`. This fixture is the
+  // LIVE-ACTUAL item shape qa captured against the real substrate: object,
+  // account_id, id, name, type, is_group, is_1to1, unread_count, user_id,
+  // last_message{object, account_id, id, text, sender_id, attachments[]}.
+  // No `user{}`, no timestamps, no is_sender — those keys simply do not
+  // exist on the wire, and the fixture must not invent them either.
   const fullSearchItem = {
     object: "chat",
-    id: "chat_1",
     account_id: "acc_1",
+    id: "chat_1",
     name: "Sophie Keller",
     type: "1to1",
     is_group: false,
     is_1to1: true,
-    is_channel: false,
-    is_pinned: false,
-    is_readonly: false,
-    is_archived: false,
-    muted_until: false,
     unread_count: 2,
-    folders: ["INBOX"],
-    provider: "linkedin",
-    created_at: "2026-01-01T00:00:00Z",
-    last_message_timestamp: "2026-07-15T12:00:00Z",
     user_id: "ACoAA_sophie",
     last_message: {
       object: "message",
-      id: "msg_1",
       account_id: "acc_1",
-      chat_id: "chat_1",
-      sender_id: "ACoAA_sophie",
+      id: "msg_1",
       text: "Let's connect next week",
+      sender_id: "ACoAA_sophie",
       attachments: [
         { id: "att_1", mimetype: "image/png", type: "img", filename: "x.png", file_size: 100, unavailable: false },
       ],
-      timestamp: "2026-07-15T12:00:00Z",
-      is_sender: false,
-      is_seen: true,
-      is_delivered: true,
-      is_edited: false,
-      is_mentionned: false,
-      reactions: [{ type: "LIKE", count: 1 }],
-      reaction_count: 1,
-      provider: "linkedin",
-    },
-    user: {
-      id: "ACoAA_sophie",
-      type: "individual",
-      display_name: "Sophie Keller",
-      profile_url: "https://www.linkedin.com/in/sophie-keller",
-      public_picture_url: "https://example.com/pic.jpg",
     },
   };
 
-  it("default output keeps who/what/unread/recency/direction/id and drops the read-receipt/UI-state/attachment internals", async () => {
+  it("default output keeps identity/priority/content/retrieval-id and drops the live-verbose-only fields — no synthesized user{}/timestamp/is_sender", async () => {
     (ns.messaging.searchChats as Mock).mockResolvedValue({ object: "chat_list", items: [fullSearchItem], cursor: null });
     const { runMessageSearch } = await import("../../src/commands/message.js");
     const out = makeOut();
@@ -160,7 +139,7 @@ describe("message search", () => {
 
     // Retrieval id + the triage set the founder called out explicitly.
     expect(item["id"]).toBe("chat_1");
-    expect((item["user"] as Record<string, unknown>)["id"]).toBe("ACoAA_sophie");
+    expect(item["user_id"]).toBe("ACoAA_sophie");
     expect((item["last_message"] as Record<string, unknown>)["text"]).toBe("Let's connect next week");
 
     // Rest of the default field set.
@@ -168,51 +147,32 @@ describe("message search", () => {
     expect(item["name"]).toBe("Sophie Keller");
     expect(item["type"]).toBe("1to1");
     expect(item["unread_count"]).toBe(2);
-    expect(item["last_message_timestamp"]).toBe("2026-07-15T12:00:00Z");
-    expect(item["user_id"]).toBe("ACoAA_sophie");
-    expect(item["user"]).toEqual({
-      id: "ACoAA_sophie",
-      display_name: "Sophie Keller",
-      profile_url: "https://www.linkedin.com/in/sophie-keller",
-    });
     expect(item["last_message"]).toEqual({
       id: "msg_1",
       sender_id: "ACoAA_sophie",
       text: "Let's connect next week",
-      timestamp: "2026-07-15T12:00:00Z",
-      is_sender: false,
     });
     expect(result.cursor).toBeNull();
 
-    // Verbose-only fields are gone from the default.
+    // Verbose-only fields (live-actual, redundant-with-type or noisy) are
+    // gone from the default.
     expect(item).not.toHaveProperty("account_id");
     expect(item).not.toHaveProperty("is_group");
     expect(item).not.toHaveProperty("is_1to1");
-    expect(item).not.toHaveProperty("is_channel");
-    expect(item).not.toHaveProperty("is_pinned");
-    expect(item).not.toHaveProperty("is_readonly");
-    expect(item).not.toHaveProperty("is_archived");
-    expect(item).not.toHaveProperty("muted_until");
-    expect(item).not.toHaveProperty("folders");
-    expect(item).not.toHaveProperty("provider");
-    expect(item).not.toHaveProperty("created_at");
     const lastMessage = item["last_message"] as Record<string, unknown>;
-    expect(lastMessage).not.toHaveProperty("chat_id");
     expect(lastMessage).not.toHaveProperty("account_id");
     expect(lastMessage).not.toHaveProperty("attachments");
-    expect(lastMessage).not.toHaveProperty("is_seen");
-    expect(lastMessage).not.toHaveProperty("is_delivered");
-    expect(lastMessage).not.toHaveProperty("is_edited");
-    expect(lastMessage).not.toHaveProperty("is_mentionned");
-    expect(lastMessage).not.toHaveProperty("reactions");
-    expect(lastMessage).not.toHaveProperty("reaction_count");
-    expect(lastMessage).not.toHaveProperty("provider");
-    const user = item["user"] as Record<string, unknown>;
-    expect(user).not.toHaveProperty("type");
-    expect(user).not.toHaveProperty("public_picture_url");
+
+    // The whole point of the fix: no field the live endpoint doesn't return
+    // is ever synthesized into the default — no null `user{}`, no null
+    // timestamp, no null is_sender.
+    expect(item).not.toHaveProperty("user");
+    expect(item).not.toHaveProperty("last_message_timestamp");
+    expect(lastMessage).not.toHaveProperty("timestamp");
+    expect(lastMessage).not.toHaveProperty("is_sender");
   });
 
-  it("--verbose returns the full raw item, every read-receipt/UI-state/attachment field included", async () => {
+  it("--verbose returns the full raw item, exactly the live-actual keys — account_id/is_group/is_1to1/last_message.attachments included, still no user{}/timestamp/is_sender", async () => {
     (ns.messaging.searchChats as Mock).mockResolvedValue({ object: "chat_list", items: [fullSearchItem], cursor: null });
     const { runMessageSearch } = await import("../../src/commands/message.js");
     const out = makeOut();
