@@ -64,6 +64,35 @@ describe("pre-router — id-first reroute (D4a)", () => {
       ["1035", "--account", "acc_x"],
     ],
     ["profile <id> followers", asCmd(profileCommand), ["jdoe", "followers"], "followers", ["jdoe"]],
+    // Multi-positional company subcommands (2-3 positionals of their own) —
+    // the id-first order `company --help` documents (`<ID> employees|...|chat|
+    // messages|message|...`) must reroute the same as the single-positional
+    // subs, not hard-fail. Fix 1 (WP6-B): the extras check used to require
+    // EXACTLY one extra positional, so a 2-3-arity subcommand's own
+    // positionals (chatId, messageId) pushed extras.length above 1 and the
+    // reroute never fired — only subcommand-first order worked.
+    ["company <id> chat <chatId>", asCmd(companyCommand), ["1035", "chat", "abc"], "chat", ["1035", "abc"]],
+    [
+      "company <id> messages <chatId>",
+      asCmd(companyCommand),
+      ["1035", "messages", "abc"],
+      "messages",
+      ["1035", "abc"],
+    ],
+    [
+      "company <id> messages <chatId> --limit 5 (subflag preserved)",
+      asCmd(companyCommand),
+      ["1035", "messages", "abc", "--limit", "5"],
+      "messages",
+      ["1035", "abc", "--limit", "5"],
+    ],
+    [
+      "company <id> message <chatId> <messageId>",
+      asCmd(companyCommand),
+      ["1035", "message", "abc", "def"],
+      "message",
+      ["1035", "abc", "def"],
+    ],
   ];
 
   it.each(reroutes)("%s reroutes to the named subcommand, id preserved", async (_label, tree, rawArgs, leafName, leafArgs) => {
@@ -100,6 +129,7 @@ describe("pre-router — non-subcommand extra positional exits 2, never silent-s
 
   const badCases: Array<[string, CommandDef, string[]]> = [
     ["company <id> <bogus>", asCmd(companyCommand), ["1035", "bogus"]],
+    ["company <id> <bogus1> <bogus2>", asCmd(companyCommand), ["1035", "bogus1", "bogus2"]],
     ["connect <slug> <bogus>", asCmd(connectCommand), ["jdoe", "bogus"]],
     ["message <chat> <text> <bogus>", asCmd(messageCommand), ["chat_9", "hi", "bogus"]],
     ["profile <id> <bogus>", asCmd(profileCommand), ["jdoe", "bogus"]],

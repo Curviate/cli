@@ -331,14 +331,18 @@ export async function resolveLeaf(
       const extras = positionals.slice(declaredCount);
       if (extras.length > 0) {
         const first = extras[0]!;
-        // Exactly one extra positional that names a subcommand → the id-first
-        // form `<group> <id> <sub>`, equivalent to `<group> <sub> <id>`. Drop
-        // only that token and descend into the subcommand with the remaining
-        // args (the id positional + any flags, which the subcommand re-parses).
-        if (
-          extras.length === 1 &&
-          Object.prototype.hasOwnProperty.call(subCommands, first.token)
-        ) {
+        // The first extra positional names a subcommand → the id-first form
+        // `<group> <id> <sub> [<sub-positional>...]`, equivalent to `<group>
+        // <sub> <id> [<sub-positional>...]`. Drop only that token and descend
+        // into the subcommand with the remaining args (the id positional +
+        // any further positionals/flags the subcommand itself declares — e.g.
+        // `company <id> messages <chatId>` or `company <id> message <chatId>
+        // <messageId>` — which the subcommand re-parses). Not restricted to
+        // exactly one extra: a multi-positional subcommand (2-3 of its own
+        // positionals) must reroute the same as a single-positional one, or
+        // the documented id-first order (`company --help`'s `<ID>
+        // employees|...|chat|messages|message|...`) only half-works.
+        if (Object.prototype.hasOwnProperty.call(subCommands, first.token)) {
           const sub = (await resolveValue(subCommands[first.token])) as AnyCommand;
           const remaining = rawArgs.filter((_, i) => i !== first.index);
           return resolveLeaf(sub, remaining);
