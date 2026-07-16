@@ -37,6 +37,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
+import { slimMessageSearch } from "../lib/slim.js";
 import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import { writeBinaryOutput, BinaryOutputError } from "../lib/binary.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
@@ -64,6 +65,7 @@ type MessageFlags = {
   "max-pages"?: string;
   "page-delay"?: string;
   preview?: boolean;
+  verbose?: boolean;
   "api-key"?: string;
   "base-url"?: string;
   timeout?: string;
@@ -109,6 +111,7 @@ function resolveOutputOpts(flags: MessageFlags) {
     json: (flags.json ?? false) || !process.stdout.isTTY,
     isTTY: process.stdout.isTTY ?? false,
     fields: flags.fields,
+    verbose: flags.verbose ?? false,
   };
 }
 
@@ -933,7 +936,7 @@ export async function runMessageSearch(
       }
     } else {
       const result = await ns.messaging.searchChats(params as SearchChatsArg);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimMessageSearch }, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -945,7 +948,8 @@ const messageSearchCommand = defineCommand({
     name: "search",
     description:
       "Free-text search your connected account's own inbox — matches participant names AND message content (e.g. `message search \"sophie\"`). " +
-      "LinkedIn's search is token-prefix: a term matching no inbox token returns an empty list (a genuine no-match), not an error. Paginate with the returned cursor (--all streams every page).",
+      "LinkedIn's search is token-prefix: a term matching no inbox token returns an empty list (a genuine no-match), not an error. Paginate with the returned cursor (--all streams every page). " +
+      "Default output is slim (id, name, type, unread_count, user, and a trimmed last_message preview); pass --verbose for the full raw item including read-receipt/UI-state/attachment internals.",
   },
   args: {
     ...GLOBAL_FLAGS,

@@ -35,6 +35,7 @@ import { resolveMemberPublicIdentifier, MemberResolutionError } from "../lib/mem
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
+import { slimGroup } from "../lib/slim.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
 type GroupsFlags = {
@@ -165,7 +166,7 @@ export async function runGroupsList(
       }
     } else {
       const result = await ns.groups.list(params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(result, { ...outOpts, slim: slimGroup }, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
@@ -188,7 +189,7 @@ export async function runGroupsGet(
   const outOpts = resolveOutputOpts(flags);
   try {
     const result = await client.account(accountId).groups.get(group);
-    renderSuccess(result, outOpts, out);
+    renderSuccess(result, { ...outOpts, slim: slimGroup }, out);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -268,7 +269,8 @@ const groupsListCommand = defineCommand({
       "List the LinkedIn groups a member belongs to, each enriched to full group detail. " +
       "Reads your connected account's own groups by default; pass --member <vanity | /in/ URL | provider id> to read another member's public group set (a partial read — that member's interests-groups section). " +
       "A provider id (ACoAA…/ADoAA…/AEoAA…) is resolved to a public identifier automatically before the request; an unresolvable identifier exits 2 rather than silently returning an empty list. " +
-      "The id on each group is what `groups get` / `groups members` consume. Paginate with the returned cursor (--all streams every page as NDJSON; walk until cursor is null).",
+      "The id on each group is what `groups get` / `groups members` consume. Paginate with the returned cursor (--all streams every page as NDJSON; walk until cursor is null). " +
+      "Default output is slim (id, name, member_count, admin, and the other small scalars); pass --verbose for the full item including sample_past_members[] (a partial ~12-item bare-id sample).",
   },
   args: {
     ...GLOBAL_FLAGS,
@@ -286,7 +288,8 @@ const groupsGetCommand = defineCommand({
   meta: {
     name: "get",
     description:
-      "Retrieve one LinkedIn group's full detail — name, description, member count, your membership status, and admin contact.",
+      "Retrieve one LinkedIn group's full detail — name, description, member count, your membership status, and admin contact. " +
+      "Default output is slim (id, name, member_count, admin, and the other small scalars); pass --verbose for the full item including sample_past_members[] (a partial ~12-item bare-id sample).",
   },
   args: {
     ...GLOBAL_FLAGS,

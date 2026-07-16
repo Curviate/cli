@@ -881,3 +881,164 @@ export function reencodeInvitableFollowers(data: unknown): Record<string, unknow
 
   return { ...d, items };
 }
+
+// ---------------------------------------------------------------------------
+// message search (LinkedIn-Actions M3 verbosity curation, founder-approved)
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single `message search` item
+ * (`GET /v1/{account_id}/chats/search`, `messaging.searchChats`).
+ *
+ * This is the richest/noisiest response in the whole 26-command CLI surface —
+ * a near-raw substrate passthrough (almost no field-level docs upstream, a
+ * typo'd field `is_mentionned`, redundant type/boolean pairs) rather than a
+ * hand-curated product shape like every other list endpoint.
+ *
+ * Exact fields returned: object, id, name, type, unread_count,
+ * last_message_timestamp, user_id, user{id, display_name, profile_url},
+ * last_message{id, sender_id, text, timestamp, is_sender}.
+ *
+ * Dropped (verbose-only): account_id (redundant with the scoped connection);
+ * is_group/is_1to1/is_channel (redundant with `type`, which stays);
+ * is_pinned/is_readonly/is_archived/muted_until/folders[]/provider/created_at
+ * (UI-preference/platform metadata, not triage); on last_message:
+ * chat_id/account_id (redundant with parent id/scoping),
+ * attachments[] (a nested descriptor array — an agent that wants attachments
+ * already has the message id to fetch them specifically),
+ * is_seen/is_delivered/is_edited/is_mentionned/reactions[]/reaction_count/
+ * provider (read-receipt/reaction internals — near-zero inbox-triage value);
+ * on user: type/public_picture_url (minor, verbose-only).
+ *
+ * Kept: `user.id` + `last_message.text` are the retrieval-id/triage pair a
+ * default MUST carry per the founder's bar (identify the counterpart, read
+ * the preview that justified surfacing the chat).
+ */
+export function slimMessageSearchItem(item: Record<string, unknown>): Record<string, unknown> {
+  const rawUser =
+    item["user"] !== null && item["user"] !== undefined && typeof item["user"] === "object"
+      ? (item["user"] as Record<string, unknown>)
+      : null;
+  const user =
+    rawUser !== null
+      ? {
+          id: rawUser["id"] ?? null,
+          display_name: rawUser["display_name"] ?? null,
+          profile_url: rawUser["profile_url"] ?? null,
+        }
+      : null;
+
+  const rawLastMessage =
+    item["last_message"] !== null && item["last_message"] !== undefined && typeof item["last_message"] === "object"
+      ? (item["last_message"] as Record<string, unknown>)
+      : null;
+  const lastMessage =
+    rawLastMessage !== null
+      ? {
+          id: rawLastMessage["id"] ?? null,
+          sender_id: rawLastMessage["sender_id"] ?? null,
+          text: rawLastMessage["text"] ?? null,
+          timestamp: rawLastMessage["timestamp"] ?? null,
+          is_sender: rawLastMessage["is_sender"] ?? null,
+        }
+      : null;
+
+  return {
+    object: item["object"] ?? null,
+    id: item["id"] ?? null,
+    name: item["name"] ?? null,
+    type: item["type"] ?? null,
+    unread_count: item["unread_count"] ?? null,
+    last_message_timestamp: item["last_message_timestamp"] ?? null,
+    user_id: item["user_id"] ?? null,
+    user,
+    last_message: lastMessage,
+  };
+}
+
+/**
+ * Slim-default projection for the `message search` list envelope.
+ * Projects each item via slimMessageSearchItem; preserves the envelope's own
+ * `object`/`cursor` (top-level cursor, not applied per-item since search
+ * results have none of their own).
+ */
+export function slimMessageSearch(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimMessageSearchItem)
+    : [];
+
+  return { object: d["object"] ?? null, items, cursor: d["cursor"] ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// groups list / groups get (LinkedIn-Actions M3 verbosity curation,
+// founder-approved)
+// ---------------------------------------------------------------------------
+
+/**
+ * Slim-default projection for a single group item — shared by `groups list`
+ * (`GET /v1/{account_id}/profile/groups`, item shape) and `groups get`
+ * (`GET /v1/{account_id}/groups/{group}`, scalar) — both endpoints return the
+ * identical fully-enriched group-detail shape.
+ *
+ * Exact fields returned: id, entity_urn, name, member_count, description,
+ * type, public_visibility, direct_join_enabled, is_member, membership_status,
+ * url, admin{name, connection_degree, member_id, vanity, profile_url},
+ * post_approval_enabled, invitation_level.
+ *
+ * Dropped (verbose-only): `sample_past_members[]` — a partial (~12-item)
+ * bare-member-id array with no name/headline attached, so it carries no
+ * direct triage value without an extra hydrate call per id; an agent that
+ * wants the actual roster is better served by `groups members`, which
+ * already returns name+headline+relationship per member.
+ *
+ * `admin{}` — the API's own doc-comment calls it "the highest-value
+ * per-community contact" — MUST survive default per the founder's explicit
+ * sign-off; passed through whole (small, ≤5-key object, nothing to trim
+ * inside it).
+ */
+export function slimGroupItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: item["id"] ?? null,
+    entity_urn: item["entity_urn"] ?? null,
+    name: item["name"] ?? null,
+    member_count: item["member_count"] ?? null,
+    description: item["description"] ?? null,
+    type: item["type"] ?? null,
+    public_visibility: item["public_visibility"] ?? null,
+    direct_join_enabled: item["direct_join_enabled"] ?? null,
+    is_member: item["is_member"] ?? null,
+    membership_status: item["membership_status"] ?? null,
+    url: item["url"] ?? null,
+    admin: item["admin"] ?? null,
+    post_approval_enabled: item["post_approval_enabled"] ?? null,
+    invitation_level: item["invitation_level"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection applied to BOTH `groups list` and `groups get`.
+ *
+ * `groups list` returns a list envelope (`{object, items, paging, cursor}`);
+ * `groups get` returns a bare scalar group object — same per-item shape
+ * either way. Auto-detects which form it received: an `items[]` array means
+ * a list envelope (each item projected via slimGroupItem, `object`/`paging`/
+ * `cursor` preserved via spread); otherwise the data itself is a single
+ * group and is projected directly.
+ */
+export function slimGroup(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  if (Array.isArray(d["items"])) {
+    const items = (d["items"] as Array<Record<string, unknown>>).map(slimGroupItem);
+    return { ...d, items };
+  }
+
+  return slimGroupItem(d);
+}

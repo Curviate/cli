@@ -35,6 +35,39 @@ function stdout(out: ReturnType<typeof makeOut>): string {
 }
 type Flags = Record<string, unknown>;
 
+// Curation 2 (LinkedIn-Actions M3 verbosity curation, founder-approved,
+// binding model: generous SUFFICIENT default + --verbose exposes only
+// deep/noisy extras). `groups list` and `groups get` share the same
+// fully-enriched group-detail shape. Only `sample_past_members[]` (a partial
+// ~12-item bare-id array, no name/headline, near-zero triage value without an
+// extra hydrate per id) is verbose-only — `admin{}` (the API's own
+// highest-value per-community contact) MUST survive default. See slimGroup
+// in lib/slim.ts.
+const fullGroupItem = {
+  object: "group",
+  id: "9123014",
+  entity_urn: "urn:li:group:9123014",
+  name: "GTM Engineering",
+  member_count: 5000,
+  description: "A group for GTM engineers.",
+  type: "STANDARD",
+  public_visibility: true,
+  direct_join_enabled: false,
+  is_member: true,
+  membership_status: "MEMBER",
+  url: "https://www.linkedin.com/groups/9123014/",
+  admin: {
+    name: "Raphael Redmer",
+    connection_degree: "1st",
+    member_id: "m_1",
+    vanity: "raphael-redmer",
+    profile_url: "https://www.linkedin.com/in/raphael-redmer",
+  },
+  post_approval_enabled: true,
+  invitation_level: "ALL",
+  sample_past_members: Array.from({ length: 12 }, (_, i) => `member_${i}`),
+};
+
 describe("groups list", () => {
   let ns: ReturnType<typeof makeNs>;
   let client: ReturnType<typeof makeClient>;
@@ -152,6 +185,58 @@ describe("groups list", () => {
       exit.mockRestore();
     }
   });
+
+  it("default output drops sample_past_members[] but keeps everything else, including admin{}", async () => {
+    (ns.groups.list as Mock).mockResolvedValue({
+      object: "group_list",
+      items: [fullGroupItem],
+      cursor: null,
+      paging: { total_count: 1 },
+    });
+    const { runGroupsList } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsList(client as never, { account: "acc_1", json: true } as Flags, out);
+    const result = JSON.parse(stdout(out)) as { items: Array<Record<string, unknown>>; paging: unknown };
+    const item = result.items[0]!;
+
+    // Retrieval id + the API's own highest-value triage contact.
+    expect(item["id"]).toBe("9123014");
+    expect(item["admin"]).toEqual(fullGroupItem.admin);
+
+    expect(item["entity_urn"]).toBe("urn:li:group:9123014");
+    expect(item["name"]).toBe("GTM Engineering");
+    expect(item["member_count"]).toBe(5000);
+    expect(item["description"]).toBe("A group for GTM engineers.");
+    expect(item["type"]).toBe("STANDARD");
+    expect(item["public_visibility"]).toBe(true);
+    expect(item["direct_join_enabled"]).toBe(false);
+    expect(item["is_member"]).toBe(true);
+    expect(item["membership_status"]).toBe("MEMBER");
+    expect(item["url"]).toBe("https://www.linkedin.com/groups/9123014/");
+    expect(item["post_approval_enabled"]).toBe(true);
+    expect(item["invitation_level"]).toBe("ALL");
+
+    expect(item).not.toHaveProperty("sample_past_members");
+    expect(result.paging).toEqual({ total_count: 1 }); // envelope untouched by the item slim
+  });
+
+  it("--verbose returns the full raw item, sample_past_members[] included", async () => {
+    (ns.groups.list as Mock).mockResolvedValue({ object: "group_list", items: [fullGroupItem], cursor: null });
+    const { runGroupsList } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsList(client as never, { account: "acc_1", json: true, verbose: true } as Flags, out);
+    const result = JSON.parse(stdout(out)) as { items: Array<Record<string, unknown>> };
+    expect(result.items[0]).toEqual(fullGroupItem);
+  });
+
+  it("--all streams the raw (unslimmed) item — slim does not apply to the NDJSON path", async () => {
+    (ns.groups.list as Mock).mockResolvedValueOnce({ object: "group_list", items: [fullGroupItem], cursor: null });
+    const { runGroupsList } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsList(client as never, { account: "acc_1", json: true, all: true, "page-delay": "0" } as Flags, out);
+    const lines = stdout(out).trim().split("\n").filter(Boolean);
+    expect(JSON.parse(lines[0]!)).toEqual(fullGroupItem);
+  });
 });
 
 describe("groups get", () => {
@@ -201,6 +286,29 @@ describe("groups get", () => {
     } finally {
       exit.mockRestore();
     }
+  });
+
+  it("default output drops sample_past_members[] but keeps everything else, including admin{}", async () => {
+    (ns.groups.get as Mock).mockResolvedValue(fullGroupItem);
+    const { runGroupsGet } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsGet(client as never, { account: "acc_1", json: true, group: "9123014" } as Flags, out);
+    const result = JSON.parse(stdout(out)) as Record<string, unknown>;
+
+    expect(result["id"]).toBe("9123014");
+    expect(result["admin"]).toEqual(fullGroupItem.admin);
+    expect(result["member_count"]).toBe(5000);
+    expect(result["name"]).toBe("GTM Engineering");
+    expect(result).not.toHaveProperty("sample_past_members");
+  });
+
+  it("--verbose returns the full raw item, sample_past_members[] included", async () => {
+    (ns.groups.get as Mock).mockResolvedValue(fullGroupItem);
+    const { runGroupsGet } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsGet(client as never, { account: "acc_1", json: true, group: "9123014", verbose: true } as Flags, out);
+    const result = JSON.parse(stdout(out)) as Record<string, unknown>;
+    expect(result).toEqual(fullGroupItem);
   });
 });
 
