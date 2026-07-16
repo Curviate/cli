@@ -31,7 +31,7 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
-import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags, sliceToLimit } from "../lib/paginate.js";
 import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
 import type { Curviate, CurviateError } from "@curviate/sdk";
 
@@ -534,7 +534,7 @@ export async function runPostSaved(
       }
     } else {
       const result = await ns.posts.listSaved(params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(sliceToLimit(result, params["limit"] as number | undefined), outOpts, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);

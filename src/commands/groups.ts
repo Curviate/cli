@@ -30,7 +30,7 @@
 
 import { defineCommand } from "citty";
 import { GLOBAL_FLAGS } from "../lib/global-flags.js";
-import { streamAll, pageDelayFromFlags } from "../lib/paginate.js";
+import { streamAll, pageDelayFromFlags, sliceToLimit } from "../lib/paginate.js";
 import { resolveMemberPublicIdentifier, MemberResolutionError } from "../lib/member-id.js";
 import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
@@ -229,7 +229,7 @@ export async function runGroupsMembers(
       }
     } else {
       const result = await ns.groups.members(group, params);
-      renderSuccess(result, outOpts, out);
+      renderSuccess(sliceToLimit(result, params.limit), outOpts, out);
     }
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);

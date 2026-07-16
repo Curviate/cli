@@ -74,6 +74,36 @@ describe("post saved", () => {
     expect(lines).toHaveLength(2);
     expect(ns.posts.listSaved).toHaveBeenNthCalledWith(2, { cursor: "c1" });
   });
+
+  // Fix 3 (WP6-B): the server honors --limit as a LOWER bound — it returns
+  // >= limit items up to its own internal page size (observed: PAGE_SIZE 10),
+  // not exactly limit. The CLI now slices the returned items to the
+  // requested N client-side — least-surprise: the user asked for 5.
+  it("--limit 5 slices the server's over-fetched page down to 5 items", async () => {
+    (ns.posts.listSaved as Mock).mockResolvedValue({
+      object: "saved_post_list",
+      items: Array.from({ length: 10 }, (_, i) => ({ post_id: `${i}` })),
+      cursor: "c1",
+    });
+    const { runPostSaved } = await import("../../src/commands/post.js");
+    const out = makeOut();
+    await runPostSaved(client as never, { account: "acc_1", json: true, limit: "5" } as Flags, out);
+    expect(ns.posts.listSaved).toHaveBeenCalledWith({ limit: 5 }); // still forwarded upstream
+    const result = JSON.parse(stdout(out)) as { items: unknown[]; cursor: string | null };
+    expect(result.items).toHaveLength(5);
+    expect(result.cursor).toBe("c1");
+  });
+
+  it("--all is unaffected by the slice — every item across pages still streams", async () => {
+    (ns.posts.listSaved as Mock)
+      .mockResolvedValueOnce({ object: "saved_post_list", items: Array.from({ length: 10 }, (_, i) => ({ post_id: `a${i}` })), cursor: "c1" })
+      .mockResolvedValueOnce({ object: "saved_post_list", items: Array.from({ length: 10 }, (_, i) => ({ post_id: `b${i}` })), cursor: null });
+    const { runPostSaved } = await import("../../src/commands/post.js");
+    const out = makeOut();
+    await runPostSaved(client as never, { account: "acc_1", json: true, limit: "5", all: true, "page-delay": "0" } as Flags, out);
+    const lines = stdout(out).trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(20);
+  });
 });
 
 describe("post save", () => {

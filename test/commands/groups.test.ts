@@ -241,4 +241,62 @@ describe("groups members", () => {
       exit.mockRestore();
     }
   });
+
+  // Fix 3 (WP6-B): the server honors --limit as a LOWER bound — it returns
+  // >= limit items up to its own internal page size (observed: PAGE_SIZE 10),
+  // not exactly limit. `--limit 5` still forwards to the server (a smaller
+  // requested page is still a real hint upstream), but the CLI slices the
+  // returned items down to the requested N client-side — least-surprise: the
+  // user asked for 5, they should see 5.
+  it("--limit 5 slices the server's over-fetched page down to 5 items", async () => {
+    (ns.groups.members as Mock).mockResolvedValue({
+      object: "group_member_list",
+      items: Array.from({ length: 10 }, (_, i) => ({ name: `Member ${i}` })),
+      cursor: "c1",
+    });
+    const { runGroupsMembers } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsMembers(client as never, { account: "acc_1", json: true, group: "9123014", limit: "5" } as Flags, out);
+    expect(ns.groups.members).toHaveBeenCalledWith("9123014", { limit: 5 }); // still forwarded upstream
+    const result = JSON.parse(stdout(out)) as { items: unknown[]; cursor: string | null };
+    expect(result.items).toHaveLength(5);
+    expect(result.cursor).toBe("c1"); // envelope's cursor is untouched by the slice
+  });
+
+  it("no --limit → no slicing, full page passes through", async () => {
+    (ns.groups.members as Mock).mockResolvedValue({
+      object: "group_member_list",
+      items: Array.from({ length: 10 }, (_, i) => ({ name: `Member ${i}` })),
+      cursor: null,
+    });
+    const { runGroupsMembers } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsMembers(client as never, { account: "acc_1", json: true, group: "9123014" } as Flags, out);
+    const result = JSON.parse(stdout(out)) as { items: unknown[] };
+    expect(result.items).toHaveLength(10);
+  });
+
+  it("--limit larger than the returned page is a no-op (never pads)", async () => {
+    (ns.groups.members as Mock).mockResolvedValue({
+      object: "group_member_list",
+      items: [{ name: "Only One" }],
+      cursor: null,
+    });
+    const { runGroupsMembers } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsMembers(client as never, { account: "acc_1", json: true, group: "9123014", limit: "20" } as Flags, out);
+    const result = JSON.parse(stdout(out)) as { items: unknown[] };
+    expect(result.items).toHaveLength(1);
+  });
+
+  it("--all is unaffected by the slice — every item across pages still streams", async () => {
+    (ns.groups.members as Mock)
+      .mockResolvedValueOnce({ object: "group_member_list", items: Array.from({ length: 10 }, (_, i) => ({ name: `A${i}` })), cursor: "c1" })
+      .mockResolvedValueOnce({ object: "group_member_list", items: Array.from({ length: 10 }, (_, i) => ({ name: `B${i}` })), cursor: null });
+    const { runGroupsMembers } = await import("../../src/commands/groups.js");
+    const out = makeOut();
+    await runGroupsMembers(client as never, { account: "acc_1", json: true, group: "9123014", limit: "5", all: true, "page-delay": "0" } as Flags, out);
+    const lines = stdout(out).trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(20); // both full pages — the slice never applies to --all streaming
+  });
 });

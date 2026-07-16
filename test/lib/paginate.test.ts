@@ -6,6 +6,7 @@ import {
   ndjsonModeNotice,
   pageDelayFrom,
   DEFAULT_PAGE_DELAY_MS,
+  sliceToLimit,
 } from "../../src/lib/paginate.js";
 
 function makeOut() {
@@ -348,5 +349,42 @@ describe("lib/paginate — pageDelayFrom (flag parsing)", () => {
     expect(pageDelayFrom("-5")).toBeUndefined();
     expect(pageDelayFrom("abc")).toBeUndefined();
     expect(pageDelayFrom("")).toBeUndefined();
+  });
+});
+
+describe("lib/paginate — sliceToLimit (Fix 3, WP6-B)", () => {
+  it("slices `items` down to `limit` when the page over-fetches", () => {
+    const result = sliceToLimit({ items: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], cursor: "c1" }, 5);
+    expect(result.items).toEqual([1, 2, 3, 4, 5]);
+    expect(result.cursor).toBe("c1"); // envelope fields beyond items are untouched
+  });
+
+  it("slices `data` down to `limit` when the response uses the `data` shape instead of `items`", () => {
+    const result = sliceToLimit({ data: ["a", "b", "c"], cursor: null }, 2);
+    expect(result.data).toEqual(["a", "b"]);
+  });
+
+  it("limit undefined → no-op, original object returned unchanged", () => {
+    const input = { items: [1, 2, 3] };
+    expect(sliceToLimit(input, undefined)).toBe(input); // same reference — no copy on the no-op path
+  });
+
+  it("limit larger than (or equal to) the page → no-op, never pads", () => {
+    const input = { items: [1, 2] };
+    expect(sliceToLimit(input, 5)).toEqual({ items: [1, 2] });
+    expect(sliceToLimit(input, 2)).toBe(input); // exact match — still a no-op, no new array allocated
+  });
+
+  it("limit <= 0 or non-finite → no-op (defensive; a real command never sends these, but the helper must not misbehave)", () => {
+    const input = { items: [1, 2, 3] };
+    expect(sliceToLimit(input, 0)).toBe(input);
+    expect(sliceToLimit(input, -1)).toBe(input);
+    expect(sliceToLimit(input, NaN)).toBe(input);
+  });
+
+  it("neither `items` nor `data` present → no-op, never throws (non-list response shape)", () => {
+    const input: { id: string; items?: unknown[]; data?: unknown[] } = { id: "single-object" };
+    expect(() => sliceToLimit(input, 5)).not.toThrow();
+    expect(sliceToLimit(input, 5)).toBe(input);
   });
 });

@@ -106,6 +106,44 @@ export function pageDelayFromFlags(flags: { "page-delay"?: string }): number | u
 /** Real timer sleep — the default injected into `streamAll`. */
 const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Slice a single-page list response's `items` (or `data`) array down to at
+ * most `limit` entries, client-side.
+ *
+ * Some list endpoints honor `--limit` as a LOWER bound, not an exact count:
+ * the server returns >= limit items up to its own internal page size
+ * (observed live: PAGE_SIZE 10 regardless of a smaller requested limit —
+ * `groups members --limit 5` and `post saved --limit 5` both still returned
+ * 10). Left unhandled, a caller asking for N silently receives up to the
+ * server's page size instead — least-surprise says the CLI should honor what
+ * was asked. `limit` is still forwarded to the server as-is (a smaller
+ * requested page is a real hint upstream, and narrows the over-fetch); this
+ * only trims the display/output side.
+ *
+ * Applied ONLY to the single-page (non `--all`) read path at each call site.
+ * `--all` already walks every page via its own cursor/`--max-pages` contract,
+ * where a client-side total-item cap has no well-defined meaning — call
+ * sites must not run streamed items through this.
+ *
+ * No-op (returns the SAME reference, not a copy) when `limit` is
+ * unset/non-positive/non-finite, the page is already at or under the limit,
+ * or the response carries neither an `items` nor `data` array — never throws
+ * on a non-list response shape.
+ */
+export function sliceToLimit<T extends { items?: unknown[]; data?: unknown[] }>(
+  result: T,
+  limit: number | undefined,
+): T {
+  if (limit === undefined || !Number.isFinite(limit) || limit <= 0) return result;
+  if (Array.isArray(result.items) && result.items.length > limit) {
+    return { ...result, items: result.items.slice(0, limit) };
+  }
+  if (Array.isArray(result.data) && result.data.length > limit) {
+    return { ...result, data: result.data.slice(0, limit) };
+  }
+  return result;
+}
+
 /** The canonical --all truncation JSON sentinel line, including the trailing newline. */
 export function truncationSentinelLine(pagesFetched: number, hasMore: boolean): string {
   return JSON.stringify({ object: "stream_truncated", pages_fetched: pagesFetched, has_more: hasMore }) + "\n";
