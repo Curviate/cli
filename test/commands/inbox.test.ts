@@ -137,6 +137,53 @@ describe("inbox list", () => {
       exitSpy.mockRestore();
     }
   });
+
+  it("inbox list --limit 40 — exits 2 with a clear range message before any SDK call (AX P1: qa finding)", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxList(client as never, { account: "acc_1", limit: "40" } as InboxArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.listChats).not.toHaveBeenCalled();
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--limit must be between 1 and 25");
+  });
+
+  it("inbox list --limit 0 — exits 2 (below the minimum)", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxList(client as never, { account: "acc_1", limit: "0" } as InboxArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.listChats).not.toHaveBeenCalled();
+  });
+
+  it("inbox list --limit 25 — the server maximum is accepted, no client-side rejection", async () => {
+    const { runInboxList } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxList(client as never, { account: "acc_1", limit: "25", json: true } as InboxArgs, out);
+
+    expect(ns.messaging.listChats).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+  });
 });
 
 describe("inbox get", () => {
@@ -268,6 +315,26 @@ describe("inbox messages", () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+
+  it("inbox messages --limit 40 — exits 2 with a clear range message before any SDK call (AX P1: qa finding)", async () => {
+    const { runInboxMessages } = await import("../../src/commands/inbox.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxMessages(client as never, { chatId: "chat_xyz", account: "acc_1", limit: "40" } as InboxArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.messaging.listMessages).not.toHaveBeenCalled();
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--limit must be between 1 and 25");
   });
 });
 

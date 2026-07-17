@@ -67,6 +67,17 @@ import type { ErrorCode } from "@curviate/sdk";
  * A general/unscoped rate-limit signal distinct from the account-, tenant-,
  * and platform-scoped variants above, but the same "back off and retry"
  * contract — same exit bucket.
+ *
+ * Note: `PREMIUM_CONFLICT` → 8 (account / connection state). A seat resolving
+ * to both individual-Premium tiers at once (LinkedIn permits only one per
+ * profile) — the same "this account/seat is in a state that blocks the
+ * request" shape as `ACCOUNT_RESTRICTED`; user_fixable, not retryable.
+ *
+ * Note: `REAUTH_REQUIRED` → 8 (account / connection state). A scope-changing
+ * reconnect attempted with a cookie instead of credentials — grouped with
+ * `CONNECTION_IN_PROGRESS` / `ACCOUNT_ALREADY_LINKED` (the connect/reconnect
+ * flow hitting a state it cannot resolve without a different input);
+ * user_fixable (retry with `auth_method: "credentials"`), not retryable as-is.
  */
 export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   // Make the shape explicit so TypeScript catches literal errors in the values
@@ -111,6 +122,8 @@ export const EXIT_CODE_MAP: Partial<Record<ErrorCode, number>> & {
   ACCOUNT_ALREADY_LINKED: 8,
   LINKEDIN_OPERATION_NOT_SUPPORTED: 8,
   CONNECTION_REQUEST_CONFLICT: 8,
+  PREMIUM_CONFLICT: 8,
+  REAUTH_REQUIRED: 8,
 
   // Checkpoint flow (9)
   CHECKPOINT_NOT_FOUND: 9,

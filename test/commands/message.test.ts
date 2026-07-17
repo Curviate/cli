@@ -300,6 +300,136 @@ describe("message send (message <chat_id>)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// AX P1: sent_as acting-identity notice (default output, not just --verbose --json)
+// ---------------------------------------------------------------------------
+
+describe("message send — sent_as acting-identity notice", () => {
+  let ns: ReturnType<typeof makeMessagingNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeMessagingNs();
+    client = makeClient(ns);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a company-page send with a resolved name prints 'Sent as <name> (company page)' to stderr", async () => {
+    (ns.messaging.sendMessage as Mock).mockResolvedValue({
+      message_id: "msg_1",
+      sent_as: { kind: "company", company_id: "112013061", name: "RedHire" },
+    });
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "COMPANY_83734124_2-abc", text: "hi", account: "acc_1", json: true } as MessageArgs,
+      out,
+    );
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Sent as RedHire (company page)\n");
+  });
+
+  it("a company-page send with an uncorrelated page (name null) prints the generic fallback", async () => {
+    (ns.messaging.sendMessage as Mock).mockResolvedValue({
+      message_id: "msg_1",
+      sent_as: { kind: "company", company_id: null, name: null },
+    });
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "COMPANY_83734124_2-abc", text: "hi", account: "acc_1", json: true } as MessageArgs,
+      out,
+    );
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Sent as a company page\n");
+  });
+
+  it("a personal send prints no acting-identity notice", async () => {
+    (ns.messaging.sendMessage as Mock).mockResolvedValue({
+      message_id: "msg_1",
+      sent_as: { kind: "personal" },
+    });
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "CLASSIC_1-abc", text: "hi", account: "acc_1", json: true } as MessageArgs,
+      out,
+    );
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines.some((l) => l.includes("Sent as"))).toBe(false);
+  });
+
+  it("a response with no sent_as field at all prints no notice (defensive, older/mocked responses)", async () => {
+    (ns.messaging.sendMessage as Mock).mockResolvedValue({ message_id: "msg_1" });
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "CLASSIC_1-abc", text: "hi", account: "acc_1", json: true } as MessageArgs,
+      out,
+    );
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines.some((l) => l.includes("Sent as"))).toBe(false);
+  });
+});
+
+describe("message send --preview — acting-identity echo (zero network calls)", () => {
+  let ns: ReturnType<typeof makeMessagingNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    ns = makeMessagingNs();
+    client = makeClient(ns);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("--preview on a COMPANY_ chat id prints 'Will send as a company page' without any SDK call", async () => {
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "COMPANY_83734124_2-abc", text: "hi", account: "acc_1", preview: true } as MessageArgs,
+      out,
+    );
+
+    expect(ns.messaging.sendMessage).not.toHaveBeenCalled();
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Will send as a company page\n");
+  });
+
+  it("--preview on a CLASSIC_ (personal) chat id prints no acting-identity note", async () => {
+    const { runMessageSend } = await import("../../src/commands/message.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runMessageSend(
+      client as never,
+      { chatId: "CLASSIC_1-abc", text: "hi", account: "acc_1", preview: true } as MessageArgs,
+      out,
+    );
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines.some((l) => l.includes("Will send as"))).toBe(false);
+  });
+});
+
 describe("message get / edit / delete", () => {
   let ns: ReturnType<typeof makeMessagingNs>;
   let client: ReturnType<typeof makeClient>;

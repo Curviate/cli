@@ -135,6 +135,33 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
   process.exit(1);
 }
 
+/**
+ * Human-readable acting-identity notice for a completed `message send`,
+ * written to stderr (diagnostic chrome, never the stdout data channel — the
+ * SDK's `sent_as` field is already on the JSON response regardless of this
+ * notice). Personal sends print nothing (the common case stays quiet); a
+ * company-page send names the page when the server correlated it to a
+ * managed company, or a generic fallback when it could not.
+ */
+function sentAsNotice(sentAs: unknown): string | null {
+  if (!sentAs || typeof sentAs !== "object") return null;
+  const s = sentAs as { kind?: string; name?: string | null };
+  if (s.kind !== "company") return null;
+  return s.name ? `Sent as ${s.name} (company page)\n` : "Sent as a company page\n";
+}
+
+/**
+ * Client-side-only "will send as a company page" note for `--preview` on a
+ * `COMPANY_` chat id. Never makes a network call (that would break the
+ * zero-round-trip --preview contract) — a page's display name is only
+ * resolvable by correlating a live inboxes/managed-companies read, so this
+ * states the fact that the send would act as a page, derived purely from the
+ * chat id's own `COMPANY_` prefix.
+ */
+function willSendAsNotice(chatId: string): string | null {
+  return chatId.startsWith("COMPANY_") ? "Will send as a company page\n" : null;
+}
+
 // ---------------------------------------------------------------------------
 // Exported run functions (testable without citty)
 // ---------------------------------------------------------------------------
@@ -275,6 +302,8 @@ export async function runMessageSend(
       })),
     });
     out.stdout.write(JSON.stringify(preview) + "\n");
+    const willSendAs = willSendAsNotice(chatId);
+    if (willSendAs) out.stderr.write(willSendAs);
     return;
   }
 
@@ -290,6 +319,8 @@ export async function runMessageSend(
   try {
     const result = await ns.messaging.sendMessage(chatId, body);
     renderSuccess(result, outOpts, out);
+    const notice = sentAsNotice((result as Record<string, unknown> | null)?.["sent_as"]);
+    if (notice) out.stderr.write(notice);
   } catch (err: unknown) {
     await handleSdkError(err, outOpts, out);
   }
@@ -832,11 +863,24 @@ const messageInMailCommand = defineCommand({
  * command's own run() handler.
  */
 const messageSendCommand = defineCommand({
-  meta: { name: "send", description: "Send a message to an existing chat." },
+  meta: {
+    name: "send",
+    description:
+      "Send a message to an existing chat. Pass a COMPANY_ chat id (from `inboxes chats`) to send " +
+      "as that company page instead of yourself, no separate flag needed. The output shows the acting " +
+      "identity: a company-page send prints \"Sent as <name> (company page)\", a personal send prints " +
+      "nothing new. See also: `inboxes chats` (discover a COMPANY_ chat id) and the Reply as a company " +
+      "page guide.",
+  },
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
+    chatId: {
+      type: "positional",
+      description:
+        "Chat ID or LinkedIn messaging thread URL. A COMPANY_ chat id sends as the company page; any other " +
+        "chat id sends as the connected member.",
+    },
     text: { type: "positional", description: "Message text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
@@ -885,11 +929,20 @@ const messageInMailBalanceCommand = defineCommand({
 });
 
 export const messageCommand = defineCommand({
-  meta: { name: "message", description: "Send and manage LinkedIn messages." },
+  meta: {
+    name: "message",
+    description:
+      "Send and manage LinkedIn messages. A COMPANY_ chat id (from `inboxes chats`) sends as that " +
+      "company page instead of yourself; see `message send --help`.",
+  },
   args: {
     // Write command (message send): WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    chatId: { type: "positional", description: "Chat ID to send a message to.", required: false },
+    chatId: {
+      type: "positional",
+      description: "Chat ID to send a message to. A COMPANY_ chat id sends as the company page.",
+      required: false,
+    },
     text: { type: "positional", description: "Message text. Pass - to read from stdin.", required: false },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
