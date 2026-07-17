@@ -35,6 +35,8 @@ function makeAccountNs() {
       employees: vi.fn(),
       posts: vi.fn(),
       jobs: vi.fn(),
+      invitableFollowers: vi.fn(),
+      followInvite: vi.fn(),
     },
   };
 }
@@ -63,6 +65,7 @@ type CompanyArgs = {
   sections?: string;
   keywords?: string;
   location?: string;
+  invitee?: string | string[];
 };
 
 function makeOut() {
@@ -608,6 +611,319 @@ describe("company jobs command", () => {
 
     expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
     expect(accountNs.companies.jobs).toHaveBeenCalledWith("112013061", {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company invitable-followers <id>
+// ---------------------------------------------------------------------------
+
+describe("company invitable-followers command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.invitableFollowers as Mock).mockResolvedValue({
+      object: "invitable_connection_list",
+      items: [
+        { object: "invitable_connection", id: "ACoA1", profile_urn: "urn:li:fsd_profile:ACoA1", invite_token: "raw-token-bytes" },
+        { object: "invitable_connection", id: "ACoA2", profile_urn: "urn:li:fsd_profile:ACoA2", invite_token: null },
+      ],
+      cursor: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company invitable-followers <cid> --account <id> --limit 5 --cursor cur_0 — forwards limit/cursor only", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, {
+      id: "112013061",
+      account: "acc_1",
+      json: true,
+      limit: "5",
+      cursor: "cur_0",
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.invitableFollowers).toHaveBeenCalledWith("112013061", { limit: 5, cursor: "cur_0" });
+  });
+
+  it("re-encodes invite_token as base64 in default (slim) output; null passes through unchanged", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    const items = result["items"] as Array<Record<string, unknown>>;
+    expect(items[0]?.["invite_token"]).toBe(Buffer.from("raw-token-bytes", "utf8").toString("base64"));
+    expect(items[0]?.["id"]).toBe("ACoA1");
+    expect(items[1]?.["invite_token"]).toBeNull();
+  });
+
+  it("re-encodes invite_token even under --verbose (raw bytes are never re-exposed in any output mode)", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, { id: "112013061", account: "acc_1", json: true, verbose: true } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    const items = result["items"] as Array<Record<string, unknown>>;
+    expect(items[0]?.["invite_token"]).toBe(Buffer.from("raw-token-bytes", "utf8").toString("base64"));
+    // --verbose still surfaces the full envelope (object/profile_urn), unlike a hand-picked slim subset.
+    expect(result["object"]).toBe("invitable_connection_list");
+    expect(items[0]?.["profile_urn"]).toBe("urn:li:fsd_profile:ACoA1");
+  });
+
+  it("--all streams NDJSON with invite_token re-encoded per item", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, { id: "112013061", account: "acc_1", json: true, all: true } as CompanyArgs, out);
+
+    const lines = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).filter((s) => s.trim().length > 0);
+    expect(lines).toHaveLength(2);
+    const first = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(first["invite_token"]).toBe(Buffer.from("raw-token-bytes", "utf8").toString("base64"));
+  });
+
+  it("company invitable-followers <slug> resolves the slug to the numeric id via companies.get first", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, { id: "t-systems", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.invitableFollowers).toHaveBeenCalledWith("112013061", {});
+  });
+
+  it("company invitable-followers <numeric-id> passes through with NO extra companies.get call", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyInvitableFollowers(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+  });
+
+  it("--preview → usage error exit 2 (read command)", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyInvitableFollowers(client as never, { id: "112013061", account: "acc_1", preview: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.invitableFollowers).not.toHaveBeenCalled();
+  });
+
+  it("without --account → exit 2", async () => {
+    const { runCompanyInvitableFollowers } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyInvitableFollowers(client as never, { id: "112013061", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company follow-invite <id> --invitee <AC…>
+// ---------------------------------------------------------------------------
+
+describe("company follow-invite command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+
+  beforeEach(() => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.followInvite as Mock).mockResolvedValue({
+      object: "company_follow_invite_result",
+      results: [
+        { object: "company_follow_invite", invitee_id: "ACoA1", status: "invited", invitation_id: "urn:li:fsd_invitation:1", error: null },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("company follow-invite <cid> --invitee AC1 --account <id> — calls companies.followInvite with the resolved id + invitee_ids", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, { id: "112013061", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+
+    expect(accountNs.companies.followInvite).toHaveBeenCalledWith("112013061", { invitee_ids: ["ACoA1"] });
+  });
+
+  it("repeatable --invitee (array shape from citty) collects into invitee_ids in order", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, {
+      id: "112013061",
+      account: "acc_1",
+      json: true,
+      invitee: ["ACoA1", "ACoA2", "ACoA3"],
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.followInvite).toHaveBeenCalledWith("112013061", { invitee_ids: ["ACoA1", "ACoA2", "ACoA3"] });
+  });
+
+  it("prints the partial-success result envelope on success", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, { id: "112013061", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["object"]).toBe("company_follow_invite_result");
+    expect((result["results"] as unknown[])).toHaveLength(1);
+  });
+
+  it("no --invitee at all → usage error exit 2, no SDK call (min 1 required)", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowInvite(client as never, { id: "112013061", account: "acc_1", json: true } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.followInvite).not.toHaveBeenCalled();
+  });
+
+  it("without --account → exit 2, no SDK call", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowInvite(client as never, { id: "112013061", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.followInvite).not.toHaveBeenCalled();
+  });
+
+  it("--preview renders the resolved request (resolved numeric id) WITHOUT calling followInvite", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, {
+      id: "t-systems",
+      account: "acc_1",
+      json: true,
+      preview: true,
+      invitee: ["ACoA1", "ACoA2"],
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.followInvite).not.toHaveBeenCalled();
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const preview = JSON.parse(written) as Record<string, unknown>;
+    expect(preview["method"]).toBe("companies.followInvite");
+    expect(preview["args"]).toEqual({ identifier: "112013061" });
+    expect(preview["body"]).toEqual({ invitee_ids: ["ACoA1", "ACoA2"] });
+    expect(preview["account"]).toBe("acc_1");
+  });
+
+  it("company follow-invite <slug> resolves the slug to the numeric id via companies.get, then sends", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, { id: "t-systems", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.followInvite).toHaveBeenCalledWith("112013061", { invitee_ids: ["ACoA1"] });
+  });
+
+  it("company follow-invite <numeric-id> passes through with NO extra companies.get call", async () => {
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyFollowInvite(client as never, { id: "112013061", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+  });
+
+  it("a 403 RESOURCE_ACCESS_RESTRICTED (not an admin / no invite rights) surfaces as exit 8", async () => {
+    const restrictedErr = new CurviateError({
+      code: "RESOURCE_ACCESS_RESTRICTED",
+      message: "Account does not administer this page with invite rights.",
+      httpStatus: 403,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.followInvite as Mock).mockRejectedValue(restrictedErr);
+
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowInvite(client as never, { id: "112013061", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(8)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("a genuinely invalid identifier surfaces companies.get's 400 INVALID_REQUEST as exit 2, no followInvite call", async () => {
+    (accountNs.companies.get as Mock).mockRejectedValue(makeInvalidRequestError());
+
+    const { runCompanyFollowInvite } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyFollowInvite(client as never, { id: "@@bad@@", account: "acc_1", json: true, invitee: "ACoA1" } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.followInvite).not.toHaveBeenCalled();
   });
 });
 
