@@ -8,6 +8,23 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-17
+
+A minor release adding the `company reply` command. No breaking changes, built against `@curviate/sdk` 0.18.0.
+
+### Added
+
+- **`company reply <id> <chat_id> "<text>" [--attach <file>…]`** (write, admin-gated,
+  `--preview` accepted). Replies to an existing company-inbox conversation as the page,
+  via the SDK's `companies.sendMessage`. `<chat_id>` must be a `COMPANY_` chat id from
+  `inboxes chats`, not the `2-…` id the `company` reads return; it passes through verbatim
+  (no client-side pre-check) and a non-`COMPANY_` id is rejected by the API with a guiding
+  400 naming the fix. Reply-only: it cannot start a new conversation on the page's behalf.
+  `<id>` accepts a URL, slug, or numeric id, resolved to the numeric id first (including
+  under `--preview`, so the preview renders the request that would be sent). Pass `-` as
+  the text to read the reply body from stdin. See also `inboxes chats` and `message send`
+  (the personal equivalent, which also accepts a `COMPANY_` chat id).
+
 ## [0.17.0] - 2026-07-17
 
 A minor release adding the `company follow-invite` and `company invitable-followers`
