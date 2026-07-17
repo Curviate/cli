@@ -110,6 +110,22 @@ function validateIsoZTimestamp(value: string, flagName: string, out: OutputStrea
   }
 }
 
+/**
+ * Validate --limit against the server's accepted range (1-25 for this
+ * endpoint) before any SDK call — a clear, specific message beats a
+ * round-tripped generic 400. A non-numeric value is left to the server's own
+ * validation (out of scope for this range-only guard); an unset value is a no-op.
+ */
+function validateLimitRange(raw: string | undefined, out: OutputStreams): void {
+  if (raw === undefined) return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  if (n < 1 || n > 25) {
+    out.stderr.write(`error: --limit must be between 1 and 25 (default 20); got ${raw}.\n`);
+    process.exit(2);
+  }
+}
+
 async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOutputOpts>, out: OutputStreams): Promise<never> {
   const { CurviateError } = await import("@curviate/sdk");
   if (err instanceof CurviateError) {
@@ -142,6 +158,7 @@ export async function runInboxList(
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
+  validateLimitRange(flags.limit, out);
 
   // Apply unread filter (three-way: true / false / omit — pass no key when undefined)
   if (flags.unread !== undefined) {
@@ -247,6 +264,7 @@ export async function runInboxMessages(
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
   const params = buildPaginationParams(flags);
+  validateLimitRange(flags.limit, out);
 
   // Validate and apply date filters — validation exits 2 before any SDK call
   if (flags.before !== undefined) {
@@ -286,6 +304,7 @@ const inboxListCommand = defineCommand({
   meta: { name: "list", description: "List inbox chats." },
   args: {
     ...GLOBAL_FLAGS,
+    limit: { type: "string" as const, description: "Number of items to return per page (1-25, default 20)." },
     unread: {
       type: "boolean" as const,
       description: "Show unread chats only (--no-unread for read-only; omit for all).",
@@ -367,6 +386,7 @@ const inboxMessagesCommand = defineCommand({
   meta: { name: "messages", description: "List messages in a chat. A very recent send/delete may take a few minutes to appear or clear here (LinkedIn-side indexing); `message get <chat_id> <message_id>` reflects it immediately." },
   args: {
     ...GLOBAL_FLAGS,
+    limit: { type: "string" as const, description: "Number of items to return per page (1-25, default 20)." },
     chatId: { type: "positional", description: "Chat ID." },
     before: {
       type: "string" as const,

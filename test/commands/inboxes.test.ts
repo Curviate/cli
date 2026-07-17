@@ -183,6 +183,43 @@ describe("inboxes chats", () => {
     );
   });
 
+  it("inboxes chats --limit 40 — exits 2 with a clear range message before any SDK call (AX P1: qa finding)", async () => {
+    const { runInboxesChats } = await import("../../src/commands/inboxes.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    try {
+      await runInboxesChats(
+        client as never,
+        { inboxId: "CLASSIC_PRIMARY", account: "acc_1", limit: "40" } as InboxesArgs,
+        out,
+      );
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(ns.inboxes.listChats).not.toHaveBeenCalled();
+    const stderrText = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    expect(stderrText).toContain("--limit must be between 1 and 25");
+  });
+
+  it("inboxes chats --limit 25 — the server maximum is accepted, no client-side rejection", async () => {
+    const { runInboxesChats } = await import("../../src/commands/inboxes.js");
+    const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };
+
+    await runInboxesChats(
+      client as never,
+      { inboxId: "CLASSIC_PRIMARY", account: "acc_1", limit: "25", json: true } as InboxesArgs,
+      out,
+    );
+
+    expect(ns.inboxes.listChats).toHaveBeenCalledWith("CLASSIC_PRIMARY", expect.objectContaining({ limit: 25 }));
+  });
+
   it("inboxes chats --all — streams NDJSON across pages", async () => {
     const { runInboxesChats } = await import("../../src/commands/inboxes.js");
     const out = { stdout: { write: vi.fn() }, stderr: { write: vi.fn() } };

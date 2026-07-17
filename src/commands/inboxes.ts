@@ -105,6 +105,22 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
   process.exit(1);
 }
 
+/**
+ * Validate --limit against the server's accepted range (1-25 for this
+ * endpoint) before any SDK call, a clear, specific message beats a
+ * round-tripped generic 400. A non-numeric value is left to the server's own
+ * validation (out of scope for this range-only guard); an unset value is a no-op.
+ */
+function validateLimitRange(raw: string | undefined, out: OutputStreams): void {
+  if (raw === undefined) return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  if (n < 1 || n > 25) {
+    out.stderr.write(`error: --limit must be between 1 and 25 (default 20); got ${raw}.\n`);
+    process.exit(2);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Exported run functions (testable without citty)
 // ---------------------------------------------------------------------------
@@ -161,6 +177,7 @@ export async function runInboxesChats(
   const all = flags.all ?? false;
   const maxPages = flags["max-pages"] ? parseInt(flags["max-pages"], 10) : 100;
 
+  validateLimitRange(flags.limit, out);
   const params: Record<string, unknown> = {};
   if (flags.limit) params["limit"] = parseInt(flags.limit, 10);
   if (flags.cursor) params["cursor"] = flags.cursor;
@@ -227,12 +244,13 @@ const inboxesChatsCommand = defineCommand({
   meta: {
     name: "chats",
     description:
-      "List an inbox's conversations. Each chat id is send-ready: reply with `message send <chat_id> \"<text>\"` — " +
-      "a company inbox's chat id (e.g. COMPANY_83734124_2-…) sends AS THE PAGE, no separate flag needed. " +
+      "List an inbox's conversations. Each chat id is send-ready: reply with `message send <chat_id> \"<text>\"`. " +
+      "A company inbox's chat id (e.g. COMPANY_83734124_2-…) sends AS THE PAGE, no separate flag needed. " +
       "Company inboxes are reply-only and cannot start a new conversation.",
   },
   args: {
     ...GLOBAL_FLAGS,
+    limit: { type: "string" as const, description: "Number of items to return per page (1-25, default 20)." },
     inboxId: { type: "positional", description: "Inbox id from `inboxes list` (e.g. CLASSIC_PRIMARY or COMPANY_83734124_PRIMARY)." },
   },
   async run({ args }) {

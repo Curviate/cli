@@ -8,31 +8,47 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [0.16.0] - 2026-07-17
 
-A minor release adding the `inboxes` command group. No breaking changes —
+A minor release adding the `inboxes` command group. No breaking changes,
 built against `@curviate/sdk` 0.16.0.
 
 ### Added
 
-- **New `inboxes` command group (Beta).** `inboxes list [--kind personal|company]
-  [--company-id <id>]` discovers the account's personal inbox plus, when the
-  company product is attached, one entry per company page × folder (id like
-  `COMPANY_83734124_PRIMARY`) — a flat, non-paginated read (rejects `--all`).
-  `inboxes chats <inbox_id> [--limit] [--cursor] [--all]` lists a single
-  inbox's conversations, cursor-paginated like every other list command.
-  Every returned chat id is send-ready — reply with the existing
-  `message send <chat_id> "<text>"`; a company inbox's chat id (e.g.
-  `COMPANY_83734124_2-…`) sends AS THE PAGE, no separate flag needed. Company
-  inboxes are reply-only and cannot start a new conversation. Distinct from
-  the existing `inbox` command group (a friendlier front door to the
-  account's own message-thread inbox — `messaging.listChats`/`getChat`/
-  `markChatRead`/`messages`); `inboxes` (plural) wraps the newer
+- **New `inboxes` command group (Beta), the reply-as-a-page workflow.**
+  `inboxes list [--kind personal|company] [--company-id <id>]` discovers the
+  account's personal inbox plus, when the company product is attached, one
+  entry per company page (id like `COMPANY_83734124_PRIMARY`), a flat,
+  non-paginated read (rejects `--all`). `inboxes chats <inbox_id> [--limit]
+  [--cursor] [--all]` lists a single inbox's conversations, cursor-paginated
+  like every other list command. Every returned chat id is send-ready: reply
+  with the existing `message send <chat_id> "<text>"`. A company inbox's
+  chat id (e.g. `COMPANY_83734124_2-…`) sends AS THE PAGE, no separate flag
+  needed. Company inboxes are reply-only and cannot start a new conversation.
+  Distinct from the existing `inbox` command group (a friendlier front door
+  to the account's own message-thread inbox: `messaging.listChats`/`getChat`/
+  `markChatRead`/`messages`). `inboxes` (plural) wraps the newer
   inbox-*discovery* resource, so both groups coexist without a naming
   collision.
 - **`PREMIUM_CONFLICT` and `REAUTH_REQUIRED` mapped to exit code 8**
-  (account/connection state) in the error→exit table — the two new SDK error
-  codes surfacing from `account link`'s underlying `auth.intent` call: a seat
-  resolving to both individual-Premium tiers at once, and a scope-changing
-  reconnect attempted with a cookie instead of credentials.
+  (account/connection state) in the error to exit table, the two new SDK
+  error codes surfacing from `account link`'s underlying `auth.intent` call:
+  a seat resolving to both individual-Premium tiers at once, and a
+  scope-changing reconnect attempted with a cookie instead of credentials.
+- **`message send` names the acting identity on a company-page reply.**
+  When the response's `sent_as.kind` is `"company"`, the default output
+  (not just `--verbose --json`) now prints `Sent as <name> (company page)`
+  to stderr right after the send (the data itself was already on the
+  response; this makes it visible without inspecting raw JSON). A personal
+  send prints nothing new.
+- **`message send --preview` echoes the acting identity for a `COMPANY_`
+  chat id.** Prints `Will send as a company page` to stderr, derived purely
+  from the chat id's own prefix so `--preview` still makes zero network
+  calls. A personal chat id prints nothing new.
+- **`--limit` on `inbox list`, `inbox messages`, and `inboxes chats` is now
+  validated client-side against the server's accepted range (1-25).** A
+  value outside that range now exits 2 with `error: --limit must be
+  between 1 and 25 (default 20); got <value>.` before any network call,
+  instead of round-tripping to the server for the same 400. `--help` on
+  all three now states the range explicitly.
 
 ## [0.15.2] - 2026-07-12
 
