@@ -538,7 +538,7 @@ const companyFollowInviteCommand = defineCommand({
       "Invite the account's 1st-degree connections to follow the administered company page. " +
       "Write, admin-gated (the account must administer the page with invite rights). " +
       "Pass the AC… member ids from `company invitable-followers`, one --invitee per invitee. " +
-      "Results are partial-success: valid invitees succeed even if others fail. " +
+      "All-or-nothing: for an all-valid request you get one outcome per invitee, in request order (invited/already_invited/ineligible/not_found); if any invitee id is invalid the whole request rejects with a 404, not a partial result. " +
       "Re-inviting an already-invited member is a safe no-op (the same invitation id, never a duplicate).",
   },
   args: {
