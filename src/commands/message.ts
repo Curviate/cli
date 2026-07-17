@@ -136,14 +136,17 @@ async function handleSdkError(err: unknown, outOpts: ReturnType<typeof resolveOu
 }
 
 /**
- * Human-readable acting-identity notice for a completed `message send`,
- * written to stderr (diagnostic chrome, never the stdout data channel — the
- * SDK's `sent_as` field is already on the JSON response regardless of this
+ * Human-readable acting-identity notice for a completed send, written to
+ * stderr (diagnostic chrome, never the stdout data channel — the SDK's
+ * `sent_as` field is already on the JSON response regardless of this
  * notice). Personal sends print nothing (the common case stays quiet); a
  * company-page send names the page when the server correlated it to a
  * managed company, or a generic fallback when it could not.
+ *
+ * Shared: exported for reuse by `company reply` (companies.ts), which sends
+ * as a page unconditionally and prints the same notice on its own responses.
  */
-function sentAsNotice(sentAs: unknown): string | null {
+export function sentAsNotice(sentAs: unknown): string | null {
   if (!sentAs || typeof sentAs !== "object") return null;
   const s = sentAs as { kind?: string; name?: string | null };
   if (s.kind !== "company") return null;
@@ -157,8 +160,10 @@ function sentAsNotice(sentAs: unknown): string | null {
  * resolvable by correlating a live inboxes/managed-companies read, so this
  * states the fact that the send would act as a page, derived purely from the
  * chat id's own `COMPANY_` prefix.
+ *
+ * Shared: exported for reuse by `company reply` (companies.ts).
  */
-function willSendAsNotice(chatId: string): string | null {
+export function willSendAsNotice(chatId: string): string | null {
   return chatId.startsWith("COMPANY_") ? "Will send as a company page\n" : null;
 }
 

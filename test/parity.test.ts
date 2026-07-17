@@ -177,13 +177,14 @@ const PARITY_MANIFEST: Record<string, string> = {
   "job applicant get":    "jobs.getApplicant",
   "job applicant resume": "jobs.downloadResume",
 
-  // companies (6)
+  // companies (7)
   "company get":                 "companies.get",
   "company employees":           "companies.employees",
   "company posts":               "companies.posts",
   "company jobs":                "companies.jobs",
   "company invitable-followers": "companies.invitableFollowers",
   "company follow-invite":       "companies.followInvite",
+  "company reply":               "companies.sendMessage",
 
   // inboxes (2) — Beta inbox-discovery namespace
   "inboxes list":  "inboxes.list",
@@ -202,10 +203,10 @@ const PARITY_MANIFEST: Record<string, string> = {
 };
 
 /** Entries in {@link PARITY_MANIFEST} — SDK methods the CLI actually wires a command for. */
-const EXPECTED_MANIFEST_COUNT = 119;
+const EXPECTED_MANIFEST_COUNT = 120;
 
 /** Total public SDK methods across every namespace (root + account-scoped). */
-const EXPECTED_SDK_METHOD_COUNT = 144;
+const EXPECTED_SDK_METHOD_COUNT = 145;
 
 /**
  * Pre-existing SDK methods with no CLI command yet — see the file-header
@@ -224,8 +225,9 @@ const KNOWN_GAP_METHODS: readonly string[] = [
   "posts.save",
   "posts.unsave",
   // companies — insights + Beta company-inbox extensions
-  // (companies.invitableFollowers and companies.followInvite are now covered
-  // by the manifest above and are NOT listed here.)
+  // (companies.invitableFollowers, companies.followInvite, and
+  // companies.sendMessage are now covered by the manifest above and are NOT
+  // listed here.)
   "companies.managed",
   "companies.followers",
   "companies.chats",

@@ -8,10 +8,19 @@
  *   company jobs <id> [--keywords]                         — list open jobs (facade)
  *   company invitable-followers <id> [--limit] [--cursor]  — list invitable connections (facade)
  *   company follow-invite <id> --invitee <AC…> [...]       — invite connections to follow (write)
+ *   company reply <id> <chat_id> "<text>" [--attach]        — reply as the page (write)
  *
- * All but `follow-invite` are read commands: --preview is a usage error
- * (exit 2). `follow-invite` is a write: --preview renders the resolved
- * request without sending.
+ * All but `follow-invite`/`reply` are read commands: --preview is a usage
+ * error (exit 2). `follow-invite` and `reply` are writes: --preview renders
+ * the resolved request without sending.
+ *
+ * `reply` sends into an existing company-inbox conversation AS THE PAGE.
+ * `<chat_id>` must be a `COMPANY_` chat id from `inboxes chats` — it passes
+ * through verbatim, no client-side pre-check; a `2-…` id (from `company`
+ * reads) or a personal id is rejected by the API with a guiding 400. It
+ * reuses `willSendAsNotice`/`sentAsNotice` from `message.ts` (the same
+ * acting-identity notices `message send` prints for a `COMPANY_` chat id),
+ * since a `company reply` send is always as the page.
  *
  * Retrieve keeps its broader identifier contract (URL, slug, or numeric id —
  * `resolveIdentifier` handles company URLs). The sub-resource endpoints
@@ -40,6 +49,9 @@ import { resolveEffectiveConfig } from "../lib/resolve.js";
 import { createClient } from "../lib/client.js";
 import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output.js";
 import { buildPreviewOutput } from "../lib/preview.js";
+import { resolveTextOrStdin } from "../lib/stdin.js";
+import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
+import { sentAsNotice, willSendAsNotice } from "./message.js";
 import {
   slimCompany,
   slimSearchPeople,
@@ -71,6 +83,9 @@ type CompanyFlags = {
   keywords?: string;
   location?: string;
   invitee?: string | string[];
+  chatId?: string;
+  text?: string;
+  attach?: string | string[];
 };
 
 type OutputStreams = {
@@ -119,6 +134,12 @@ function resolveOutputOpts(flags: CompanyFlags) {
 function normalizeInviteeIds(invitee: string | string[] | undefined): string[] {
   if (!invitee) return [];
   return Array.isArray(invitee) ? invitee : [invitee];
+}
+
+/** Normalize --attach flag to an array of paths (same shape as message.ts). */
+function normalizeAttachPaths(attach: string | string[] | undefined): string[] {
+  if (!attach) return [];
+  return Array.isArray(attach) ? attach : [attach];
 }
 
 /**
@@ -417,6 +438,85 @@ export async function runCompanyFollowInvite(
   }
 }
 
+/**
+ * Run `company reply <id> <chat_id> "<text>" [--attach <file>…]`.
+ * Write command — supports --preview. Replies to an existing company-inbox
+ * conversation AS THE PAGE, via `companies.sendMessage`.
+ *
+ * `<id>` accepts a URL/slug/numeric id, resolved to the numeric provider_id
+ * the same way as the other company sub-resources — even under --preview.
+ * `<chat_id>` passes through verbatim: it must be a `COMPANY_` chat id from
+ * `inboxes chats`; a `2-…` id (from `company` reads) or a personal id is not
+ * pre-checked client-side — the API rejects it with a guiding 400 naming the
+ * fix. Since every `company reply` send is as the page, this always renders
+ * the `willSendAsNotice`/`sentAsNotice` acting-identity notice on a
+ * `COMPANY_`-prefixed chat id (reused from `message.ts`, the same notices
+ * `message send` prints for a `COMPANY_` chat id).
+ */
+export async function runCompanyReply(
+  client: Curviate,
+  flags: CompanyFlags,
+  out: OutputStreams,
+  _readStdin?: () => Promise<string>,
+): Promise<void> {
+  const accountId = requireAccount(flags.account, out);
+  const ns = client.account(accountId);
+  const outOpts = resolveOutputOpts(flags);
+
+  const chatId = flags.chatId ?? "";
+  const rawText = flags.text ?? "";
+  const attachPaths = normalizeAttachPaths(flags.attach);
+
+  // Resolve stdin sentinel: "-" reads all of stdin.
+  const text = await resolveTextOrStdin(rawText, out, _readStdin);
+
+  // Load attachments before any preview or SDK call.
+  let attachBuffers: Buffer[] = [];
+  try {
+    attachBuffers = await Promise.all(attachPaths.map((p) => readAttachment(p)));
+  } catch (err: unknown) {
+    if (err instanceof AttachError) {
+      out.stderr.write(`error: ${err.message}\n`);
+      process.exit(err.exitCode);
+    }
+    throw err;
+  }
+
+  try {
+    const identifier = await resolveCompanyId(ns, flags.id ?? "");
+
+    if (flags.preview) {
+      const preview = buildPreviewOutput({
+        method: "companies.sendMessage",
+        args: { identifier, chat_id: chatId },
+        body: { text },
+        account: accountId,
+        attachments: attachBuffers.map((buf, i) => ({
+          name: attachPaths[i] ? attachPaths[i].split("/").pop() ?? attachPaths[i] : `attachment_${i}`,
+          buffer: buf,
+        })),
+      });
+      out.stdout.write(JSON.stringify(preview) + "\n");
+      const willSendAs = willSendAsNotice(chatId);
+      if (willSendAs) out.stderr.write(willSendAs);
+      return;
+    }
+
+    const attachmentPayloads = attachBuffers.map((buf, i) => toAttachmentPayload(attachPaths[i]!, buf));
+    const body = {
+      text,
+      ...(attachmentPayloads.length > 0 ? { attachments: attachmentPayloads } : {}),
+    };
+
+    const result = await ns.companies.sendMessage(identifier, chatId, body);
+    renderSuccess(result, outOpts, out);
+    const notice = sentAsNotice((result as Record<string, unknown> | null)?.["sent_as"]);
+    if (notice) out.stderr.write(notice);
+  } catch (err: unknown) {
+    await handleSdkError(err, outOpts, out);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Citty command definitions
 // ---------------------------------------------------------------------------
@@ -568,6 +668,45 @@ const companyFollowInviteCommand = defineCommand({
   },
 });
 
+const companyReplyCommand = defineCommand({
+  meta: {
+    name: "reply",
+    description:
+      "Reply to a company-inbox conversation, as the page (write, admin-gated: the account must administer " +
+      "the page). Requires a COMPANY_ chat id from `inboxes chats`, not the 2-… id `company` reads return " +
+      "(the API rejects a non-COMPANY_ id with a guiding 400 naming the fix). Reply-only, this cannot start " +
+      "a new conversation on the page's behalf. See also: `inboxes chats` and `message send` (the personal " +
+      "equivalent, which also accepts a COMPANY_ chat id).",
+  },
+  args: {
+    ...WRITE_FLAGS,
+    id: { type: "positional", description: "Company identifier (URL, slug, or numeric id), resolved to the numeric id first, including under --preview." },
+    chatId: {
+      type: "positional",
+      description: "COMPANY_ chat id (from `inboxes chats`), passed through verbatim, no client-side check.",
+    },
+    text: { type: "positional", description: "Reply text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
+    attach: { type: "string", description: "File to attach (repeatable)." },
+  },
+  async run({ args }) {
+    const flags = args as CompanyFlags;
+    const cfg = await resolveEffectiveConfig({
+      apiKey: flags["api-key"],
+      baseUrl: flags["base-url"],
+      timeout: flags.timeout,
+      account: flags.account,
+      profile: flags.profile,
+    });
+    if (!cfg.apiKey) {
+      process.stderr.write("error: no API key — run `curviate login` or pass --api-key.\n");
+      process.exit(3);
+    }
+    const client = createClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, timeout: cfg.timeout });
+    const out = buildOutputStreams();
+    await runCompanyReply(client, { ...flags, account: flags.account ?? cfg.account }, out);
+  },
+});
+
 export const companyCommand = defineCommand({
   meta: { name: "company", description: "Fetch a company profile by URL, slug, or numeric id, and its sub-resources." },
   args: {
@@ -581,6 +720,7 @@ export const companyCommand = defineCommand({
     jobs: companyJobsCommand,
     "invitable-followers": companyInvitableFollowersCommand,
     "follow-invite": companyFollowInviteCommand,
+    reply: companyReplyCommand,
   },
   async run({ args }) {
     const flags = args as CompanyFlags;

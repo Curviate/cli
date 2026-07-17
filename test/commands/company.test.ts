@@ -6,6 +6,7 @@
  *   company employees <id>          → companies.employees (facade, --keywords/--location)
  *   company posts <id>              → companies.posts (facade)
  *   company jobs <id>               → companies.jobs (facade, --keywords)
+ *   company reply <id> <chat_id> "<text>" [--attach] → companies.sendMessage (reply as the page)
  *   --preview/--all/--sections usage errors (read-command conventions)
  *   --account required (companies.get now always requires account_id)
  *   wrong usage: a non-numeric identifier on a sub-resource surfaces the
@@ -16,6 +17,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Mock } from "vitest";
+import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { CurviateError } from "@curviate/sdk";
 
 function makeInvalidRequestError() {
@@ -37,6 +41,7 @@ function makeAccountNs() {
       jobs: vi.fn(),
       invitableFollowers: vi.fn(),
       followInvite: vi.fn(),
+      sendMessage: vi.fn(),
     },
   };
 }
@@ -66,6 +71,9 @@ type CompanyArgs = {
   keywords?: string;
   location?: string;
   invitee?: string | string[];
+  chatId?: string;
+  text?: string;
+  attach?: string | string[];
 };
 
 function makeOut() {
@@ -924,6 +932,372 @@ describe("company follow-invite command", () => {
       exitSpy.mockRestore();
     }
     expect(accountNs.companies.followInvite).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// company reply <id> <chat_id> "<text>" [--attach]
+// ---------------------------------------------------------------------------
+
+describe("company reply command", () => {
+  let accountNs: ReturnType<typeof makeAccountNs>;
+  let client: ReturnType<typeof makeClient>;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    accountNs = makeAccountNs();
+    client = makeClient(accountNs);
+    (accountNs.companies.sendMessage as Mock).mockResolvedValue({
+      object: "message_sent",
+      message_id: "msg_1",
+      sent_as: { kind: "company", company_id: "112013061", name: "RedHire" },
+    });
+    tmpDir = await mkdtemp(join(tmpdir(), "curviate-test-company-reply-"));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("company reply <cid> <chat_id> '<text>' --account <id> — calls companies.sendMessage with the resolved id, chat_id verbatim, and text", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "Thanks for reaching out!",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.sendMessage).toHaveBeenCalledWith(
+      "112013061",
+      "COMPANY_83734124_2-abc",
+      expect.objectContaining({ text: "Thanks for reaching out!" }),
+    );
+  });
+
+  it("<chat_id> passes through verbatim — no URL/thread normalization applied (unlike message send)", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.sendMessage).toHaveBeenCalledWith("112013061", "2-abc", expect.anything());
+  });
+
+  it("company reply <slug> <chat_id> '<text>' resolves the slug to the numeric id via companies.get first", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "t-systems",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.sendMessage).toHaveBeenCalledWith("112013061", "COMPANY_83734124_2-abc", expect.anything());
+  });
+
+  it("company reply <numeric-id> ... passes through with NO extra companies.get call", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).not.toHaveBeenCalled();
+  });
+
+  it("--attach <file> — passes base64 payload in attachments (v2: no multipart)", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    const filePath = join(tmpDir, "img.png");
+    await writeFile(filePath, "imgdata");
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "see attached",
+      attach: filePath,
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    const callArgs = (accountNs.companies.sendMessage as Mock).mock.calls[0]![2] as Record<string, unknown>;
+    const attachments = callArgs["attachments"] as Array<Record<string, unknown>>;
+    expect(attachments[0]).toEqual({
+      content: Buffer.from("imgdata").toString("base64"),
+      content_type: "image/png",
+      filename: "img.png",
+    });
+  });
+
+  it("--attach <missing> — exits 2, no SDK call", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyReply(client as never, {
+        id: "112013061",
+        chatId: "COMPANY_83734124_2-abc",
+        text: "hi",
+        attach: join(tmpDir, "ghost.png"),
+        account: "acc_1",
+      } as CompanyArgs, out);
+      expect.fail("should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("--preview renders the resolved request (resolved numeric id, chat_id, text) WITHOUT calling sendMessage", async () => {
+    (accountNs.companies.get as Mock).mockResolvedValue({ id: "112013061" });
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "t-systems",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "preview this",
+      account: "acc_1",
+      json: true,
+      preview: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.get).toHaveBeenCalledWith("t-systems");
+    expect(accountNs.companies.sendMessage).not.toHaveBeenCalled();
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const preview = JSON.parse(written) as Record<string, unknown>;
+    expect(preview["method"]).toBe("companies.sendMessage");
+    expect(preview["args"]).toEqual({ identifier: "112013061", chat_id: "COMPANY_83734124_2-abc" });
+    expect(preview["body"]).toEqual({ text: "preview this" });
+    expect(preview["account"]).toBe("acc_1");
+  });
+
+  it("--preview on a COMPANY_ chat id prints 'Will send as a company page' without any SDK call", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      preview: true,
+    } as CompanyArgs, out);
+
+    expect(accountNs.companies.sendMessage).not.toHaveBeenCalled();
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Will send as a company page\n");
+  });
+
+  it("a company-page send with a resolved name prints 'Sent as <name> (company page)' to stderr", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Sent as RedHire (company page)\n");
+  });
+
+  it("a company-page send with an uncorrelated page (name null) prints the generic fallback", async () => {
+    (accountNs.companies.sendMessage as Mock).mockResolvedValue({
+      object: "message_sent",
+      message_id: "msg_1",
+      sent_as: { kind: "company", company_id: null, name: null },
+    });
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    const stderrLines = (out.stderr.write as Mock).mock.calls.map((c) => c[0] as string);
+    expect(stderrLines).toContain("Sent as a company page\n");
+  });
+
+  it("prints the message_sent result envelope on success", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+
+    await runCompanyReply(client as never, {
+      id: "112013061",
+      chatId: "COMPANY_83734124_2-abc",
+      text: "hi",
+      account: "acc_1",
+      json: true,
+    } as CompanyArgs, out);
+
+    const written = (out.stdout.write as Mock).mock.calls.map((c) => c[0] as string).join("");
+    const result = JSON.parse(written) as Record<string, unknown>;
+    expect(result["object"]).toBe("message_sent");
+    expect(result["message_id"]).toBe("msg_1");
+  });
+
+  it("without --account → exit 2, no SDK call", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyReply(client as never, {
+        id: "112013061",
+        chatId: "COMPANY_83734124_2-abc",
+        text: "hi",
+        json: true,
+      } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("a 403 RESOURCE_ACCESS_RESTRICTED (not the page admin) surfaces as exit 8", async () => {
+    const restrictedErr = new CurviateError({
+      code: "RESOURCE_ACCESS_RESTRICTED",
+      message: "Account does not administer this page.",
+      httpStatus: 403,
+      userFixable: false,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.sendMessage as Mock).mockRejectedValue(restrictedErr);
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyReply(client as never, {
+        id: "112013061",
+        chatId: "COMPANY_83734124_2-abc",
+        text: "hi",
+        account: "acc_1",
+        json: true,
+      } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(8)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("the guiding 400 for a non-COMPANY_ chat_id (e.g. a 2-… id) surfaces as exit 2, no client-side pre-check", async () => {
+    const guidingErr = new CurviateError({
+      code: "INVALID_REQUEST",
+      message: "chat_id must be a send-ready company chat id (the COMPANY_ form). Get it from GET /v1/{account_id}/inboxes/{inbox_id}/chats.",
+      httpStatus: 400,
+      userFixable: true,
+      retryLikelyToSucceed: false,
+    });
+    (accountNs.companies.sendMessage as Mock).mockRejectedValue(guidingErr);
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyReply(client as never, {
+        id: "112013061",
+        chatId: "2-abc",
+        text: "hi",
+        account: "acc_1",
+        json: true,
+      } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    // The CLI made the call verbatim — the guiding 400 is server-side, no client pre-check.
+    expect(accountNs.companies.sendMessage).toHaveBeenCalledWith("112013061", "2-abc", expect.anything());
+  });
+
+  it("a genuinely invalid identifier surfaces companies.get's 400 INVALID_REQUEST as exit 2, no sendMessage call", async () => {
+    (accountNs.companies.get as Mock).mockRejectedValue(makeInvalidRequestError());
+
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const exitSpy = mockExit();
+
+    try {
+      await runCompanyReply(client as never, {
+        id: "@@bad@@",
+        chatId: "COMPANY_83734124_2-abc",
+        text: "hi",
+        account: "acc_1",
+        json: true,
+      } as CompanyArgs, out);
+      expect.fail("Should have exited");
+    } catch (e) {
+      expect((e as Error).message).toContain("process.exit(2)");
+    } finally {
+      exitSpy.mockRestore();
+    }
+    expect(accountNs.companies.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("text '-' reads from stdin via the injected reader", async () => {
+    const { runCompanyReply } = await import("../../src/commands/company.js");
+    const out = makeOut();
+    const readStdin = vi.fn().mockResolvedValue("piped reply text");
+
+    await runCompanyReply(
+      client as never,
+      { id: "112013061", chatId: "COMPANY_83734124_2-abc", text: "-", account: "acc_1", json: true } as CompanyArgs,
+      out,
+      readStdin,
+    );
+
+    expect(readStdin).toHaveBeenCalled();
+    expect(accountNs.companies.sendMessage).toHaveBeenCalledWith(
+      "112013061",
+      "COMPANY_83734124_2-abc",
+      expect.objectContaining({ text: "piped reply text" }),
+    );
   });
 });
 
