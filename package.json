@@ -41,7 +41,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@curviate/sdk": "link:../sdk",
+    "@curviate/sdk": "^0.16.0",
     "citty": "^0.1.6",
     "open": "^10.1.0"
   },
