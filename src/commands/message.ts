@@ -863,11 +863,24 @@ const messageInMailCommand = defineCommand({
  * command's own run() handler.
  */
 const messageSendCommand = defineCommand({
-  meta: { name: "send", description: "Send a message to an existing chat." },
+  meta: {
+    name: "send",
+    description:
+      "Send a message to an existing chat. Pass a COMPANY_ chat id (from `inboxes chats`) to send " +
+      "as that company page instead of yourself, no separate flag needed. The output shows the acting " +
+      "identity: a company-page send prints \"Sent as <name> (company page)\", a personal send prints " +
+      "nothing new. See also: `inboxes chats` (discover a COMPANY_ chat id) and the Reply as a company " +
+      "page guide.",
+  },
   args: {
     // Write command: WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    chatId: { type: "positional", description: "Chat ID or LinkedIn messaging thread URL." },
+    chatId: {
+      type: "positional",
+      description:
+        "Chat ID or LinkedIn messaging thread URL. A COMPANY_ chat id sends as the company page; any other " +
+        "chat id sends as the connected member.",
+    },
     text: { type: "positional", description: "Message text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
@@ -916,11 +929,20 @@ const messageInMailBalanceCommand = defineCommand({
 });
 
 export const messageCommand = defineCommand({
-  meta: { name: "message", description: "Send and manage LinkedIn messages." },
+  meta: {
+    name: "message",
+    description:
+      "Send and manage LinkedIn messages. A COMPANY_ chat id (from `inboxes chats`) sends as that " +
+      "company page instead of yourself; see `message send --help`.",
+  },
   args: {
     // Write command (message send): WRITE_FLAGS omits pagination/projection flags
     ...WRITE_FLAGS,
-    chatId: { type: "positional", description: "Chat ID to send a message to.", required: false },
+    chatId: {
+      type: "positional",
+      description: "Chat ID to send a message to. A COMPANY_ chat id sends as the company page.",
+      required: false,
+    },
     text: { type: "positional", description: "Message text. Pass - to read from stdin.", required: false },
     attach: { type: "string", description: "File to attach (repeatable)." },
   },
