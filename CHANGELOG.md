@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 a new command or flag is a minor; a breaking command/flag/exit-code change is a major; a fix is a patch.
 
+## [Unreleased]
+
+## [0.17.0] - 2026-07-17
+
+A minor release adding the `company follow-invite` and `company invitable-followers`
+commands. No breaking changes, built against `@curviate/sdk` 0.17.0.
+
+### Added
+
+- **`company follow-invite <id> --invitee <AC…> [--invitee <AC…> ...]`** (write, admin-gated,
+  `--preview` accepted). Invites the connected account's 1st-degree connections to follow an
+  administered company page. `--invitee` is repeatable, at least one required, max 50 per
+  request. All-or-nothing: for an all-valid request you get one outcome per requested invitee,
+  in request order (`status: "invited" | "already_invited" | "ineligible" | "not_found"`); if
+  any invitee id is invalid the whole request rejects with a 404, not a partial result.
+  Re-inviting an already-invited member is a safe no-op, the same `invitation_id`, never a
+  duplicate. `<id>`
+  accepts a URL, slug, or numeric id, resolved to the numeric provider_id first (including
+  under `--preview`, so the preview renders the actual request that would be sent).
+- **`company invitable-followers <id> [--limit] [--cursor] [--all]`** (paginated read). Lists
+  the connections eligible to be invited to follow a company page you administer, the read
+  that seeds `company follow-invite`. Items carry no name or headline; hydrate a candidate via
+  `profile <id>` first. `invite_token` is always re-encoded as base64 in CLI output (the raw
+  value can carry bytes unsafe to print in a terminal), in every output mode.
+
 ## [0.16.0] - 2026-07-17
 
 A minor release adding the `inboxes` command group. No breaking changes,

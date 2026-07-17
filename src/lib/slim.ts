@@ -770,3 +770,91 @@ export function slimCompany(data: unknown): Record<string, unknown> {
     follower_count: d["follower_count"] ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// company invitable-followers — invite_token JSON/terminal-safety
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-encode a wire `invite_token` value as base64.
+ *
+ * The real wire's `invite_token` (`GET .../invitable-followers`) is an
+ * opaque per-suggestion correlation token that can carry raw binary bytes.
+ * Embedding it verbatim into JSON output renders as mojibake in a terminal
+ * and risks a broken copy/paste. Base64 is JSON-safe, terminal-safe,
+ * ASCII-only, and a lossless encoding of exactly the string bytes the SDK
+ * handed the CLI — it round-trips via
+ * `Buffer.from(encoded, "base64").toString("utf8")` for a follow-invite
+ * write (`companies.followInvite` needs only the `id` field, not this
+ * token, but a caller may still want the original bytes).
+ *
+ * `null`/absent pass through unchanged — only a genuine non-empty string is
+ * re-encoded, so "the read did not surface one" stays visibly `null` rather
+ * than becoming a base64 encoding of the string `"null"`.
+ */
+export function encodeInviteToken(token: unknown): unknown {
+  if (typeof token !== "string" || token.length === 0) return token;
+  return Buffer.from(token, "utf8").toString("base64");
+}
+
+/**
+ * Re-encode a single invitable-followers item's `invite_token`, leaving
+ * every other field (`object`, `id`, `profile_urn`) untouched. A no-op when
+ * the item carries no `invite_token` key at all.
+ */
+export function reencodeInviteTokenItem<T extends Record<string, unknown>>(item: T): T {
+  if (!("invite_token" in item)) return item;
+  return { ...item, invite_token: encodeInviteToken(item["invite_token"]) };
+}
+
+/**
+ * Re-encode `invite_token` across an invitable-followers list envelope's
+ * `items[]`. Applied unconditionally in `runCompanyInvitableFollowers`
+ * BEFORE the --verbose slim-bypass check — the raw value is unsafe to
+ * print in every output mode, so there is no verbose form that should ever
+ * re-expose it unencoded.
+ */
+export function reencodeInvitableFollowers(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(reencodeInviteTokenItem)
+    : [];
+
+  return { ...d, items };
+}
+
+/**
+ * Slim-default projection for a single invitable-followers item. The item
+ * shape carries no name/headline (confirmed by the generated SDK types) —
+ * hydrate a candidate via `profile <id>` before triaging who to invite.
+ * Expects `invite_token` already base64-safe (via `reencodeInviteTokenItem`)
+ * — this function does not re-encode.
+ */
+export function slimCompanyInvitableFollowerItem(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    object: item["object"] ?? null,
+    id: item["id"] ?? null,
+    profile_urn: item["profile_urn"] ?? null,
+    invite_token: item["invite_token"] ?? null,
+  };
+}
+
+/**
+ * Slim-default projection for the `company invitable-followers` list
+ * envelope. Projects each item via `slimCompanyInvitableFollowerItem`;
+ * preserves the envelope shape (`object`, `items`, `cursor`).
+ */
+export function slimCompanyInvitableFollowers(data: unknown): Record<string, unknown> {
+  const d = (data !== null && data !== undefined && typeof data === "object"
+    ? data
+    : {}) as Record<string, unknown>;
+
+  const items = Array.isArray(d["items"])
+    ? (d["items"] as Array<Record<string, unknown>>).map(slimCompanyInvitableFollowerItem)
+    : [];
+
+  return { ...d, items };
+}
