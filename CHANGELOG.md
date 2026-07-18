@@ -8,6 +8,19 @@ a new command or flag is a minor; a breaking command/flag/exit-code change is a 
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-07-18
+
+A patch aligning `company reply` with the company-inbox chat-id cutover. No breaking changes, built against `@curviate/sdk` 0.18.1.
+
+### Fixed
+
+- **`company reply <id> <chat_id> "<text>"`** now takes the normal `2-…` conversation
+  id that `company chats` returns; the endpoint resolves the page mailbox internally from
+  the company identifier, so the earlier `COMPANY_` chat-id requirement is gone. `--preview`
+  now always prints a "Will send as company page `<id>`" notice derived from the resolved
+  identifier (previously it went silent for a bare `2-…` id). Reply-only and admin-gated,
+  otherwise unchanged.
+
 ## [0.18.0] - 2026-07-17
 
 A minor release adding the `company reply` command. No breaking changes, built against `@curviate/sdk` 0.18.0.
