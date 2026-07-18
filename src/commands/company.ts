@@ -15,12 +15,13 @@
  * the resolved request without sending.
  *
  * `reply` sends into an existing company-inbox conversation AS THE PAGE.
- * `<chat_id>` must be a `COMPANY_` chat id from `inboxes chats` — it passes
- * through verbatim, no client-side pre-check; a `2-…` id (from `company`
- * reads) or a personal id is rejected by the API with a guiding 400. It
- * reuses `willSendAsNotice`/`sentAsNotice` from `message.ts` (the same
- * acting-identity notices `message send` prints for a `COMPANY_` chat id),
- * since a `company reply` send is always as the page.
+ * `<chat_id>` is the normal `2-…` conversation id from `company chats`. It
+ * passes through verbatim (no client-side pre-check); the endpoint resolves
+ * the page mailbox internally from the company identifier. Because a
+ * `company reply` is always a page reply, --preview prints a "Will send as
+ * company page <id>" notice derived from the identifier, and on a successful
+ * send it prints the `sentAsNotice` acting-identity line (reused from
+ * `message.ts`).
  *
  * Retrieve keeps its broader identifier contract (URL, slug, or numeric id —
  * `resolveIdentifier` handles company URLs). The sub-resource endpoints
@@ -51,7 +52,7 @@ import { renderSuccess, renderError, renderUnexpectedError } from "../lib/output
 import { buildPreviewOutput } from "../lib/preview.js";
 import { resolveTextOrStdin } from "../lib/stdin.js";
 import { readAttachment, AttachError, toAttachmentPayload } from "../lib/attach.js";
-import { sentAsNotice, willSendAsNotice } from "./message.js";
+import { sentAsNotice } from "./message.js";
 import {
   slimCompany,
   slimSearchPeople,
@@ -440,18 +441,18 @@ export async function runCompanyFollowInvite(
 
 /**
  * Run `company reply <id> <chat_id> "<text>" [--attach <file>…]`.
- * Write command — supports --preview. Replies to an existing company-inbox
+ * Write command, supports --preview. Replies to an existing company-inbox
  * conversation AS THE PAGE, via `companies.sendMessage`.
  *
  * `<id>` accepts a URL/slug/numeric id, resolved to the numeric provider_id
- * the same way as the other company sub-resources — even under --preview.
- * `<chat_id>` passes through verbatim: it must be a `COMPANY_` chat id from
- * `inboxes chats`; a `2-…` id (from `company` reads) or a personal id is not
- * pre-checked client-side — the API rejects it with a guiding 400 naming the
- * fix. Since every `company reply` send is as the page, this always renders
- * the `willSendAsNotice`/`sentAsNotice` acting-identity notice on a
- * `COMPANY_`-prefixed chat id (reused from `message.ts`, the same notices
- * `message send` prints for a `COMPANY_` chat id).
+ * the same way as the other company sub-resources, even under --preview.
+ * `<chat_id>` is the normal `2-…` conversation id from `company chats`; it
+ * passes through verbatim (no client-side pre-check), and the endpoint
+ * resolves the page mailbox internally from the (resolved) identifier.
+ * Because every `company reply` is a page reply, --preview prints a
+ * "Will send as company page <identifier>" notice derived from the
+ * identifier (never "personal", never silent), and on success it prints the
+ * `sentAsNotice` acting-identity line (reused from `message.ts`).
  */
 export async function runCompanyReply(
   client: Curviate,
@@ -497,8 +498,10 @@ export async function runCompanyReply(
         })),
       });
       out.stdout.write(JSON.stringify(preview) + "\n");
-      const willSendAs = willSendAsNotice(chatId);
-      if (willSendAs) out.stderr.write(willSendAs);
+      // A `company reply` is always a page reply, so the will-send-as notice is
+      // derived from the (resolved) company identifier, not the chat-id prefix
+      // (the normal 2-… id carries no COMPANY_ marker). Never "personal", never silent.
+      out.stderr.write(`Will send as company page ${identifier}\n`);
       return;
     }
 
@@ -673,17 +676,16 @@ const companyReplyCommand = defineCommand({
     name: "reply",
     description:
       "Reply to a company-inbox conversation, as the page (write, admin-gated: the account must administer " +
-      "the page). Requires a COMPANY_ chat id from `inboxes chats`, not the 2-… id `company` reads return " +
-      "(the API rejects a non-COMPANY_ id with a guiding 400 naming the fix). Reply-only, this cannot start " +
-      "a new conversation on the page's behalf. See also: `inboxes chats` and `message send` (the personal " +
-      "equivalent, which also accepts a COMPANY_ chat id).",
+      "the page). Takes the normal 2-… chat id from `company chats`; the endpoint resolves the page mailbox " +
+      "internally from the company id. Reply-only, this cannot start a new conversation on the page's behalf. " +
+      "See also: `company chats` (the read that returns the chat id) and `message send` (the personal equivalent).",
   },
   args: {
     ...WRITE_FLAGS,
     id: { type: "positional", description: "Company identifier (URL, slug, or numeric id), resolved to the numeric id first, including under --preview." },
     chatId: {
       type: "positional",
-      description: "COMPANY_ chat id (from `inboxes chats`), passed through verbatim, no client-side check.",
+      description: "The 2-… chat id from `company chats`, passed through verbatim (no client-side check).",
     },
     text: { type: "positional", description: "Reply text. Pass - to read from stdin (e.g. via heredoc or pipe)." },
     attach: { type: "string", description: "File to attach (repeatable)." },
