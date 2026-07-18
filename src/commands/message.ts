@@ -161,7 +161,10 @@ export function sentAsNotice(sentAs: unknown): string | null {
  * states the fact that the send would act as a page, derived purely from the
  * chat id's own `COMPANY_` prefix.
  *
- * Shared: exported for reuse by `company reply` (companies.ts).
+ * Used by `message send`'s --preview (the personal send still accepts a
+ * `COMPANY_` chat id). Exported so it can be unit-tested directly.
+ * (`company reply` no longer uses this: post-cutover its chat id is the
+ * normal `2-…` form, so it derives the notice from the company identifier.)
  */
 export function willSendAsNotice(chatId: string): string | null {
   return chatId.startsWith("COMPANY_") ? "Will send as a company page\n" : null;
